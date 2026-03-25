@@ -1,0 +1,26 @@
+{
+  "name": "restaurant-saas",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel -r run dev",
+    "dev:web": "pnpm --filter @restaurant-saas/web dev",
+    "dev:api": "pnpm --filter @restaurant-saas/api dev",
+    "build": "pnpm --parallel -r run build",
+    "lint": "pnpm --parallel -r run lint",
+    "db:push": "pnpm --filter @restaurant-saas/api db:push",
+    "db:seed": "pnpm --filter @restaurant-saas/api db:seed",
+    "db:studio": "pnpm --filter @restaurant-saas/api db:studio",
+    "db:generate": "pnpm --filter @restaurant-saas/api db:generate"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "fastify": "^5.8.2"
+  },
+  "devDependencies": {
+    "pnpm": "^10.32.1"
+  }
+}

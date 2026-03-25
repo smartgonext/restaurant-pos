@@ -1,0 +1,26 @@
+{
+  "common": {
+    "dashboard": "Dashboard",
+    "menu": "Menu",
+    "orders": "Orders",
+    "reports": "Reports",
+    "settings": "Settings",
+    "save": "Save",
+    "cancel": "Cancel",
+    "loading": "Loading...",
+    "search": "Search..."
+  },
+  "nav": {
+    "pos": "POS",
+    "waiter_requests": "Waiter Requests",
+    "reservations": "Reservations",
+    "customers": "Customers",
+    "staff": "Staff",
+    "delivery": "Delivery",
+    "expenses": "Expenses",
+    "payments": "Payments",
+    "cash_register": "Cash Register",
+    "inventory": "Inventory",
+    "ai_insights": "AI Insights"
+  }
+}
