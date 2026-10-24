@@ -28,7 +28,7 @@ import { normalizeStringArray, toDbArrayField } from '../../utils/prisma.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const routeDir = path.dirname(__filename);
-const resolveUploadsDir = () => path.join(routeDir, '..', '..', '..', 'uploads');
+const resolveUploadsDir = () => process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.join(routeDir, '..', '..', '..', 'uploads');
 const toDbPackOptions = (packOptions, enablePackOptions) => {
     if (!enablePackOptions)
         return null;
@@ -1576,6 +1576,10 @@ export async function restaurantRoutes(app) {
                     packOptions: true,
                     menuId: true,
                     categoryId: true,
+                    inventoryItemId: true,
+                    productQR: true,
+                    stockWarningThreshold: true,
+                    expiryDate: true,
                     isVeg: true,
                     isAvailable: true,
                     showOnCustomerSite: true,
@@ -1584,6 +1588,26 @@ export async function restaurantRoutes(app) {
                     createdAt: true,
                     updatedAt: true,
                     category: { select: { id: true, name: true, image: true, isKOTEnabled: true, groupId: true, group: { select: { id: true, name: true, isKOTEnabled: true } } } },
+                    inventoryItem: {
+                        select: {
+                            id: true,
+                            name: true,
+                            unitId: true,
+                            unit: { select: { id: true, name: true, symbol: true } },
+                            inventoryMRPs: {
+                                select: {
+                                    id: true,
+                                    mrp: true,
+                                    purchaseRate: true,
+                                    profitPercent: true,
+                                    sellingPrice: true,
+                                    isActive: true,
+                                    createdAt: true
+                                },
+                                orderBy: { createdAt: 'desc' }
+                            }
+                        }
+                    },
                     menu: { select: { id: true, name: true } },
                     itemModifiers: { select: { id: true, modifierGroup: { select: { id: true, name: true, options: true } } } }
                 },

@@ -1060,16 +1060,23 @@ export default function MenuItems() {
                     </td>
                     <td className="py-4 px-6">
                       <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-bg-tertiary border border-border/50 flex items-center justify-center overflow-hidden shadow-inner shrink-0">
+                        <div className="w-12 h-12 rounded-xl bg-bg-tertiary border border-border/50 flex items-center justify-center overflow-hidden shadow-inner shrink-0 relative">
                           {item.image ? (
                             <img
                               src={resolveImageUrl(item.image)}
                               alt={item.name}
                               className="w-full h-full object-cover group-hover:scale-110 transition-transform"
-                               onError={(e: any) => {
-                                 e.currentTarget.onerror = null;
-                                 e.currentTarget.src = '/fallback-food.png';
-                               }}
+                              onError={(e: any) => {
+                                e.currentTarget.onerror = null;
+                                e.currentTarget.style.display = 'none';
+                                const parent = e.currentTarget.parentElement;
+                                if (parent && !parent.querySelector('.img-fallback-emoji')) {
+                                  const span = document.createElement('span');
+                                  span.className = 'text-xl select-none img-fallback-emoji';
+                                  span.textContent = '🍕';
+                                  parent.appendChild(span);
+                                }
+                              }}
                             />
                           ) : (
                             <span className="text-xl">🍕</span>
@@ -1089,25 +1096,47 @@ export default function MenuItems() {
                         {item.category?.group?.name || 'General'}
                       </Badge>
                     </td>
-                    <td className="py-4 px-6 text-center font-black text-white text-md">
+                    <td className="py-4 px-6 text-center">
+                      <div className="font-black text-white text-md">
+                        {(() => {
+                          const direct = Number(item.price);
+                          if (Number.isFinite(direct) && direct > 0) return formatCurrency(direct);
+
+                          if (Array.isArray(item.packOptions) && item.packOptions.length > 0) {
+                            const p0 = item.packOptions[0];
+                            const pv = Number(p0.sellingPrice ?? p0.price ?? 0);
+                            if (Number.isFinite(pv) && pv > 0) return formatCurrency(pv);
+                          }
+
+                          const mrps = item.inventoryItem?.inventoryMRPs ?? [];
+                          const active = (mrps || []).find((m: any) => m.isActive !== false) ?? mrps[0];
+                          if (active) {
+                            const sp = computeMRPSellingPrice(active);
+                            if (Number.isFinite(sp) && sp > 0) return formatCurrency(sp);
+                          }
+
+                          return formatCurrency(0);
+                        })()}
+                      </div>
                       {(() => {
-                        const direct = Number(item.price);
-                        if (Number.isFinite(direct) && direct > 0) return formatCurrency(direct);
-
-                        if (Array.isArray(item.packOptions) && item.packOptions.length > 0) {
-                          const p0 = item.packOptions[0];
-                          const pv = Number(p0.sellingPrice ?? p0.price ?? 0);
-                          if (Number.isFinite(pv) && pv > 0) return formatCurrency(pv);
-                        }
-
                         const mrps = item.inventoryItem?.inventoryMRPs ?? [];
                         const active = (mrps || []).find((m: any) => m.isActive !== false) ?? mrps[0];
-                        if (active) {
-                          const sp = computeMRPSellingPrice(active);
-                          if (Number.isFinite(sp) && sp > 0) return formatCurrency(sp);
+                        if (active && (Number(active.mrp || 0) > 0 || Number(active.purchaseRate || 0) > 0)) {
+                          return (
+                            <div className="text-[10px] text-text-muted flex items-center justify-center gap-1.5 mt-0.5">
+                              {Number(active.mrp || 0) > 0 && (
+                                <span className="text-amber-400 font-semibold">MRP {formatCurrency(active.mrp)}</span>
+                              )}
+                              {Number(active.mrp || 0) > 0 && Number(active.purchaseRate || 0) > 0 && (
+                                <span className="text-gray-500">•</span>
+                              )}
+                              {Number(active.purchaseRate || 0) > 0 && (
+                                <span className="text-emerald-400 font-semibold">Cost {formatCurrency(active.purchaseRate)}</span>
+                              )}
+                            </div>
+                          );
                         }
-
-                        return formatCurrency(0);
+                        return null;
                       })()}
                     </td>
                     <td className="py-4 px-6 text-center">
