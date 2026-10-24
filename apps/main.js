@@ -170,6 +170,10 @@ function startBackend() {
     console.log('[LAN-Terminal] Skipping local backend spawn in Terminal Mode.');
     return;
   }
+  if (isDev) {
+    console.log('🔧 [Dev] Development mode: backend is already running via "npm run dev:api"');
+    return;
+  }
   if (backend) return;
 
   const basePath = app.getAppPath();
