@@ -151,6 +151,17 @@ async function ensureDatabase() {
   }
 }
 
+function getActiveAppVersion() {
+  try {
+    const runtimeMetaFile = path.join(app.getPath("userData"), "runtime_update", "version.json");
+    if (fs.existsSync(runtimeMetaFile)) {
+      const data = JSON.parse(fs.readFileSync(runtimeMetaFile, "utf8"));
+      if (data && data.version) return data.version;
+    }
+  } catch (e) {}
+  return app.getVersion();
+}
+
 /* ================================
    🚀 START BACKEND
 ================================ */
@@ -172,17 +183,36 @@ function startBackend() {
     }
   }
 
+  const userDataPath = app.getPath("userData");
+  const runtimeUpdateDir = path.join(userDataPath, "runtime_update");
+  const runtimeServerPath = path.join(runtimeUpdateDir, "api", "src", "server.js");
+  const runtimeWebDist = path.join(runtimeUpdateDir, "web", "dist");
+
+  // ⚡ If a fast runtime hot-update is installed, use it!
+  if (fs.existsSync(runtimeServerPath)) {
+    serverPath = runtimeServerPath;
+    console.log(`⚡ Using fast runtime hot-update backend: ${serverPath}`);
+  }
+
   console.log(`🚀 Starting backend from: ${serverPath}`);
 
-  const userDataPath = app.getPath("userData");
   const uploadsPath = path.join(userDataPath, "uploads");
   if (!fs.existsSync(uploadsPath)) {
     fs.mkdirSync(uploadsPath, { recursive: true });
   }
 
-  const webDistPath = app.isPackaged
+  let webDistPath = app.isPackaged
     ? path.join(process.resourcesPath, "web", "dist")
     : path.join(__dirname, "web", "dist");
+
+  if (fs.existsSync(path.join(runtimeWebDist, "index.html"))) {
+    webDistPath = runtimeWebDist;
+    console.log(`⚡ Using fast runtime hot-update webDist: ${webDistPath}`);
+  }
+
+  const nodeModulesPath = app.isPackaged
+    ? path.join(process.resourcesPath, "api", "node_modules")
+    : path.join(basePath, "api", "node_modules");
 
   const env = Object.assign({}, process.env, {
     NODE_ENV: app.isPackaged ? "production" : "development",
@@ -192,7 +222,8 @@ function startBackend() {
     POS_NODE_ID: nodeIdArg,
     POS_NODE_ROLE: nodeRoleArg,
     POS_MASTER_IP: masterIpArg || '',
-    WEB_DIST_PATH: webDistPath
+    WEB_DIST_PATH: webDistPath,
+    NODE_PATH: nodeModulesPath
   });
 
   // Ensure JWT_SECRET is available
@@ -293,10 +324,18 @@ async function createWindow() {
     }
     mainWindow.webContents.openDevTools();
   } else {
-    // In production, load the built files from resourcesPath (as configured in extraResources)
+    // In production, load the built files from runtime_update, resourcesPath, or local fallback
+    const userDataPath = app.getPath("userData");
+    const runtimeIndexPath = path.join(userDataPath, "runtime_update", "web", "dist", "index.html");
     const indexPath = path.join(process.resourcesPath, "web", "dist", "index.html");
     const fallbackPath = path.join(__dirname, "web", "dist", "index.html");
-    const finalIndexPath = fs.existsSync(indexPath) ? indexPath : fs.existsSync(fallbackPath) ? fallbackPath : null;
+    const finalIndexPath = fs.existsSync(runtimeIndexPath)
+      ? runtimeIndexPath
+      : fs.existsSync(indexPath)
+        ? indexPath
+        : fs.existsSync(fallbackPath)
+          ? fallbackPath
+          : null;
 
     if (finalIndexPath) {
       mainWindow.loadURL(pathToFileURL(finalIndexPath).toString()).catch((err) => {
@@ -478,12 +517,46 @@ ipcMain.on('open-cash-drawer', (event, config) => {
    🔄 AUTO-UPDATER SERVICE (GITHUB RELEASES)
 ================================ */
 function setupAutoUpdater() {
+  let latestFastUpdate = null;
+
+  async function checkGitHubForFastUpdate() {
+    try {
+      const resp = await axios.get('https://api.github.com/repos/SmartGoNext/restaurant-pos/releases/latest', {
+        headers: { 'User-Agent': 'Restaurant-POS-Desktop' },
+        timeout: 6000
+      });
+      const release = resp.data;
+      if (!release || !release.tag_name) return null;
+      const releaseVer = release.tag_name.replace(/^v/, '').trim();
+      const currentVer = getActiveAppVersion().replace(/^v/, '').trim();
+
+      const fastAsset = release.assets && release.assets.find(a => 
+        a.name === 'fast-update.zip' || a.name.startsWith('fast-update')
+      );
+
+      if (fastAsset && releaseVer !== currentVer) {
+        return {
+          version: releaseVer,
+          releaseDate: release.published_at,
+          releaseNotes: release.body || 'New features, improvements, and bug fixes.',
+          downloadUrl: fastAsset.browser_download_url,
+          sizeBytes: fastAsset.size,
+          sizeMb: (fastAsset.size / (1024 * 1024)).toFixed(2),
+          isFastUpdate: true
+        };
+      }
+    } catch (err) {
+      console.log('[FastUpdater] GitHub release check notice:', err.message);
+    }
+    return null;
+  }
+
   if (isDev) {
     console.log('[AutoUpdater] Development mode detected; auto-updates disabled.');
     ipcMain.handle('updater-check', async () => ({ success: true, message: 'Running in development mode' }));
     ipcMain.handle('updater-download', async () => ({ success: true }));
     ipcMain.handle('updater-install', async () => ({ success: true }));
-    ipcMain.handle('get-app-version', () => app.getVersion());
+    ipcMain.handle('get-app-version', () => getActiveAppVersion());
     return;
   }
 
@@ -504,23 +577,24 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-available', (info) => {
-    console.log('[AutoUpdater] Update available:', info.version);
+    console.log('[AutoUpdater] Full installer update available:', info.version);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater-status', {
         status: 'available',
         version: info.version,
         releaseDate: info.releaseDate,
-        releaseNotes: info.releaseNotes || 'New features, improvements, and bug fixes.'
+        releaseNotes: info.releaseNotes || 'New features, improvements, and bug fixes.',
+        isFastUpdate: false
       });
     }
   });
 
   autoUpdater.on('update-not-available', (info) => {
-    console.log('[AutoUpdater] Up to date (Current:', app.getVersion(), ')');
+    console.log('[AutoUpdater] Up to date (Current:', getActiveAppVersion(), ')');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater-status', {
         status: 'up-to-date',
-        version: app.getVersion()
+        version: getActiveAppVersion()
       });
     }
   });
@@ -538,18 +612,18 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log('[AutoUpdater] Update downloaded successfully:', info.version);
+    console.log('[AutoUpdater] Full installer update downloaded:', info.version);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater-status', {
         status: 'downloaded',
-        version: info.version
+        version: info.version,
+        isFastUpdate: false
       });
     }
   });
 
   autoUpdater.on('error', (err) => {
-    // Silently log — offline operation is normal and must not interrupt POS operations
-    console.log('[AutoUpdater] Update check notice (offline or network error):', err.message);
+    console.log('[AutoUpdater] Notice (offline or network error):', err.message);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater-status', {
         status: 'error',
@@ -560,6 +634,21 @@ function setupAutoUpdater() {
 
   ipcMain.handle('updater-check', async () => {
     try {
+      latestFastUpdate = await checkGitHubForFastUpdate();
+      if (latestFastUpdate) {
+        console.log(`⚡ Fast Update available: v${latestFastUpdate.version} (~${latestFastUpdate.sizeMb} MB)`);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('updater-status', {
+            status: 'available',
+            version: latestFastUpdate.version,
+            releaseDate: latestFastUpdate.releaseDate,
+            releaseNotes: `${latestFastUpdate.releaseNotes}\n\n⚡ Fast Update: ~${latestFastUpdate.sizeMb} MB (installs in 15 seconds)`,
+            isFastUpdate: true
+          });
+        }
+        return { success: true, updateInfo: latestFastUpdate };
+      }
+
       const res = await autoUpdater.checkForUpdates();
       return { success: true, updateInfo: res?.updateInfo };
     } catch (err) {
@@ -569,6 +658,65 @@ function setupAutoUpdater() {
 
   ipcMain.handle('updater-download', async () => {
     try {
+      if (latestFastUpdate && latestFastUpdate.downloadUrl) {
+        console.log(`⚡ Downloading Fast Update from: ${latestFastUpdate.downloadUrl}`);
+        const tempZip = path.join(app.getPath('userData'), 'temp_fast_update.zip');
+        if (fs.existsSync(tempZip)) {
+          try { fs.unlinkSync(tempZip); } catch (e) {}
+        }
+
+        const writer = fs.createWriteStream(tempZip);
+        const response = await axios({
+          url: latestFastUpdate.downloadUrl,
+          method: 'GET',
+          responseType: 'stream',
+          timeout: 60000
+        });
+
+        const totalBytes = parseInt(response.headers['content-length'] || `${latestFastUpdate.sizeBytes}`, 10);
+        let transferred = 0;
+        let lastTime = Date.now();
+        let lastTransferred = 0;
+        let speed = 500 * 1024;
+
+        response.data.on('data', (chunk) => {
+          transferred += chunk.length;
+          const now = Date.now();
+          if (now - lastTime > 300) {
+            speed = Math.round(((transferred - lastTransferred) / (now - lastTime)) * 1000);
+            lastTime = now;
+            lastTransferred = transferred;
+          }
+
+          const percent = totalBytes > 0 ? Math.min(100, Math.round((transferred / totalBytes) * 100)) : 50;
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('updater-status', {
+              status: 'downloading',
+              percent,
+              transferred,
+              total: totalBytes,
+              bytesPerSecond: speed
+            });
+          }
+        });
+
+        await new Promise((resolve, reject) => {
+          response.data.pipe(writer);
+          writer.on('finish', resolve);
+          writer.on('error', reject);
+        });
+
+        console.log('⚡ Fast Update download completed!');
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('updater-status', {
+            status: 'downloaded',
+            version: latestFastUpdate.version,
+            isFastUpdate: true
+          });
+        }
+        return { success: true, isFastUpdate: true };
+      }
+
       await autoUpdater.downloadUpdate();
       return { success: true };
     } catch (err) {
@@ -578,8 +726,10 @@ function setupAutoUpdater() {
 
   ipcMain.handle('updater-install', async () => {
     try {
-      // 🛡️ Data Protection: Backup SQLite database before updating
       const userDataPath = app.getPath('userData');
+      const tempZip = path.join(userDataPath, 'temp_fast_update.zip');
+
+      // 🛡️ Data Protection: Always backup SQLite database before updating
       const dbPath = path.join(userDataPath, 'restaurant.db');
       if (fs.existsSync(dbPath)) {
         const backupPath = path.join(userDataPath, `restaurant.db.pre_update_backup_${Date.now()}`);
@@ -587,7 +737,33 @@ function setupAutoUpdater() {
         console.log('[AutoUpdater] Created pre-update database backup at:', backupPath);
       }
 
-      // Terminate backend process
+      if (latestFastUpdate && fs.existsSync(tempZip)) {
+        console.log('⚡ Extracting Fast Hot Update into runtime_update...');
+        const runtimeUpdateDir = path.join(userDataPath, 'runtime_update');
+        if (!fs.existsSync(runtimeUpdateDir)) {
+          fs.mkdirSync(runtimeUpdateDir, { recursive: true });
+        }
+
+        // Terminate backend process before replacing files
+        if (backend) {
+          try { process.kill(backend.pid, 'SIGTERM'); } catch (e) { backend.kill(); }
+          backend = null;
+        }
+
+        const { execSync } = require('child_process');
+        try {
+          execSync(`tar.exe -xf "${tempZip}" -C "${runtimeUpdateDir}"`);
+        } catch (e) {
+          execSync(`powershell -NoProfile -Command "Expand-Archive -Path '${tempZip}' -DestinationPath '${runtimeUpdateDir}' -Force"`);
+        }
+        try { fs.unlinkSync(tempZip); } catch (e) {}
+
+        console.log('✅ Fast Hot Update installed successfully! Relaunching...');
+        app.relaunch();
+        app.exit(0);
+        return { success: true };
+      }
+
       if (backend) {
         try { process.kill(backend.pid, 'SIGTERM'); } catch (e) { backend.kill(); }
       }
@@ -601,8 +777,22 @@ function setupAutoUpdater() {
     }
   });
 
+  ipcMain.handle('updater-revert-factory', () => {
+    try {
+      const runtimeUpdateDir = path.join(app.getPath('userData'), 'runtime_update');
+      if (fs.existsSync(runtimeUpdateDir)) {
+        fs.rmSync(runtimeUpdateDir, { recursive: true, force: true });
+      }
+      app.relaunch();
+      app.exit(0);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('get-app-version', () => {
-    return app.getVersion();
+    return getActiveAppVersion();
   });
 
   // Check 12 seconds after launch (non-blocking)

@@ -11,6 +11,7 @@
     "dev:web": "cd web && npm run dev",
     "prepare-electron": "npm install --ignore-scripts && cd api && npm install --ignore-scripts --no-package-lock && npx prisma generate --schema=prisma/schema.electron.sqlite.prisma && cd ../web && npm install --ignore-scripts && npm run build",
     "build:client": "cd web && npm run build",
+    "package:fast-update": "npm run build:client && node scripts/pack-fast-update.js",
     "build:exe": "npm run prepare-electron && electron-builder --win",
     "release": "npm run build:client && electron-builder --win --publish always",
     "build:online": "node online-deploy/package-deploy.js",

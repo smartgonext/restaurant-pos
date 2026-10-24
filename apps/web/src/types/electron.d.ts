@@ -8,6 +8,7 @@ export interface UpdaterStatusPayload {
   total?: number;
   bytesPerSecond?: number;
   message?: string;
+  isFastUpdate?: boolean;
 }
 
 declare global {
@@ -22,6 +23,7 @@ declare global {
       checkForUpdates?: () => Promise<{ success: boolean; updateInfo?: any; error?: string }>;
       downloadUpdate?: () => Promise<{ success: boolean; error?: string }>;
       installUpdate?: () => Promise<{ success: boolean; error?: string }>;
+      revertFactoryUpdate?: () => Promise<{ success: boolean; error?: string }>;
       onUpdaterStatus?: (callback: (payload: UpdaterStatusPayload) => void) => () => void;
     };
   }
