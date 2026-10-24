@@ -9,7 +9,7 @@ import api from '@/lib/api';
 export default function Payments() {
   const { data: payments, isLoading } = useQuery({
     queryKey: ['superadmin-payments'],
-    queryFn: () => api.get('/superadmin/payments').then((r) => r.data.data).catch(() => []),
+    queryFn: () => api.get('/superadmin/payments').then((r) => r.data.data ?? []).catch(() => []),
   });
 
   return (

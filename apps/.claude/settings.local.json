@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/restorent/**)",
+      "Read(//tmp/**)",
+      "Bash(npx prisma:*)",
+      "Bash(curl -s -X GET http://localhost:3001/api/restaurant/delivery-executives -H \"Accept: application/json\")",
+      "Bash(curl -s -X GET http://localhost:3001/api/restaurant/expenses -H \"Accept: application/json\")",
+      "Bash(curl -s -X GET \"http://localhost:3001/api/restaurant/delivery-executives\" -H \"Accept: application/json\" -H \"Authorization: Bearer invalid\")",
+      "Bash(curl -s \"http://localhost:3001/api/customer/the-spice-kitchen/preview/menu\")",
+      "Bash(curl -s \"http://localhost:3001/api/customer/the-spice-kitchen/123/menu\")",
+      "Bash(curl -s -X POST \"http://localhost:3001/api/customer/the-spice-kitchen/cmnaco2ui00016iqsqepeiis0/order\" -H \"Content-Type: application/json\" -d '{\"\"\"\"items\"\"\"\":[{\"\"\"\"menuItemId\"\"\"\":1,\"\"\"\"quantity\"\"\"\":2},{\"\"\"\"menuItemId\"\"\"\":4,\"\"\"\"quantity\"\"\"\":1}],\"\"\"\"note\"\"\"\":\"\"\"\"Test order\"\"\"\"}')",
+      "Bash(curl -v -X POST \"http://localhost:3001/api/customer/the-spice-kitchen/cmnaco2ui00016iqsqepeiis0/order\" -H \"Content-Type: application/json\" -d '{\"\"\"\"items\"\"\"\":[{\"\"\"\"menuItemId\"\"\"\":1,\"\"\"\"quantity\"\"\"\":2},{\"\"\"\"menuItemId\"\"\"\":4,\"\"\"\"quantity\"\"\"\":1}],\"\"\"\"note\"\"\"\":\"\"\"\"Test order\"\"\"\"}')",
+      "Bash(curl -s http://localhost:3001/api/health)",
+      "Bash(curl -s \"http://localhost:3001/api/customer/the-spice-kitchen/cmnaco2ui00016iqsqepeiis0/menu\")"
+    ]
+  }
+}

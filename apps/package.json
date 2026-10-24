@@ -1,0 +1,98 @@
+{
+  "name": "restaurant-saas-electron",
+  "version": "1.0.1",
+  "description": "Restaurant SaaS POS Application",
+  "author": "Restaurant SaaS POS",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\" \"wait-on http://localhost:3001/api/health && electron .\"",
+    "dev:api": "cd api && npm run dev",
+    "dev:web": "cd web && npm run dev",
+    "prepare-electron": "npm install --ignore-scripts && cd api && npm install --ignore-scripts --no-package-lock && npx prisma generate --schema=prisma/schema.electron.sqlite.prisma && cd ../web && npm install --ignore-scripts && npm run build",
+    "build:client": "cd web && npm run build",
+    "build:exe": "npm run prepare-electron && electron-builder --win",
+    "release": "npm run build:client && electron-builder --win --publish always",
+    "build:online": "node online-deploy/package-deploy.js",
+    "postinstall": "cd api && npm install --ignore-scripts && cd ../web && npm install --ignore-scripts",
+    "clean": "powershell -Command \"Get-Process | Where-Object { $_.Name -like '*Restaurant*' -or $_.Name -like '*electron*' } | Stop-Process -Force -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force dist, dist1, dist-win, release -ErrorAction SilentlyContinue\""
+  },
+  "dependencies": {
+    "axios": "^1.15.2",
+    "concurrently": "^8.2.2",
+    "electron-is-dev": "^2.0.0",
+    "electron-updater": "^6.8.11",
+    "wait-on": "^7.2.0"
+  },
+  "devDependencies": {
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1",
+    "smart-buffer": "^4.2.0"
+  },
+  "build": {
+    "appId": "com.restaurant.saas",
+    "productName": "Restaurant SaaS POS",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "SmartGoNext",
+        "repo": "restaurant-pos"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "**/*",
+      "!web/src/**",
+      "!web/public/**",
+      "!web/node_modules/**",
+      "!api/**",
+      "!data",
+      "!data/**",
+      "!backups/**",
+      "!.history/**",
+      "!{.gitignore,.env,*.log}",
+      "!*.zip",
+      "!online-deploy/**",
+      "!online-deploy-temp/**",
+      "!release/**"
+    ],
+    "extraResources": [
+      {
+        "from": "api",
+        "to": "api",
+        "filter": [
+          "**/*",
+          "!node_modules/**",
+          "!prisma/migrations/**",
+          "!src/**/*.ts"
+        ]
+      },
+      {
+        "from": "api/node_modules",
+        "to": "api/node_modules"
+      },
+      {
+        "from": "web/dist",
+        "to": "web/dist"
+      }
+    ],
+    "asarUnpack": [
+      "**/better-sqlite3/**",
+      "**/@prisma/client/**"
+    ],
+    "win": {
+      "icon": "Logo.png",
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Restaurant SaaS"
+    }
+  }
+}

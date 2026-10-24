@@ -9,7 +9,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
   branch_head: [
     'dashboard', 'menu', 'tables', 'waiter_requests', 'reservations',
     'pos', 'orders', 'customers', 'staff', 'expenses', 'payments',
-    'reports', 'cash_register', 'inventory', 'kitchens'
+    'reports', 'cash_register', 'inventory', 'kitchens', 'settings'
   ],
   waiter: [
     'dashboard', 'tables', 'waiter_requests', 'pos', 'orders'
@@ -25,8 +25,16 @@ export function usePermission() {
 
   const hasPermission = (module: string) => {
     if (!user) return false;
-    if (ROLE_PERMISSIONS[role].includes('all')) return true;
-    return ROLE_PERMISSIONS[role].includes(module);
+    
+    // Check for custom granular permissions from Role model
+    if (user.permissions && typeof user.permissions === 'object') {
+      if (user.permissions[module] !== undefined) {
+        return user.permissions[module];
+      }
+    }
+
+    if (ROLE_PERMISSIONS[role]?.includes('all')) return true;
+    return ROLE_PERMISSIONS[role]?.includes(module) || false;
   };
 
   return { hasPermission, role };

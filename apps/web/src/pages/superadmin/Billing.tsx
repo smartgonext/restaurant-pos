@@ -11,7 +11,7 @@ import { Store, Users, DollarSign, TrendingUp, Receipt, CheckCircle, Clock, Wall
 export default function Billing() {
   const { data: billing, isLoading } = useQuery({
     queryKey: ['superadmin-billing'],
-    queryFn: () => api.get('/superadmin/billing').then((r) => r.data.data).catch(() => []),
+    queryFn: () => api.get('/superadmin/billing').then((r) => r.data.data ?? []).catch(() => []),
   });
 
   const getAmount = (b: any) => {

@@ -1,0 +1,1578 @@
+generator client {
+ provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────
+// SUPERADMIN LAYER
+// ─────────────────────────────────────────
+
+model SuperAdminUser {
+ id Int @id @default(autoincrement())
+ name String
+ email String @unique
+ password String
+ role String @default("superadmin")
+ avatar String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+}
+
+model Package {
+ id Int @id @default(autoincrement())
+ name String
+ description String?
+ monthlyPrice Decimal?
+ annualPrice Decimal?
+ lifetimePrice Decimal?
+ isRecommended Boolean @default(false)
+ isDefault Boolean @default(false)
+ modules String
+ trialDays Int @default(30)
+ createdAt DateTime @default(now())
+ subscriptions Subscription[]
+}
+
+model Restaurant {
+ id Int @id @default(autoincrement())
+ name String
+ slug String @unique
+ email String @unique
+ phone String?
+ address String?
+ logo String?
+ status String @default("active")
+ requiresApproval Boolean @default(false)
+ approvedAt DateTime?
+ enabledModules String
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ businessType String @default("bakery")
+
+ subscription Subscription?
+ branches Branch[]
+ staff Staff[]
+ menus Menu[]
+ customers Customer[]
+ orders Order[]
+ expenses Expense[]
+ cashRegisters CashRegister[]
+ inventoryItems InventoryItem[]
+ kitchens Kitchen[]
+ settings RestaurantSettings?
+ billSettings BillSettings?
+ loyaltyProgram LoyaltyProgram?
+ hotelRoomTypes HotelRoomType[]
+ hotelRooms HotelRoom[]
+ hotelGuests HotelGuest[]
+ hotelReservations HotelReservation[]
+ hotelStays HotelStay[]
+ hotelFolioCharges HotelFolioCharge[]
+ hotelFolioPayments HotelFolioPayment[]
+ hotelHousekeepingTasks HotelHousekeepingTask[]
+ hotelVenues HotelVenue[]
+ hotelEvents HotelEvent[]
+ hotelRatePlans HotelRatePlan[]
+ bakeryTokens BakeryToken[]
+ subPOSTerminals SubPOSTerminal[]
+ mainPOSTerminals MainPOSTerminal[]
+ tokenCounterConfig TokenCounterConfig?
+ refreshTokens RefreshToken[]
+ supplierPayments SupplierPayment[]
+ purchaseOrders PurchaseOrder[]
+ purchaseOrderPayments PurchaseOrderPayment[]
+ purchaseOrderAttachments PurchaseOrderAttachment[]
+ purchaseOrderTemplates PurchaseOrderTemplate[]
+ recurringPurchaseOrders RecurringPurchaseOrder[]
+ roles Role[]
+ erpSyncConfig ErpSyncConfig?
+ erpAppliedDispatches ErpAppliedDispatch[]
+}
+
+model Subscription {
+ id Int @id @default(autoincrement())
+ restaurantId Int @unique
+ packageId Int
+ billingCycle String
+ status String @default("trial")
+ startDate DateTime
+ endDate DateTime?
+ nextPaymentDate DateTime?
+ transactionId String?
+ paymentGateway String?
+ amount Decimal?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ package Package @relation(fields: [packageId], references: [id])
+ payments SubscriptionPayment[]
+}
+
+model SubscriptionPayment {
+ id Int @id @default(autoincrement())
+ subscriptionId Int
+ amount Decimal
+ currency String @default("USD")
+ gateway String
+ gatewayTxnId String?
+ status String
+ receiptUrl String?
+ paidAt DateTime?
+ createdAt DateTime @default(now())
+
+ subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+}
+
+model OfflinePaymentRequest {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ packageId Int
+ billingCycle String
+ paymentBy String?
+ status String @default("pending")
+ note String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────
+// RESTAURANT LAYER
+// ─────────────────────────────────────────
+
+model Branch {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ branchCode String? @unique
+ managerId Int?
+ address String?
+ phone String?
+ isDefault Boolean @default(false)
+ isActive Boolean @default(true)
+ openTime String?
+ closeTime String?
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ staff Staff[]
+ areas Area[]
+ orders Order[]
+ cashRegisters CashRegister[]
+}
+
+model Staff {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ branchId Int?
+ name String
+ email String
+ password String
+ role String @default("waiter")
+ phone String?
+ avatar String?
+ isActive Boolean @default(true)
+ lastLoginAt DateTime?
+ theme String @default("dark")
+ language String @default("en")
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ branch Branch? @relation(fields: [branchId], references: [id])
+ orders Order[]
+ waiterRequests WaiterRequest[]
+
+ @@unique([restaurantId, email])
+}
+
+model RestaurantSettings {
+ id Int @id @default(autoincrement())
+ restaurantId Int @unique
+ currency String @default("USD")
+ currencySymbol String @default("$")
+ taxMode String @default("order")
+ sgstRate Decimal @default(0)
+ cgstRate Decimal @default(0)
+ timezone String @default("UTC")
+ orderPrefix String @default("ORD")
+ kotPrefix String @default("KOT")
+ receiptTemplate String?
+ deliveryFee Decimal @default(0)
+ minOrderAmount Decimal @default(0)
+ allowDineIn Boolean @default(true)
+ allowDelivery Boolean @default(true)
+ allowPickup Boolean @default(true)
+ whatsappEnabled Boolean @default(false)
+ whatsappToken String?
+ webhookUrls String?
+ loyaltyEnabled Boolean @default(false)
+ kioskEnabled Boolean @default(false)
+ customerDisplayEnabled Boolean @default(false)
+ presetAmounts String?
+ additionalCharges String?
+ cancellationReasons String?
+ refundReasons String?
+ aboutUs String?
+ customerSiteConfig String?
+ theme String?
+ isInterState Boolean @default(false)
+ igstRate Decimal @default(0)
+ posDeletePassword String?
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+model BillSettings {
+ id Int @id @default(autoincrement())
+ restaurantId Int @unique
+ showGST Boolean @default(false)
+ showUnitForKOT Boolean @default(false)
+ showUnitForNonKOT Boolean @default(true)
+ loyaltyDiscountFormat String @default("small_line")
+ billHeaderText String?
+ thankYouMessage String? @default("Thank you for your business!")
+ showTokenNumber Boolean @default(true)
+ showRestaurantInfo Boolean @default(true)
+ showPhoneNumber Boolean @default(true)
+ itemTaxDisplay String @default("item_level")
+ kotItemsDisplay String?
+ nonKotItemsDisplay String?
+ billSectionOrder String?
+ upiVpa String?
+ upiId String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────
+// MENU
+// ─────────────────────────────────────────
+
+model Menu {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ description String?
+ image String?
+ isActive Boolean @default(true)
+ sortOrder Int @default(0)
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ menuItems MenuItem[]
+ tableMenus TableMenu[]
+}
+
+model ItemGroup {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ description String?
+ image String?
+ isKOTEnabled Boolean @default(true)
+ sortOrder Int @default(0)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ categories ItemCategory[]
+
+ @@unique([restaurantId, name])
+}
+
+model ItemCategory {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ groupId Int?
+ name String
+ description String?
+ image String?
+ sortOrder Int @default(0)
+ isKOTEnabled Boolean @default(true)
+ createdAt DateTime @default(now())
+
+ group ItemGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+ menuItems MenuItem[]
+}
+
+model MenuItem {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ menuId Int
+ categoryId Int?
+ inventoryItemId Int?
+ name String
+ description String?
+ price Decimal
+ image String?
+ isVeg Boolean @default(true)
+ isAvailable Boolean @default(true)
+ isDeleted Boolean @default(false)
+ showOnCustomerSite Boolean @default(true)
+ preparationTime Int?
+ productQR String? @unique
+ isAutoImage Boolean @default(true)
+ salesUnit String?
+ taxType String @default("external")
+ taxPercent Decimal @default(5)
+ enablePackOptions Boolean @default(false)
+ packOptions String?
+ stockWarningThreshold Int? // number of servings considered low for this menu item
+ expiryDate DateTime? // optional expiry date for non-KOT items
+ sortOrder Int @default(0)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ menu Menu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+ category ItemCategory? @relation(fields: [categoryId], references: [id])
+ inventoryItem InventoryItem? @relation(fields: [inventoryItemId], references: [id])
+ itemModifiers ItemModifier[]
+ kotItems KOTItem[]
+ recipeIngredients RecipeIngredient[]
+ tokenItems BakeryTokenItem[]
+ returnItems BakeryTokenReturnItem[] @relation("menuItem_returns")
+}
+
+model ModifierGroup {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ options String
+ createdAt DateTime @default(now())
+
+ itemModifiers ItemModifier[]
+}
+
+model ItemModifier {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ menuItemId Int
+ modifierGroupId Int
+ isRequired Boolean @default(false)
+ allowMultiple Boolean @default(false)
+ createdAt DateTime @default(now())
+
+ menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+ modifierGroup ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────
+// TABLES
+// ─────────────────────────────────────────
+
+model Area {
+ id Int @id @default(autoincrement())
+ branchId Int
+ restaurantId Int
+ name String
+ sortOrder Int @default(0)
+ createdAt DateTime @default(now())
+
+ branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+ tables Table[]
+}
+
+model Table {
+ id Int @id @default(autoincrement())
+ areaId Int
+ restaurantId Int
+ name String
+ capacity Int @default(4)
+ status String @default("available")
+ qrToken String @unique @default(cuid())
+ isActive Boolean @default(true)
+ createdAt DateTime @default(now())
+
+ area Area @relation(fields: [areaId], references: [id], onDelete: Cascade)
+ orders Order[]
+ tableMenus TableMenu[]
+ reservations Reservation[]
+ waiterRequests WaiterRequest[]
+}
+
+model TableMenu {
+ id Int @id @default(autoincrement())
+ tableId Int
+ menuId Int
+ isActive Boolean @default(true)
+
+ table Table @relation(fields: [tableId], references: [id], onDelete: Cascade)
+ menu Menu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────
+// ORDERS & KOT
+// ─────────────────────────────────────────
+
+model Customer {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ email String?
+ phone String?
+ address String?
+ loyaltyPoints Int @default(0)
+ loyaltyStamps Int @default(0)
+ totalOrders Int @default(0)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ orders Order[]
+ loyaltyTransactions LoyaltyTransaction[]
+ bakeryTokens BakeryToken[]
+}
+
+model Order {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ branchId Int?
+ tableId Int?
+ customerId Int?
+ staffId Int?
+ orderNumber String
+ type String @default("dine_in")
+ status String @default("placed")
+ waiterAcceptance String @default("pending")
+ pax Int @default(1)
+ subtotal Decimal @default(0)
+ sgst Decimal @default(0)
+ cgst Decimal @default(0)
+ discount Decimal @default(0)
+ deliveryFee Decimal @default(0)
+ tip Decimal @default(0)
+ total Decimal @default(0)
+ note String?
+ cancelReason String?
+ isDraft Boolean @default(false)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ branch Branch? @relation(fields: [branchId], references: [id])
+ table Table? @relation(fields: [tableId], references: [id])
+ customer Customer? @relation(fields: [customerId], references: [id])
+ staff Staff? @relation(fields: [staffId], references: [id])
+ kots KOT[]
+ payments OrderPayment[]
+ refunds Refund[]
+ bakeryToken BakeryToken?
+}
+
+model KOT {
+ id Int @id @default(autoincrement())
+ orderId Int
+ restaurantId Int
+ createdByTerminalId Int?
+ createdByTerminalName String?
+ createdByTerminalType String?
+ kitchenId Int?
+ kotNumber String
+ status String @default("pending")
+ printedAt DateTime?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+ kitchen Kitchen? @relation(fields: [kitchenId], references: [id])
+ items KOTItem[]
+}
+
+model KOTItem {
+ id Int @id @default(autoincrement())
+ kotId Int
+ menuItemId Int
+ quantity Int
+ price Decimal
+ modifiers String?
+ note String?
+ status String @default("pending")
+ removedBy Int?
+ removeReason String?
+ removedAt DateTime?
+
+ kot KOT @relation(fields: [kotId], references: [id], onDelete: Cascade)
+ menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+}
+
+model OrderPayment {
+ id Int @id @default(autoincrement())
+ orderId Int
+ amount Decimal
+ method String
+ transactionId String?
+ gatewayRef String?
+ isDue Boolean @default(false)
+ paidAt DateTime?
+ createdAt DateTime @default(now())
+
+ order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+ refund Refund?
+}
+
+model Refund {
+ id Int @id @default(autoincrement())
+ orderId Int
+ paymentId Int? @unique
+ refundType String
+ reason String?
+ originalAmount Decimal
+ refundedAmount Decimal
+ processedById Int?
+ gatewayRef String?
+ createdAt DateTime @default(now())
+
+ order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+ payment OrderPayment? @relation(fields: [paymentId], references: [id])
+}
+
+// ─────────────────────────────────────────
+// WAITER REQUESTS & RESERVATIONS
+// ─────────────────────────────────────────
+
+model WaiterRequest {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ tableId Int
+ staffId Int?
+ status String @default("pending")
+ attendedAt DateTime?
+ createdAt DateTime @default(now())
+
+ table Table @relation(fields: [tableId], references: [id], onDelete: Cascade)
+ staff Staff? @relation(fields: [staffId], references: [id])
+}
+
+model Reservation {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ tableId Int?
+ customerName String
+ customerEmail String?
+ customerPhone String?
+ partySize Int
+ date DateTime
+ startTime String
+ endTime String?
+ status String @default("confirmed")
+ note String?
+ createdAt DateTime @default(now())
+
+ table Table? @relation(fields: [tableId], references: [id])
+}
+
+// ─────────────────────────────────────────
+// EXPENSES
+// ─────────────────────────────────────────
+
+// Enums are not supported in SQLite, using string types instead
+
+model ExpenseCategory {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ description String?
+ type String @default("SHOP")
+ createdAt DateTime @default(now())
+
+ expenses Expense[]
+}
+
+model Expense {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ categoryId Int
+ title String
+ amount Decimal
+ expenseDate DateTime
+ paymentDate DateTime?
+ dueDate DateTime?
+ paymentStatus String @default("pending")
+ paymentMethod String?
+ description String?
+ receiptUrl String?
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ category ExpenseCategory @relation(fields: [categoryId], references: [id])
+}
+
+// ─────────────────────────────────────────
+// CASH REGISTER
+// ─────────────────────────────────────────
+
+model CashRegister {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ branchId Int
+ name String
+ type String @default("main")
+ isActive Boolean @default(true)
+ forceOpenOnLogin Boolean @default(false)
+ allowedRoles String?
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ branch Branch @relation(fields: [branchId], references: [id])
+ sessions CashRegisterSession[]
+ denominations Denomination[]
+}
+
+model CashRegisterSession {
+ id Int @id @default(autoincrement())
+ registerId Int
+ cashierId Int
+ openingBalance Decimal
+ closingBalance Decimal?
+ expectedCash Decimal?
+ countedCash Decimal?
+ discrepancy Decimal?
+ status String @default("open")
+ openedAt DateTime @default(now())
+ closedAt DateTime?
+ approvedBy Int?
+ approvedAt DateTime?
+ note String?
+
+ register CashRegister @relation(fields: [registerId], references: [id], onDelete: Cascade)
+ transactions CashTransaction[]
+}
+
+model CashTransaction {
+ id Int @id @default(autoincrement())
+ sessionId Int
+ type String
+ amount Decimal
+ reason String?
+ referenceId Int?
+ createdAt DateTime @default(now())
+
+ session CashRegisterSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+model Denomination {
+ id Int @id @default(autoincrement())
+ registerId Int
+ name String
+ value Decimal
+ type String
+ isActive Boolean @default(true)
+ createdAt DateTime @default(now())
+
+ register CashRegister @relation(fields: [registerId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────
+// INVENTORY
+// ─────────────────────────────────────────
+
+model InventoryUnit {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ symbol String
+ createdAt DateTime @default(now())
+
+ inventoryItems InventoryItem[]
+  productionRecipes ProductionRecipe[]
+}
+
+model InventoryItemCategory {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ createdAt DateTime @default(now())
+
+ inventoryItems InventoryItem[]
+}
+
+model InventoryItem {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ categoryId Int
+ unitId Int
+ name String
+ sku String? @unique
+ barcode String? @unique
+ image String?
+ thresholdQty Decimal @default(0)
+ currentStock Decimal @default(0)
+ costPerUnit Decimal @default(0)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ category InventoryItemCategory @relation(fields: [categoryId], references: [id])
+ unit InventoryUnit @relation(fields: [unitId], references: [id])
+ movements InventoryMovement[]
+ recipeIngredients RecipeIngredient[]
+ purchaseOrderItems PurchaseOrderItem[]
+ menuItems MenuItem[]
+ inventoryMRPs InventoryItemMRP[]
+  productionRecipeIngredients ProductionRecipeIngredient[]
+  productionRunIngredients    ProductionRunIngredient[]
+  warehouseTransferItems      WarehouseTransferItem[]
+   productionRecipes           ProductionRecipe[]
+}
+
+model InventoryMovement {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ itemId Int
+ fromBranchId Int?
+ toBranchId Int?
+ type String
+ quantity Decimal
+ note String?
+ referenceId Int?
+ staffId Int?
+ createdAt DateTime @default(now())
+
+ item InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
+
+model BranchStock {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ branchId Int
+ inventoryItemId Int
+ quantity Decimal @default(0)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ @@unique([branchId, inventoryItemId])
+}
+
+model Recipe {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ menuItemId Int @unique
+ yield Decimal @default(1)
+ yieldUnit String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ ingredients RecipeIngredient[]
+}
+
+model RecipeIngredient {
+ id Int @id @default(autoincrement())
+ recipeId Int
+ inventoryItemId Int
+ menuItemId Int
+ quantity Decimal
+
+ recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+ inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+ menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+}
+
+model Supplier {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ contactPerson String?
+ email String?
+ phone String?
+ address String?
+ gstNumber String?
+ notes String?
+ isActive Boolean @default(true)
+ outstandingBalance Decimal @default(0)
+ creditLimit Decimal @default(0)
+ createdAt DateTime @default(now())
+
+ purchaseOrders PurchaseOrder[]
+ payments SupplierPayment[]
+ inventoryItemMRPs InventoryItemMRP[]
+ purchaseOrderPayments PurchaseOrderPayment[]
+ recurringPurchaseOrders RecurringPurchaseOrder[]
+}
+
+model PurchaseOrder {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ supplierId Int
+ orderNumber String
+ orderDate DateTime?
+ status String @default("pending")
+ total Decimal @default(0)
+ expectedDate DateTime?
+ receivedAt DateTime?
+ note String?
+ currency String?
+ exchangeRate Decimal?
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ supplier Supplier @relation(fields: [supplierId], references: [id])
+ items PurchaseOrderItem[]
+ payments PurchaseOrderPayment[]
+ attachments PurchaseOrderAttachment[]
+}
+
+model PurchaseOrderItem {
+ id Int @id @default(autoincrement())
+ purchaseOrderId Int
+ inventoryItemId Int
+ quantity Decimal
+ unitCost Decimal
+ total Decimal
+ inventoryItemMRPId Int?
+ taxPercent Decimal?
+ discountPercent Decimal?
+
+ purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+ inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+ inventoryItemMRP InventoryItemMRP? @relation(fields: [inventoryItemMRPId], references: [id])
+}
+
+model InventoryItemMRP {
+ id Int @id @default(autoincrement())
+ inventoryItemId Int
+ supplierId Int?
+ mrp Decimal
+ purchaseRate Decimal
+ profitPercent Decimal?
+ effectiveFrom DateTime?
+ isActive Boolean @default(true)
+ createdAt DateTime @default(now())
+
+ inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+ supplier Supplier? @relation(fields: [supplierId], references: [id])
+ purchaseOrderItems PurchaseOrderItem[]
+ bakeryTokenItems BakeryTokenItem[]
+}
+
+model PurchaseOrderPayment {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ purchaseOrderId Int
+ supplierId Int?
+ amount Decimal
+ method String?
+ reference String?
+ notes String?
+ paymentDate DateTime?
+ createdAt DateTime @default(now())
+
+ purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+ supplier Supplier? @relation(fields: [supplierId], references: [id])
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+model PurchaseOrderAttachment {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ purchaseOrderId Int
+ filename String
+ path String?
+ mimeType String?
+ createdAt DateTime @default(now())
+
+ purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+model PurchaseOrderTemplate {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ note String?
+ items String
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ recurringPurchaseOrders RecurringPurchaseOrder[]
+}
+
+model RecurringPurchaseOrder {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ supplierId Int?
+ templateId Int?
+ frequency String?
+ cronExpression String?
+ nextRunAt DateTime?
+ active Boolean @default(true)
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ supplier Supplier? @relation(fields: [supplierId], references: [id])
+ template PurchaseOrderTemplate? @relation(fields: [templateId], references: [id])
+}
+
+// ─────────────────────────────────────────
+// KITCHENS
+// ─────────────────────────────────────────
+
+model Kitchen {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ type String @default("food")
+ printerName String?
+ isDefault Boolean @default(false)
+ isActive Boolean @default(true)
+ menuItemIds String?
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ kots KOT[]
+}
+
+// ─────────────────────────────────────────
+// LOYALTY
+// ─────────────────────────────────────────
+
+model LoyaltyProgram {
+ id Int @id @default(autoincrement())
+ restaurantId Int @unique
+ pointsPerAmount Decimal @default(1)
+ amountPerPoint Decimal @default(0.01)
+ stampsPerVisit Int @default(1)
+ stampsForReward Int @default(10)
+ rewardValue Decimal @default(50)
+ pointsPerRupee Decimal @default(0.1)
+ pointValue Decimal @default(0.5)
+ minClaimPoints Int @default(100)
+ maxClaimPercent Decimal @default(10)
+ isActive Boolean @default(true)
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ transactions LoyaltyTransaction[]
+}
+
+model LoyaltyTransaction {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ customerId Int
+ loyaltyProgramId Int
+ type String
+ points Int?
+ stamps Int?
+ orderId Int?
+ note String?
+ createdAt DateTime @default(now())
+
+ customer Customer @relation(fields: [customerId], references: [id])
+ loyaltyProgram LoyaltyProgram @relation(fields: [loyaltyProgramId], references: [id])
+}
+
+// ─────────────────────────────────────────
+// DELIVERY EXECUTIVES
+// ─────────────────────────────────────────
+
+model DeliveryExecutive {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ phone String
+ email String?
+ partnerCode String @unique
+ status String @default("available")
+ totalOrders Int @default(0)
+ isActive Boolean @default(true)
+ createdAt DateTime @default(now())
+}
+
+// ─────────────────────────────────────────
+// AI INSIGHTS
+// ─────────────────────────────────────────
+
+model AIInsight {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ type String
+ title String
+ content String
+ generatedAt DateTime @default(now())
+ expiresAt DateTime?
+ isRead Boolean @default(false)
+}
+
+// ─────────────────────────────────────────
+// HOTEL MODULE
+// ─────────────────────────────────────────
+
+model HotelRoomType {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ description String?
+ baseOccupancy Int @default(1)
+ maxOccupancy Int
+ basePricePerNight Decimal
+ amenities String?
+ photos String?
+ image String?
+ status String @default("active")
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ rooms HotelRoom[]
+}
+
+model HotelRoom {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ roomTypeId Int
+ roomNumber String
+ floor Int?
+ status String @default("vacant_clean")
+ notes String?
+ image String?
+ isActive Boolean @default(true)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ roomType HotelRoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+ stays HotelStay[]
+ housekeepingTasks HotelHousekeepingTask[]
+ reservationRooms HotelReservationRoom[]
+
+ @@unique([restaurantId, roomNumber])
+}
+
+model HotelGuest {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ firstName String?
+ lastName String?
+ email String?
+ phone String?
+ idType String?
+ idNumber String?
+ address String?
+ city String?
+ state String?
+ country String?
+ postalCode String?
+ dateOfBirth String?
+ nationality String?
+ notes String?
+ image String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ reservations HotelReservation[]
+ stays HotelStay[]
+}
+
+model HotelRatePlan {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ planType String
+ cancellationHours Int?
+ cancellationFeePercent Decimal?
+ description String?
+ image String?
+ isActive Boolean @default(true)
+ status String @default("active")
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ reservations HotelReservation[]
+}
+
+model HotelReservation {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ reservationNumber String
+ guestId Int
+ checkInDate DateTime
+ checkOutDate DateTime
+ ratePlanId Int?
+ numberOfGuests Int
+ status String @default("tentative")
+ specialRequests String?
+ advancePayment Decimal?
+ paymentMethod String?
+ createdById Int?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ guest HotelGuest @relation(fields: [guestId], references: [id], onDelete: Cascade)
+ ratePlan HotelRatePlan? @relation(fields: [ratePlanId], references: [id])
+ rooms HotelReservationRoom[]
+ stays HotelStay[]
+
+ @@unique([restaurantId, reservationNumber])
+}
+
+model HotelReservationRoom {
+ id Int @id @default(autoincrement())
+ reservationId Int
+ roomId Int
+
+ reservation HotelReservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+ room HotelRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+}
+
+model HotelStay {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ reservationId Int?
+ guestId Int
+ roomId Int
+ checkInDatetime DateTime
+ checkOutDatetime DateTime?
+ status String @default("active")
+ notes String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ reservation HotelReservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+ guest HotelGuest @relation(fields: [guestId], references: [id], onDelete: Cascade)
+ room HotelRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+ folioCharges HotelFolioCharge[]
+ folioPayments HotelFolioPayment[]
+}
+
+model HotelFolioCharge {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ stayId Int
+ chargeDate DateTime
+ description String
+ chargeType String
+ amount Decimal
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ stay HotelStay @relation(fields: [stayId], references: [id], onDelete: Cascade)
+}
+
+model HotelFolioPayment {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ stayId Int
+ paymentDate DateTime
+ amount Decimal
+ paymentMethod String
+ notes String?
+ createdById Int?
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ stay HotelStay @relation(fields: [stayId], references: [id], onDelete: Cascade)
+}
+
+model HotelHousekeepingTask {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ roomId Int
+ taskType String
+ assignedTo String?
+ taskDate DateTime
+ priority String @default("medium")
+ status String @default("pending")
+ notes String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ room HotelRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+}
+
+model HotelVenue {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ name String
+ capacity Int
+ baseRate Decimal
+ description String?
+ amenities String?
+ photos String?
+ image String?
+ isActive Boolean @default(true)
+ status String @default("active")
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ events HotelEvent[]
+}
+
+model HotelEvent {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ eventNumber String
+ eventName String
+ venueId Int
+ customerName String
+ customerPhone String?
+ eventDate DateTime
+ eventTime String
+ endTime String?
+ guestsCount Int?
+ eventType String?
+ specialRequirements String?
+ cateringRequired Boolean @default(false)
+ depositAmount Decimal?
+ totalAmount Decimal?
+ status String @default("tentative")
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ venue HotelVenue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+ @@unique([restaurantId, eventNumber])
+}
+
+// ─────────────────────────────────────────
+// REFRESH TOKENS
+// ─────────────────────────────────────────
+
+model RefreshToken {
+ id Int @id @default(autoincrement())
+ token String @unique
+ userId Int
+ userType String @default("staff")
+ restaurantId Int?
+ expiresAt DateTime
+ revokedAt DateTime?
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────
+// BAKERY / TOKEN POS MODULE
+// ─────────────────────────────────────────
+
+model BakeryToken {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ branchId Int
+ subPosId Int?
+ tokenNumber Int
+ qrCode String @unique
+ status String @default("open")
+ customerId Int?
+ customerName String?
+ customerPhone String?
+ orderId Int? @unique
+ loyaltyPointsEarned Int @default(0)
+ loyaltyPointsClaimed Int @default(0)
+ discountApplied Decimal @default(0)
+ subtotal Decimal @default(0)
+ sgst Decimal @default(0)
+ cgst Decimal @default(0)
+ igst Decimal @default(0)
+ total Decimal @default(0)
+ paidAt DateTime?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ customer Customer? @relation(fields: [customerId], references: [id])
+ subPos SubPOSTerminal? @relation(fields: [subPosId], references: [id])
+ order Order? @relation(fields: [orderId], references: [id])
+ items BakeryTokenItem[]
+ payments BakeryTokenPayment[]
+ edits BakeryTokenEdit[]
+ returns BakeryTokenReturn[] @relation("original_returns")
+}
+
+model BakeryTokenItem {
+ id Int @id @default(autoincrement())
+ tokenId Int
+ menuItemId Int
+ menuItemName String
+ price Decimal
+ taxRate Decimal @default(0)
+ quantity Decimal
+ total Decimal
+ addedBy String
+ addedAt DateTime @default(now())
+ removedAt DateTime?
+ removedBy String?
+ removeReason String?
+ isRemoved Boolean @default(false)
+
+ token BakeryToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+ menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+ // Optional: link to inventory item MRP chosen at sale time (for retail items)
+ inventoryItemMRPId Int?
+ purchaseRate Decimal?
+ inventoryItemMRP InventoryItemMRP? @relation(fields: [inventoryItemMRPId], references: [id])
+}
+
+model BakeryTokenPayment {
+ id Int @id @default(autoincrement())
+ tokenId Int
+ method String
+ amount Decimal
+ transactionId String?
+ paidAt DateTime @default(now())
+
+ token BakeryToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+}
+
+model BakeryTokenEdit {
+ id Int @id @default(autoincrement())
+ tokenId Int
+ action String
+ menuItemName String
+ oldValue String?
+ newValue String?
+ reason String
+ staffUsername String
+ createdAt DateTime @default(now())
+
+ token BakeryToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────
+// RETURN MANAGEMENT
+// ─────────────────────────────────────────
+
+model BakeryTokenReturn {
+ id Int @id @default(autoincrement())
+ originalTokenId Int
+ returnTokenId Int? // may link to a separate return token or null
+ restaurantId Int
+ branchId Int
+ returnedBy String // staff username
+ returnReason String?
+ totalReturnAmount Decimal @default(0)
+ status String @default("completed") // completed, partial, rejected
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+ originalToken BakeryToken @relation("original_returns", fields: [originalTokenId], references: [id], onDelete: Cascade)
+ returnItems BakeryTokenReturnItem[]
+}
+
+model BakeryTokenReturnItem {
+ id Int @id @default(autoincrement())
+ returnId Int
+ tokenItemId Int // reference to which item was returned
+ menuItemId Int
+ menuItemName String
+ quantity Decimal
+ price Decimal
+ totalReturn Decimal
+ createdAt DateTime @default(now())
+
+ return BakeryTokenReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+ menuItem MenuItem @relation("menuItem_returns", fields: [menuItemId], references: [id])
+}
+
+model SubPOSTerminal {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ branchId Int
+ name String
+ terminalCode String @unique
+ pin String
+ groupIds String
+ isActive Boolean @default(true)
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+ tokens BakeryToken[]
+}
+
+model MainPOSTerminal {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ branchId Int
+ name String
+ terminalCode String @unique
+ pin String
+ cashRegisterId Int?
+ isActive Boolean @default(true)
+ createdAt DateTime @default(now())
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ branchId Int
+ terminalId Int?
+ staffId Int?
+ action String
+ reason String
+ referenceId String
+ details String?
+ createdAt DateTime @default(now())
+}
+
+model TokenCounterConfig {
+ id Int @id @default(autoincrement())
+ restaurantId Int @unique
+ resetTime String @default("00:00")
+ startNumber Int @default(1)
+ endNumber Int @default(9999)
+ lastResetAt DateTime?
+
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────
+// SUPPLIER PAYMENTS
+// ─────────────────────────────────────────
+
+model SupplierPayment {
+ id Int @id @default(autoincrement())
+ restaurantId Int
+ supplierId Int
+ amount Decimal
+ paymentDate DateTime
+ method String
+ reference String?
+ notes String?
+ createdAt DateTime @default(now())
+
+ supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+ restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+model Role {
+  id           Int        @id @default(autoincrement())
+  restaurantId Int
+  name         String
+  permissions  String // JSON string of permissions
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, name])
+}
+
+// ─────────────────────────────────────────
+// PRODUCTION & WAREHOUSE EXTENSIONS
+// ─────────────────────────────────────────
+
+model ProductionRecipe {
+  id              Int                        @id @default(autoincrement())
+  restaurantId    Int
+  inventoryItemId Int
+  name            String
+  description     String?
+  targetQuantity  Decimal
+  unitId          Int
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  inventoryItem   InventoryItem              @relation(fields: [inventoryItemId], references: [id])
+  unit            InventoryUnit              @relation(fields: [unitId], references: [id])
+  ingredients     ProductionRecipeIngredient[]
+  productionRuns  ProductionRun[]
+}
+
+model ProductionRecipeIngredient {
+  id                 Int              @id @default(autoincrement())
+  recipeId           Int
+  inventoryItemId    Int
+  quantity           Decimal
+
+  recipe             ProductionRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  inventoryItem      InventoryItem    @relation(fields: [inventoryItemId], references: [id])
+}
+
+model ProductionRun {
+  id                Int                  @id @default(autoincrement())
+  restaurantId      Int
+  branchId          Int
+  recipeId          Int
+  quantityProduced  Decimal
+  overheadCost      Decimal              @default(0)
+  costOfProduction  Decimal
+  batchNumber       String               @unique
+  status            String               @default("completed")
+  wasteQuantity     Decimal              @default(0)
+  wasteReason       String?
+  notes             String?
+  staffId           Int?
+  createdAt         DateTime             @default(now())
+
+  recipe            ProductionRecipe     @relation(fields: [recipeId], references: [id])
+  ingredientsUsed   ProductionRunIngredient[]
+}
+
+model ProductionRunIngredient {
+  id                 Int              @id @default(autoincrement())
+  productionRunId    Int
+  inventoryItemId    Int
+  quantityConsumed   Decimal
+  costPerUnit        Decimal
+
+  productionRun      ProductionRun    @relation(fields: [productionRunId], references: [id], onDelete: Cascade)
+  inventoryItem      InventoryItem    @relation(fields: [inventoryItemId], references: [id])
+}
+
+model WarehouseTransfer {
+  id                Int                  @id @default(autoincrement())
+  restaurantId      Int
+  fromBranchId      Int
+  toBranchId        Int
+  transferNumber    String               @unique
+  transferType      String               @default("outbound")
+  parentTransferId  Int?
+  status            String               @default("pending")
+  shippedAt         DateTime?
+  receivedAt        DateTime?
+  notes             String?
+  shipperStaffId    Int?
+  receiverStaffId   Int?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  items             WarehouseTransferItem[]
+}
+
+model WarehouseTransferItem {
+  id                 Int               @id @default(autoincrement())
+  transferId         Int
+  inventoryItemId    Int
+  quantityShipped    Decimal
+  quantityReceived   Decimal           @default(0)
+  quantityDamaged    Decimal           @default(0)
+  unitCost           Decimal
+
+  transfer           WarehouseTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  inventoryItem      InventoryItem     @relation(fields: [inventoryItemId], references: [id])
+}
+
+model ErpSyncConfig {
+  id           Int      @id @default(autoincrement())
+  restaurantId Int      @unique
+  baseUrl      String
+  apiKey       String
+  updatedAt    DateTime @updatedAt
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+model ErpAppliedDispatch {
+  id           Int      @id @default(autoincrement())
+  restaurantId Int
+  dispatchId   Int
+  dispatchRef  String
+  appliedAt    DateTime @default(now())
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, dispatchId])
+}

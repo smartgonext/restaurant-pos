@@ -13,12 +13,12 @@ export default function SuperAdminDashboard() {
   const navigate = useNavigate();
   const { data: stats, isLoading } = useQuery({
     queryKey: ['superadmin-dashboard'],
-    queryFn: () => api.get('/superadmin/dashboard').then((r) => r.data.data),
+    queryFn: () => api.get('/superadmin/dashboard').then((r) => r.data.data ?? {}),
   });
 
   const { data: restaurants } = useQuery({
     queryKey: ['superadmin-restaurants-recent'],
-    queryFn: () => api.get('/superadmin/restaurants?limit=5').then((r) => r.data.data),
+    queryFn: () => api.get('/superadmin/restaurants?limit=5').then((r) => r.data.data ?? []),
   });
 
   if (isLoading) {
@@ -38,17 +38,22 @@ export default function SuperAdminDashboard() {
           <h1 className="text-2xl font-bold text-text-primary">Dashboard</h1>
           <p className="text-sm text-text-muted mt-1">Platform overview and analytics</p>
         </div>
-        <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/superadmin/restaurants')}>
+        <Button
+          icon={<Plus className="w-4 h-4" />}
+          onClick={() => navigate('/superadmin/restaurants')}
+          data-testid="dashboard-add-restaurant-btn"
+          aria-label="Add restaurant from dashboard"
+        >
           Add Restaurant
         </Button>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard label="Total Restaurants" value={stats?.totalRestaurants || 0} change={stats?.restaurantsChange} icon={Store} color="blue" />
-        <StatCard label="Active Subscriptions" value={stats?.activeSubscriptions || 0} change={stats?.subscriptionsChange} icon={Users} color="green" />
-        <StatCard label="Total Revenue" value={formatCurrency(Number(stats?.totalRevenue || 0))} change={stats?.revenueChange} icon={DollarSign} color="purple" />
-        <StatCard label="New This Month" value={stats?.newRestaurants || 0} change={12.5} icon={TrendingUp} color="cyan" />
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" data-testid="superadmin-dashboard-stats">
+        <div data-testid="stat-total-restaurants"><StatCard label="Total Restaurants" value={stats?.totalRestaurants || 0} change={stats?.restaurantsChange} icon={Store} color="blue" /></div>
+        <div data-testid="stat-active-subscriptions"><StatCard label="Active Subscriptions" value={stats?.activeSubscriptions || 0} change={stats?.subscriptionsChange} icon={Users} color="green" /></div>
+        <div data-testid="stat-total-revenue"><StatCard label="Total Revenue" value={formatCurrency(Number(stats?.totalRevenue || 0))} change={stats?.revenueChange} icon={DollarSign} color="purple" /></div>
+        <div data-testid="stat-new-this-month"><StatCard label="New This Month" value={stats?.newRestaurants || 0} change={12.5} icon={TrendingUp} color="cyan" /></div>
       </div>
 
       {/* Recent Restaurants */}
@@ -58,7 +63,7 @@ export default function SuperAdminDashboard() {
           <Button variant="ghost" size="sm" onClick={() => navigate('/superadmin/restaurants')}>View All</Button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm" data-testid="dashboard-recent-restaurants-table" aria-label="Recent restaurants table">
             <thead>
               <tr className="border-b border-border text-text-muted">
                 <th className="text-left py-3 px-4 font-medium">Restaurant</th>

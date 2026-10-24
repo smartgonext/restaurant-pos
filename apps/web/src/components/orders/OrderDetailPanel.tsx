@@ -8,11 +8,9 @@ import {
   CheckCircle2, Clock, ChefHat, UtensilsCrossed, Banknote,
   DollarSign
 } from 'lucide-react';
-import { formatCurrency, formatDateTime, cn, getStatusColor } from '@/lib/utils';
+import { formatCurrency, formatDateTime, cn, getStatusColor, resolveImageUrl } from '@/lib/utils';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
-
-const SERVER_URL = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3001';
 
 const ORDER_STEPS = [
   { key: 'placed', label: 'Order Placed', icon: Clock },
@@ -93,6 +91,10 @@ export function OrderDetailPanel({ orderId, open, onClose, onUpdate }: OrderDeta
   };
 
   if (!open) return null;
+
+  const settings = (globalThis as any).__RESTAURANT_SETTINGS__ || {};
+  const sgstRate = Number(settings.sgstRate ?? 2.5);
+  const cgstRate = Number(settings.cgstRate ?? 2.5);
 
   const nextStatus = order ? getNextStatus(order.status) : null;
   const items = order?.flatItems || [];
@@ -232,7 +234,7 @@ export function OrderDetailPanel({ orderId, open, onClose, onUpdate }: OrderDeta
                         <div className="flex items-center gap-2">
                           {item.image && (
                             <img
-                              src={item.image.startsWith('http') ? item.image : `${SERVER_URL}${item.image}`}
+                              src={resolveImageUrl(item.image)}
                               className="w-7 h-7 rounded-lg object-cover border border-border/50 shadow-sm"
                             />
                           )}
@@ -258,11 +260,11 @@ export function OrderDetailPanel({ orderId, open, onClose, onUpdate }: OrderDeta
                   <span className="text-text-primary font-bold">{formatCurrency(Number(order?.subtotal || 0))}</span>
                 </div>
                 <div className="flex justify-between text-text-muted">
-                  <span>SGST (2.5%)</span>
+                  <span>SGST ({sgstRate}%)</span>
                   <span className="text-text-primary">{formatCurrency(Number(order?.sgst || 0))}</span>
                 </div>
                 <div className="flex justify-between text-text-muted">
-                  <span>CGST (2.5%)</span>
+                  <span>CGST ({cgstRate}%)</span>
                   <span className="text-text-primary">{formatCurrency(Number(order?.cgst || 0))}</span>
                 </div>
                 {Number(order?.discount || 0) > 0 && (

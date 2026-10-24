@@ -9,6 +9,7 @@ interface User {
   avatar?: string;
   theme: string;
   language: string;
+  permissions?: Record<string, boolean>;
   restaurant?: { id: number; name: string; slug: string };
   branch?: { id: number; name: string };
 }
@@ -30,7 +31,15 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       isAuthenticated: false,
       login: ({ token, user }) => set({ token, user, isAuthenticated: true }),
-      logout: () => set({ token: null, user: null, isAuthenticated: false }),
+      logout: () => {
+        // Clear the persisted auth store entry used by zustand/persist
+        try {
+          localStorage.removeItem('auth-storage');
+        } catch (_) {
+          // ignore if storage access fails
+        }
+        set({ token: null, user: null, isAuthenticated: false });
+      },
       setToken: (token) => set({ token }),
       updateUser: (data) =>
         set((state) => ({
@@ -39,7 +48,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
-      partialize: (state) => ({ user: state.user, isAuthenticated: state.isAuthenticated }),
+      partialize: (state) => ({ token: state.token, user: state.user, isAuthenticated: state.isAuthenticated }),
     }
   )
 );

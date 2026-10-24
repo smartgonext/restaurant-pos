@@ -9,6 +9,10 @@ export interface CartItem {
   note?: string;
   image?: string;
   modifiers?: { name: string; price: number }[];
+  // Optional inventory/MRP fields
+  inventoryItem?: any;
+  inventoryItemMRPId?: number | null;
+  purchaseRate?: number | null;
 }
 
 interface CartStore {
@@ -19,6 +23,7 @@ interface CartStore {
   addItem: (item: CartItem) => void;
   removeItem: (id: string) => void;
   updateQuantity: (id: string, delta: number) => void;
+  updateItemMrp: (id: string, inventoryItemMRPId: number | null, mrpValue?: number, purchaseRate?: number | null) => void;
   setOrderType: (type: 'dine_in' | 'delivery' | 'pickup') => void;
   setTableId: (id: number | null) => void;
   clearCart: () => void;
@@ -57,23 +62,47 @@ export const useCartStore = create<CartStore>((set, get) => ({
     })
   })),
 
+  updateItemMrp: (id, inventoryItemMRPId, mrpValue, purchaseRate) => set((state) => ({
+    items: state.items.map(i => {
+      if (i.id === id) {
+        return { ...i, inventoryItemMRPId: inventoryItemMRPId ?? null, price: typeof mrpValue === 'number' ? mrpValue : i.price, purchaseRate: typeof purchaseRate === 'number' ? purchaseRate : i.purchaseRate ?? null };
+      }
+      return i;
+    })
+  })),
+
   setOrderType: (type) => set({ orderType: type }),
   setTableId: (id) => set({ tableId: id }),
   clearCart: () => set({ items: [], tableId: null, customerId: null }),
   
   getSubtotal: () => {
-    return get().items.reduce((sum, item) => {
-      const modTotal = item.modifiers?.reduce((mSum, m) => mSum + m.price, 0) || 0;
-      return sum + ((item.price + modTotal) * item.quantity);
+    const raw = get().items.reduce((sum, item) => {
+      const modTotal = item.modifiers?.reduce((mSum, m) => mSum + Number(m.price || 0), 0) || 0;
+      return sum + ((Number(item.price || 0) + modTotal) * item.quantity);
     }, 0);
+    return Math.round(raw * 100) / 100;
   },
   
   getTax: () => {
-    // Assuming flat 5% tax for now, could be dynamic based on settings
-    return get().getSubtotal() * 0.05;
+    const breakdown = (get() as any).getTaxBreakdown ? (get() as any).getTaxBreakdown() : null;
+    if (breakdown) return breakdown.total;
+    return Math.round(get().getSubtotal() * 0.05 * 100) / 100;
+  },
+
+  getTaxBreakdown: () => {
+    const settings = (globalThis as any).__RESTAURANT_SETTINGS__ || {};
+    const sgstRate = Number(settings?.sgstRate ?? 2.5);
+    const cgstRate = Number(settings?.cgstRate ?? 2.5);
+    const igstRate = Number(settings?.igstRate ?? 0);
+    const subtotal = get().getSubtotal();
+    const sgst = Math.round(subtotal * (sgstRate / 100) * 100) / 100;
+    const cgst = Math.round(subtotal * (cgstRate / 100) * 100) / 100;
+    const igst = Math.round(subtotal * (igstRate / 100) * 100) / 100;
+    const total = Math.round((sgst + cgst + igst) * 100) / 100;
+    return { sgst, cgst, igst, total, sgstRate, cgstRate, igstRate };
   },
   
   getTotal: () => {
-    return get().getSubtotal() + get().getTax();
+    return Math.round((get().getSubtotal() + get().getTax()) * 100) / 100;
   }
 }));

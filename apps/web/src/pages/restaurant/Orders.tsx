@@ -1,40 +1,101 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { OrderDetailPanel } from '@/components/orders/OrderDetailPanel';
+import { useSocket } from '@/hooks/useSocket';
 import {
   ClipboardList, Search, Eye, ArrowRight, XCircle, DollarSign,
-  Filter, RefreshCw, Clock, ShoppingCart, Utensils, ChevronDown
+  Filter, RefreshCw, Clock, ShoppingCart, Utensils, ChevronDown, Bell, X
 } from 'lucide-react';
 import { formatCurrency, formatDateTime, getStatusColor, cn } from '@/lib/utils';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 
-const statusFilters = ['all', 'placed', 'confirmed', 'preparing', 'served', 'billed', 'paid', 'cancelled'];
-const typeFilters = ['all', 'dine_in', 'delivery', 'pickup'];
+import { FilterBar } from '@/components/ui/FilterBar';
+
+const getTodayStr = () => new Date().toISOString().split('T')[0];
 
 export default function Orders() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [dateRange, setDateRange] = useState(() => {
+    const today = getTodayStr();
+    return { startDate: today, endDate: today };
+  });
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [newOrderNotification, setNewOrderNotification] = useState<any>(null);
+  const { socket } = useSocket();
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['orders', statusFilter, typeFilter],
+    queryKey: ['orders', statusFilter, typeFilter, dateRange.startDate, dateRange.endDate],
     queryFn: () => {
       const params = new URLSearchParams();
       if (statusFilter !== 'all') params.set('status', statusFilter);
       if (typeFilter !== 'all') params.set('type', typeFilter);
+      if (dateRange.startDate) params.set('startDate', dateRange.startDate);
+      if (dateRange.endDate) params.set('endDate', dateRange.endDate);
       const qs = params.toString();
       return api.get(`/restaurant/orders${qs ? `?${qs}` : ''}`).then((r) => r.data);
     },
     refetchInterval: autoRefresh ? 10000 : false,
   });
+
+  // Play notification sound
+  const playNotificationSound = () => {
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const notes = [
+        { freq: 800, duration: 0.1 },
+        { freq: 1000, duration: 0.1 },
+        { freq: 1200, duration: 0.2 },
+      ];
+
+      let time = audioContext.currentTime;
+      notes.forEach(({ freq, duration }) => {
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.frequency.value = freq;
+        oscillator.type = 'sine';
+
+        gainNode.gain.setValueAtTime(0.3, time);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, time + duration);
+
+        oscillator.start(time);
+        oscillator.stop(time + duration);
+        time += duration;
+      });
+    } catch (e) {
+      // Fallback
+    }
+  };
+
+  // Socket.io listener for new orders
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on('new_order', (order: any) => {
+      playNotificationSound();
+      setNewOrderNotification(order);
+      toast.success(`📦 New order received: Table ${order.table?.name}`, {
+        duration: 5000,
+      });
+      refetch();
+    });
+
+    return () => {
+      socket.off('new_order');
+    };
+  }, [socket, refetch]);
 
   const updateStatus = async (id: number, status: string) => {
     try {
@@ -80,6 +141,26 @@ export default function Orders() {
     return map[status] || 'bg-gray-500';
   };
 
+  const setQuickPreset = (preset: 'today' | 'yesterday' | '7days' | 'month') => {
+    const now = new Date();
+    const today = getTodayStr();
+    if (preset === 'today') {
+      setDateRange({ startDate: today, endDate: today });
+    } else if (preset === 'yesterday') {
+      const y = new Date(now);
+      y.setDate(y.getDate() - 1);
+      const yStr = y.toISOString().split('T')[0];
+      setDateRange({ startDate: yStr, endDate: yStr });
+    } else if (preset === '7days') {
+      const d7 = new Date(now);
+      d7.setDate(d7.getDate() - 6);
+      setDateRange({ startDate: d7.toISOString().split('T')[0], endDate: today });
+    } else if (preset === 'month') {
+      const m1 = new Date(now.getFullYear(), now.getMonth(), 1);
+      setDateRange({ startDate: m1.toISOString().split('T')[0], endDate: today });
+    }
+  };
+
   return (
     <div className="space-y-5 animate-in">
       {/* Header */}
@@ -91,6 +172,30 @@ export default function Orders() {
           <p className="text-xs text-text-muted mt-0.5">Manage and track all restaurant orders</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Quick Date Presets */}
+          <div className="hidden sm:flex items-center gap-1 bg-bg-secondary p-1 rounded-lg border border-border/50">
+            {[
+              { id: 'today', label: 'Today' },
+              { id: 'yesterday', label: 'Yesterday' },
+              { id: '7days', label: 'Last 7 Days' },
+              { id: 'month', label: 'This Month' },
+            ].map(p => (
+              <button
+                key={p.id}
+                onClick={() => setQuickPreset(p.id as any)}
+                className={cn(
+                  "px-2.5 py-1 text-[10px] font-bold uppercase rounded transition-all",
+                  (p.id === 'today' && dateRange.startDate === getTodayStr() && dateRange.endDate === getTodayStr()) ||
+                  (p.id === 'yesterday' && dateRange.startDate !== getTodayStr() && dateRange.startDate === dateRange.endDate)
+                    ? "bg-purple-600 text-white shadow-sm"
+                    : "text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
           <button
             onClick={() => setAutoRefresh(!autoRefresh)}
             className={cn(
@@ -107,54 +212,41 @@ export default function Orders() {
         </div>
       </div>
 
-      {/* Type Filter */}
-      <div className="flex gap-2">
-        {typeFilters.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTypeFilter(t)}
-            className={cn(
-              'px-4 py-1.5 rounded-lg text-xs font-bold transition-all uppercase',
-              typeFilter === t
-                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                : 'text-text-muted hover:bg-bg-hover border border-transparent'
-            )}
-          >
-            {t === 'all' ? 'All' : t.replace('_', ' ')}
-          </button>
-        ))}
-      </div>
-
-      {/* Status Filter Tabs */}
-      <div className="flex gap-1 overflow-x-auto pb-1">
-        {statusFilters.map((s) => (
-          <button
-            key={s}
-            onClick={() => setStatusFilter(s)}
-            className={cn(
-              'px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all',
-              statusFilter === s
-                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                : 'text-text-muted hover:bg-bg-hover border border-transparent'
-            )}
-          >
-            {s.charAt(0).toUpperCase() + s.slice(1)}
-          </button>
-        ))}
-      </div>
-
-      {/* Search */}
-      <div className="flex gap-3">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
-          <input
-            className="glass-input w-full pl-10 text-sm"
-            placeholder="Search by order #, customer, table..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-      </div>
+      {/* Integrated Universal Filter Bar with Date Range, Status & Search */}
+      <FilterBar
+        searchQuery={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search order #, customer name, or table..."
+        startDate={dateRange.startDate}
+        endDate={dateRange.endDate}
+        onDateChange={setDateRange}
+        showDateFilter={true}
+        status={statusFilter === 'all' ? '' : statusFilter}
+        statusOptions={[
+          { label: 'Placed', value: 'placed' },
+          { label: 'Confirmed', value: 'confirmed' },
+          { label: 'Preparing', value: 'preparing' },
+          { label: 'Served', value: 'served' },
+          { label: 'Billed', value: 'billed' },
+          { label: 'Paid', value: 'paid' },
+          { label: 'Cancelled', value: 'cancelled' },
+        ]}
+        onStatusChange={(val) => setStatusFilter(val || 'all')}
+        category={typeFilter === 'all' ? '' : typeFilter}
+        categoryOptions={[
+          { label: 'Dine-In', value: 'dine_in' },
+          { label: 'Delivery', value: 'delivery' },
+          { label: 'Pickup', value: 'pickup' },
+        ]}
+        onCategoryChange={(val) => setTypeFilter(val || 'all')}
+        onReset={() => {
+          const today = getTodayStr();
+          setSearch('');
+          setStatusFilter('all');
+          setTypeFilter('all');
+          setDateRange({ startDate: today, endDate: today });
+        }}
+      />
 
       {/* Order Cards Grid */}
       {isLoading ? (
@@ -293,6 +385,116 @@ export default function Orders() {
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {/* New Order Notification Modal */}
+      {newOrderNotification && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-bg-primary rounded-2xl shadow-2xl border border-border/50 overflow-hidden animate-in slide-in-from-bottom-1/4 duration-300">
+            {/* Header */}
+            <div className="relative px-6 py-4 border-b border-border/30 bg-gradient-to-r from-blue-500/10 to-blue-400/10">
+              <button
+                onClick={() => setNewOrderNotification(null)}
+                className="absolute right-4 top-4 p-1.5 hover:bg-bg-hover rounded-lg transition-all"
+              >
+                <X size={18} className="text-text-muted" />
+              </button>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center animate-bounce">
+                  <Bell size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-text-primary uppercase">New Order Received</h3>
+                  <p className="text-[11px] text-text-muted mt-0.5">Real-time notification</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-5 space-y-4">
+              {/* Order Number & Table */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[10px] font-bold text-text-muted uppercase">Order #</p>
+                  <p className="text-lg font-black text-blue-400 mt-1">
+                    {newOrderNotification.orderNumber?.split('-')[1]}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-text-muted uppercase">Table</p>
+                  <p className="text-lg font-black text-text-primary mt-1">
+                    {newOrderNotification.table?.name || 'N/A'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Order Type & Items */}
+              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border/30">
+                <div>
+                  <p className="text-[10px] font-bold text-text-muted uppercase">Type</p>
+                  <Badge className="mt-1 text-[10px]">
+                    {newOrderNotification.type?.replace('_', ' ')}
+                  </Badge>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-text-muted uppercase">Total Items</p>
+                  <p className="text-sm font-black text-text-primary mt-1">
+                    {newOrderNotification.kots?.reduce(
+                      (sum: number, kot: any) => sum + (kot.items?.length || 0),
+                      0
+                    ) || 0}
+                  </p>
+                </div>
+              </div>
+
+              {/* Amount & Time */}
+              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border/30">
+                <div>
+                  <p className="text-[10px] font-bold text-text-muted uppercase">Amount</p>
+                  <p className="text-lg font-black text-green-400 mt-1">
+                    {formatCurrency(Number(newOrderNotification.total))}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-text-muted uppercase">Time</p>
+                  <p className="text-xs text-text-muted mt-1">
+                    {new Date(newOrderNotification.createdAt).toLocaleTimeString()}
+                  </p>
+                </div>
+              </div>
+
+              {/* Note */}
+              {newOrderNotification.specialNote && (
+                <div className="pt-2 border-t border-border/30">
+                  <p className="text-[10px] font-bold text-text-muted uppercase mb-2">Special Note</p>
+                  <p className="text-xs text-text-secondary bg-bg-tertiary/50 p-2.5 rounded-lg border border-border/20">
+                    {newOrderNotification.specialNote}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="px-6 py-4 border-t border-border/30 bg-bg-tertiary/20 flex gap-3">
+              <button
+                onClick={() => {
+                  setNewOrderNotification(null);
+                  openOrderDetail(newOrderNotification.id);
+                }}
+                className="flex-1 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-black uppercase hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
+              >
+                <Eye size={16} />
+                View Order
+              </button>
+              <button
+                onClick={() => setNewOrderNotification(null)}
+                className="flex-1 py-2.5 rounded-lg bg-bg-hover text-text-secondary text-sm font-black uppercase hover:bg-bg-tertiary transition-all"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

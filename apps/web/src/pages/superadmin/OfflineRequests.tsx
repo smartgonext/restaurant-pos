@@ -11,7 +11,7 @@ import toast from 'react-hot-toast';
 export default function OfflineRequests() {
   const { data: requests, isLoading, refetch } = useQuery({
     queryKey: ['superadmin-offline-requests'],
-    queryFn: () => api.get('/superadmin/offline-requests').then((r) => r.data.data).catch(() => []),
+    queryFn: () => api.get('/superadmin/offline-requests').then((r) => r.data.data ?? []).catch(() => []),
   });
 
   const handleAction = async (id: number, action: 'approve' | 'reject') => {

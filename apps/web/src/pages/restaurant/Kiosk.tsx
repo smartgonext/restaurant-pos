@@ -1,19 +1,22 @@
 import { useState } from 'react';
+import { useSocket } from '@/hooks/useSocket';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { ShoppingCart, ArrowLeft, ArrowRight, Utensils, CheckCircle2, Clock } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, resolveImageUrl } from '@/lib/utils';
 import toast from 'react-hot-toast';
+import { SERVER_BASE_URL } from '@/lib/config';
 
-const SERVER_URL = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3001';
+const SERVER_URL = SERVER_BASE_URL;
 
 export default function Kiosk() {
   const [step, setStep] = useState<'order-type' | 'menu' | 'cart' | 'success'>('order-type');
   const [orderType, setOrderType] = useState<'dine_in' | 'pickup'>('dine_in');
   const [cart, setCart] = useState<any[]>([]);
+  const { socket } = useSocket();
 
   const { data: categories } = useQuery({
     queryKey: ['categories'],
@@ -36,7 +39,33 @@ export default function Kiosk() {
     toast.success(`${item.name} added`);
   };
 
+
   const total = cart.reduce((acc, curr) => acc + (Number(curr.price) * curr.quantity), 0);
+
+  // Simulate order placement and emit to socket
+  const placeOrder = async () => {
+    // Here you would call your backend API to place the order
+    // For demo, we'll just emit a fake order event
+    const fakeOrder = {
+      kots: [
+        {
+          items: cart.map((item: any) => ({
+            menuItem: { name: item.name, category: { name: item.category } },
+            quantity: item.quantity,
+            price: item.price
+          }))
+        }
+      ],
+      total,
+      status: 'preparing',
+      orderNumber: 'ORD-XXXXX',
+    };
+    if (socket) {
+      socket.emit('new_order', fakeOrder);
+    }
+    setStep('success');
+    setCart([]);
+  };
 
   if (step === 'order-type') {
     return (
@@ -120,7 +149,7 @@ export default function Kiosk() {
              <Card key={item.id} className="p-0 overflow-hidden border-2 border-transparent hover:border-blue-500 transition-all rounded-[32px] flex flex-col">
                 <div className="aspect-square bg-bg-tertiary relative">
                    {item.image ? (
-                     <img src={item.image.startsWith('http') ? item.image : `${SERVER_URL}${item.image}`} className="w-full h-full object-cover" />
+                     <img src={resolveImageUrl(item.image)} className="w-full h-full object-cover" />
                    ) : (
                      <div className="w-full h-full flex items-center justify-center text-text-muted">
                         <Utensils size={64} />
@@ -168,14 +197,14 @@ export default function Kiosk() {
                ))}
             </div>
          </div>
-         <Button 
-            size="lg" 
-            className="h-20 px-16 rounded-[40px] text-3xl font-black uppercase italic shadow-2xl shadow-blue-500/30"
-            disabled={cart.length === 0}
-            onClick={() => setStep('success')}
-         >
-            Checkout <ArrowRight className="ml-4 w-10 h-10" />
-         </Button>
+        <Button 
+          size="lg" 
+          className="h-20 px-16 rounded-[40px] text-3xl font-black uppercase italic shadow-2xl shadow-blue-500/30"
+          disabled={cart.length === 0}
+          onClick={placeOrder}
+        >
+          Checkout <ArrowRight className="ml-4 w-10 h-10" />
+        </Button>
       </div>
     </div>
   );

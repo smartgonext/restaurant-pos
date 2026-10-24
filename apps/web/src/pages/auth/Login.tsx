@@ -8,36 +8,41 @@ import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 
+import { useEnterKeyNavigation } from '@/hooks/useEnterKeyNavigation';
+
 function getRedirectByRole(role: string, loginType: string): string {
-  if (loginType === 'superadmin') return '/superadmin';
-  switch (role) {
-    case 'chef': return '/admin/kitchens/all-kot';
-    case 'waiter': return '/admin/orders';
-    case 'branch_head': return '/admin';
-    case 'admin': return '/admin';
-    default: return '/admin';
+  // Management/Admin login
+  if (loginType === 'management') {
+    if (role === 'superadmin' || role === 'support') {
+      return '/superadmin';
+    }
+    return '/admin';
   }
+  
+  // Worker login - all staff (including custom roles) land on terminal selector
+  return '/terminals';
 }
 
 export default function Login() {
+  useEnterKeyNavigation();
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [loginType, setLoginType] = useState<'restaurant' | 'superadmin'>('restaurant');
+  const [loginType, setLoginType] = useState<'worker' | 'management'>('worker');
   const [rememberMe, setRememberMe] = useState(false);
   const [inlineError, setInlineError] = useState('');
   const { login, isAuthenticated, user } = useAuthStore();
   const navigate = useNavigate();
   const { register, handleSubmit, formState: { errors }, setValue } = useForm<{ email: string; password: string }>();
 
-  // Auto-redirect if already logged in
   useEffect(() => {
     if (isAuthenticated && user) {
-      const isSuperAdmin = user.role === 'superadmin' || user.role === 'support';
-      navigate(isSuperAdmin ? '/superadmin' : getRedirectByRole(user.role, isSuperAdmin ? 'superadmin' : 'restaurant'), { replace: true });
+      const isSuper = user.role === 'superadmin' || user.role === 'support';
+      const isAdminRole = isSuper || user.role === 'admin';
+      const type = isAdminRole ? 'management' : 'worker';
+      navigate(getRedirectByRole(user.role, type), { replace: true });
     }
   }, [isAuthenticated, user, navigate]);
 
-  // Load remembered email
   useEffect(() => {
     const remembered = localStorage.getItem('remembered_email');
     if (remembered) {
@@ -50,129 +55,149 @@ export default function Login() {
     setLoading(true);
     setInlineError('');
     try {
-      const endpoint = loginType === 'superadmin' ? '/auth/superadmin/login' : '/auth/login';
-      const res = await api.post(endpoint, data);
-      const responseData = res.data.data;
+      // First, we decide which endpoint to hit. 
+      // If management, we try normal login first, then superadmin login if that fails?
+      // Actually, if it's management, let's check for superadmin email or just use the switch logic
+      const primaryEndpoint = '/auth/login';
+      const fallbackEndpoint = loginType === 'management' ? '/auth/superadmin/login' : null;
 
-      // Remember me
-      if (rememberMe) {
-        localStorage.setItem('remembered_email', data.email);
-      } else {
-        localStorage.removeItem('remembered_email');
+      let res: any;
+      try {
+        res = await api.post(primaryEndpoint, data);
+      } catch (err: any) {
+        if (fallbackEndpoint && err.response?.status === 401) {
+          res = await api.post(fallbackEndpoint, data);
+        } else {
+          throw err;
+        }
       }
 
+      const responseData = res.data?.data ?? res.data;
+      if (!responseData || !responseData.token || !responseData.user) {
+        const backendError = res.data?.error || res.data?.message || 'Invalid credentials. Please try again.';
+        throw new Error(backendError);
+      }
+      if (rememberMe) localStorage.setItem('remembered_email', data.email);
+      else localStorage.removeItem('remembered_email');
+
       login({ token: responseData.token, user: responseData.user });
-      toast.success(`Welcome back, ${responseData.user.name}! 🎉`);
+      toast.success(`Welcome, ${responseData.user.name}! 🚀`);
 
       const redirect = getRedirectByRole(responseData.user.role, loginType);
       navigate(redirect, { replace: true });
     } catch (err: any) {
-      const msg = err.response?.data?.error || 'Login failed. Please try again.';
-      setInlineError(msg);
-      toast.error(msg);
+      const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message || 'Invalid credentials. Please try again.';
+      setInlineError(errorMsg);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bg-base relative overflow-hidden">
-      {/* Background effects */}
-      <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-blue-500/10 rounded-full blur-[100px]" />
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-cyan-500/10 rounded-full blur-[100px]" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-blue-600/5 rounded-full blur-[120px]" />
-      </div>
+    <div className="min-h-screen flex items-center justify-center bg-[#060813] relative overflow-hidden">
+      {/* Dynamic Aura */}
+      <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-blue-600/10 rounded-full blur-[120px] -translate-y-1/3 translate-x-1/3" />
+      <div className="absolute bottom-0 left-0 w-[600px] h-[600px] bg-cyan-600/10 rounded-full blur-[120px] translate-y-1/3 -translate-x-1/3" />
 
-      <div className="relative z-10 w-full max-w-md px-6">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-primary shadow-glow mb-4">
-            <UtensilsCrossed className="w-8 h-8 text-white" />
+      <div className="relative z-10 w-full max-w-lg px-6">
+        <div className="text-center mb-12">
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-blue-600 to-indigo-700 shadow-glow mb-6">
+            <UtensilsCrossed className="w-10 h-10 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-text-primary">Restaurant SaaS</h1>
-          <p className="text-sm text-text-muted mt-1">Sign in to manage your restaurant</p>
+          <h1 className="text-4xl font-black text-white uppercase tracking-tighter italic">SMART<span className="text-blue-500">GONEXT</span></h1>
+          <p className="text-slate-400 font-medium mt-2">Professional SaaS Restaurant Engine</p>
         </div>
 
-        {/* Login Type Toggle */}
-        <div className="flex p-1 bg-bg-secondary rounded-xl mb-6 border border-border">
+        {/* Modular Login Type Selector */}
+        <div className="grid grid-cols-2 p-1.5 bg-[#161929] border border-[#2a2d3e] rounded-2xl mb-8" data-testid="login-role-toggle">
           <button
-            onClick={() => { setLoginType('restaurant'); setInlineError(''); }}
-            className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all ${loginType === 'restaurant' ? 'bg-gradient-primary text-white shadow-glow-sm' : 'text-text-muted hover:text-text-secondary'}`}
+            onClick={() => { setLoginType('worker'); setInlineError(''); }}
+            data-testid="login-worker-tab"
+            aria-label="Switch to worker login"
+            className={`flex items-center justify-center gap-2 py-3.5 text-xs font-black uppercase tracking-widest rounded-xl transition-all duration-300 ${loginType === 'worker' ? 'bg-blue-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-slate-200'}`}
           >
-            Restaurant
+            <Loader2 className={`w-3 h-3 ${loginType === 'worker' ? 'animate-spin' : ''}`} /> Worker Login
           </button>
           <button
-            onClick={() => { setLoginType('superadmin'); setInlineError(''); }}
-            className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all ${loginType === 'superadmin' ? 'bg-gradient-primary text-white shadow-glow-sm' : 'text-text-muted hover:text-text-secondary'}`}
+            onClick={() => { setLoginType('management'); setInlineError(''); }}
+            data-testid="login-admin-tab"
+            aria-label="Switch to admin login"
+            className={`flex items-center justify-center gap-2 py-3.5 text-xs font-black uppercase tracking-widest rounded-xl transition-all duration-300 ${loginType === 'management' ? 'bg-blue-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-slate-200'}`}
           >
-            SuperAdmin
+            <Lock className="w-3 h-3" /> Admin Login
           </button>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit(onSubmit)} className="glass-card p-6 space-y-5">
-          {/* Inline Error */}
-          {inlineError && (
-            <div className="bg-danger/10 border border-danger/30 text-danger text-sm px-4 py-2.5 rounded-xl font-medium text-center">
-              {inlineError}
-            </div>
-          )}
+        <form onSubmit={handleSubmit(onSubmit)} className="bg-[#161929]/50 backdrop-blur-3xl border border-[#2a2d3e] p-10 rounded-[32px] space-y-6 shadow-2xl" data-testid="login-form" aria-label="Login form">
+          <div className="min-h-[46px] flex items-center justify-center transition-all duration-300">
+            {inlineError ? (
+              <div className="w-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs px-4 py-3 rounded-xl font-bold uppercase tracking-wide text-center" data-testid="login-inline-error" role="alert" aria-live="assertive">
+                {inlineError}
+              </div>
+            ) : (
+              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest opacity-40">Secured Node Portal</span>
+            )}
+          </div>
 
-          <Input
-            label="Email"
-            type="email"
-            placeholder="you@restaurant.com"
-            icon={<Mail className="w-4 h-4" />}
-            error={errors.email?.message}
-            {...register('email', {
-              required: 'Email is required',
-              pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: 'Enter a valid email' },
-            })}
-          />
-          <div className="relative">
+          <div className="space-y-4">
             <Input
-              label="Password"
-              type={showPassword ? 'text' : 'password'}
-              placeholder="••••••••"
-              icon={<Lock className="w-4 h-4" />}
-              error={errors.password?.message}
-              {...register('password', {
-                required: 'Password is required',
-                minLength: { value: 6, message: 'Min 6 characters' },
-              })}
+              label={loginType === 'worker' ? 'Worker Email' : 'Admin Email'}
+              type="text"
+              placeholder={loginType === 'worker' ? "worker@SMARTGONEXT.com" : "admin@SMARTGONEXT.com"}
+              icon={<Mail className="w-4 h-4 text-blue-400" />}
+              className="bg-[#0d0f1c] border-[#2a2d3e] text-white"
+              error={errors.email?.message}
+              {...register('email', { required: 'Email required' })}
             />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-9 text-text-muted hover:text-text-secondary transition-colors"
-            >
-              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between text-sm">
-            <label className="flex items-center gap-2 text-text-muted cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-                className="rounded border-border bg-bg-tertiary accent-blue-500"
+            
+            <div className="relative">
+              <Input
+                label="Secured Password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="••••••••"
+                icon={<Lock className="w-4 h-4 text-blue-400" />}
+                className="bg-[#0d0f1c] border-[#2a2d3e] text-white"
+                error={errors.password?.message}
+                {...register('password', { required: 'Password required' })}
               />
-              Remember me
-            </label>
-            <a href="/forgot-password" className="text-blue-400 hover:text-blue-300 transition-colors">Forgot password?</a>
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                data-testid="toggle-password-visibility"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-4 top-[40px] text-slate-500 hover:text-blue-400 transition-colors"
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </div>
 
-          <Button type="submit" loading={loading} className="w-full" disabled={loading}>
-            {loading ? (
-              <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Signing in...</span>
-            ) : 'Sign In'}
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <div className={`w-5 h-5 rounded-md border border-[#2a2d3e] flex items-center justify-center transition-all ${rememberMe ? 'bg-blue-600 border-blue-500' : 'bg-[#0d0f1c]'}`}>
+                {rememberMe && <div className="w-2 h-2 bg-white rounded-full" />}
+              </div>
+              <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="hidden" data-testid="login-remember-me" aria-label="Remember me" />
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-widest group-hover:text-slate-300">Save Session</span>
+            </label>
+            <a href="#" className="text-xs font-bold text-blue-400 uppercase tracking-widest hover:text-blue-300">Identity Recovery?</a>
+          </div>
+
+          <Button 
+            type="submit" 
+            loading={loading} 
+            data-testid="login-submit-btn"
+            aria-label="Submit login form"
+            className="w-full py-7 bg-blue-600 hover:bg-blue-500 rounded-2xl text-sm font-black uppercase tracking-[0.2em] shadow-glow"
+          >
+            {loading ? 'Authenticating...' : 'Enter Platform'}
           </Button>
 
-          <p className="text-center text-xs text-text-muted">
-            {loginType === 'restaurant' ? 'Demo: demo@spicekitchen.com / admin123' : 'Demo: admin@restaurant-saas.com / admin123'}
-          </p>
+          <div className="pt-4 text-center">
+            <p className="text-[10px] text-slate-600 font-bold uppercase tracking-[0.1em]">
+              Authorized workers only. All access logs are monitored.
+            </p>
+          </div>
         </form>
       </div>
     </div>

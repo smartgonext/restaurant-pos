@@ -7,13 +7,15 @@ const config: Config = {
     extend: {
       colors: {
         bg: {
-          base: '#020617',
-          primary: '#0a0f1e',
-          secondary: '#0d1526',
-          tertiary: '#111827',
-          elevated: '#1a2744',
-          hover: '#1e2f52',
-          overlay: '#0a0f1e99',
+          base: 'var(--bg-base)',
+          primary: 'var(--bg-primary)',
+          secondary: 'var(--bg-secondary)',
+          tertiary: 'var(--bg-tertiary)',
+          elevated: 'var(--bg-elevated)',
+          hover: 'var(--bg-hover)',
+          dark: 'var(--bg-dark)',
+          card: 'var(--bg-card)',
+          overlay: 'rgba(10, 15, 30, 0.6)',
         },
         blue: {
           50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd',
@@ -28,8 +30,17 @@ const config: Config = {
         billed: '#14b8a6',
         paid: '#10b981',
         pending: '#f59e0b',
-        text: { primary: '#f1f5f9', secondary: '#94a3b8', muted: '#64748b', disabled: '#334155' },
-        border: { DEFAULT: '#1e3a5f', light: '#243b5e', focus: '#3b82f6' },
+        text: { 
+          primary: 'var(--text)', 
+          secondary: 'var(--text-secondary)', 
+          muted: 'var(--text-muted)', 
+          disabled: 'var(--text-disabled)' 
+        },
+        border: { 
+          DEFAULT: 'var(--border)', 
+          light: 'var(--border-light)', 
+          focus: 'var(--border-focus)' 
+        },
       },
       fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
       boxShadow: {
@@ -40,7 +51,7 @@ const config: Config = {
       backgroundImage: {
         'gradient-primary': 'linear-gradient(135deg, #1d4ed8 0%, #0ea5e9 100%)',
         'gradient-card': 'linear-gradient(135deg, #0d1526 0%, #111827 100%)',
-        'gradient-sidebar': 'linear-gradient(180deg, #0a0f1e 0%, #020617 100%)',
+        'gradient-sidebar': 'var(--gradient-sidebar)',
       },
       animation: {
         'slide-in-right': 'slideInRight 0.25s ease-out',

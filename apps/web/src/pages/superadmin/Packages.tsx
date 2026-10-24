@@ -23,7 +23,7 @@ export default function Packages() {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['superadmin-packages'],
-    queryFn: () => api.get('/superadmin/packages').then((r) => r.data.data),
+    queryFn: () => api.get('/superadmin/packages').then((r) => r.data.data ?? []),
   });
 
   const allModules = [

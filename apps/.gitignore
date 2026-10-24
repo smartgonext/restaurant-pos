@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build & Output
+dist/
+**/dist/
+release/
+build/
+.history/
+**/.history/
+
+# Environment & Credentials
+.env
+.env.local
+.env.*.local
+*.log
+logs/
+**/logs/
+
+# SQLite & Data files
+*.db
+*.sqlite
+*.sqlite-journal
+*.sqlite3
+**/prisma/database.sqlite
+**/prisma/*.db
+offline-data.json
+sync-state.json
+uploads/
+**/uploads/
+tmp/
+**/tmp/
+
+# System & OS
+.DS_Store
+Thumbs.db

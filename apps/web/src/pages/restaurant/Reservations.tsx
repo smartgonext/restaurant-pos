@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -6,6 +6,9 @@ import { Search, CalendarDays, Clock, Users, Phone, X, Check } from 'lucide-reac
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
+import { Modal } from '@/components/ui/Modal';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { soundManager } from '@/lib/sounds';
 
 export default function Reservations() {
   const queryClient = useQueryClient();
@@ -24,17 +27,49 @@ export default function Reservations() {
   });
 
   const reservations = reservationsRes || [];
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [showNewBookingModal, setShowNewBookingModal] = useState(false);
+  const [form, setForm] = useState({ customerName: '', customerPhone: '', date: new Date().toISOString().split('T')[0], startTime: '12:00', partySize: 2, tableId: '' });
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('new') === '1') {
+      setShowNewBookingModal(true);
+    }
+  }, [location.search]);
 
   if (isLoading) return <div className="p-8 text-center text-text-muted">Loading reservations...</div>;
 
+  const createReservation = async () => {
+    try {
+      const payload = {
+        customerName: form.customerName,
+        customerPhone: form.customerPhone,
+        date: form.date,
+        startTime: form.startTime,
+        partySize: Number(form.partySize),
+        tableId: form.tableId || undefined,
+      };
+      await api.post('/restaurant/reservations', payload);
+      toast.success('Reservation created');
+      setShowNewBookingModal(false);
+      navigate('/admin/reservations');
+      queryClient.invalidateQueries({ queryKey: ['reservations'] });
+      soundManager.playSuccess();
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Failed to create reservation');
+    }
+  };
+
   return (
     <div className="space-y-4 animate-in">
-      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-text-primary">Reservations</h1>
           <p className="text-xs text-text-muted mt-1">Manage table bookings and guests</p>
         </div>
-        <Button size="sm" icon={<CalendarDays className="w-4 h-4" />}>New Booking</Button>
+        <Button size="sm" icon={<CalendarDays className="w-4 h-4" />} onClick={() => setShowNewBookingModal(true)}>New Booking</Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -123,6 +158,43 @@ export default function Reservations() {
           </table>
         </div>
       </Card>
+
+      <Modal open={showNewBookingModal} onClose={() => { setShowNewBookingModal(false); navigate('/admin/reservations'); }} title="New Booking">
+        <div className="p-4 space-y-3">
+          <div>
+            <label className="text-xs font-bold text-text-muted block mb-1">Customer Name</label>
+            <input value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} className="w-full bg-bg-dark border border-border rounded p-2 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs font-bold text-text-muted block mb-1">Phone</label>
+            <input value={form.customerPhone} onChange={(e) => setForm({ ...form, customerPhone: e.target.value })} className="w-full bg-bg-dark border border-border rounded p-2 text-sm" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-bold text-text-muted block mb-1">Date</label>
+              <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="w-full bg-bg-dark border border-border rounded p-2 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-text-muted block mb-1">Time</label>
+              <input type="time" value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} className="w-full bg-bg-dark border border-border rounded p-2 text-sm" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-bold text-text-muted block mb-1">Party Size</label>
+              <input type="number" value={form.partySize} onChange={(e) => setForm({ ...form, partySize: Number(e.target.value) })} className="w-full bg-bg-dark border border-border rounded p-2 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-text-muted block mb-1">Table ID (optional)</label>
+              <input value={form.tableId} onChange={(e) => setForm({ ...form, tableId: e.target.value })} className="w-full bg-bg-dark border border-border rounded p-2 text-sm" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => { setShowNewBookingModal(false); navigate('/admin/reservations'); }}>Cancel</Button>
+            <Button onClick={createReservation} variant="primary">Save Booking</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -9,7 +9,7 @@ import api from '@/lib/api';
 export default function Members() {
   const { data: members, isLoading } = useQuery({
     queryKey: ['superadmin-members'],
-    queryFn: () => api.get('/superadmin/members').then((r) => r.data.data).catch(() => []),
+    queryFn: () => api.get('/superadmin/members').then((r) => r.data.data ?? []).catch(() => []),
   });
 
   return (

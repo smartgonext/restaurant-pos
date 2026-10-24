@@ -107,7 +107,7 @@ export const createStaffSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(6),
-  role: z.enum(['admin', 'branch_head', 'waiter', 'chef']).default('waiter'),
+  role: z.enum(['admin', 'branch_admin', 'billing_staff', 'branch_head', 'waiter', 'chef']).default('waiter'),
   phone: z.string().optional(),
   branchId: z.number().int().positive().optional(),
 });

@@ -1,20 +1,18 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
-import { ArrowLeft, CheckCircle, Clock, ChefHat, Bike, UtensilsCrossed } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Clock, ChefHat, UtensilsCrossed } from 'lucide-react';
 import { io } from 'socket.io-client';
+import { SOCKET_BASE_URL } from '@/lib/config';
 
 const STATUS_STEPS = [
-  { key: 'placed', label: 'Order Placed', icon: CheckCircle, color: 'text-blue-500' },
-  { key: 'confirmed', label: 'Order Confirmed', icon: CheckCircle, color: 'text-indigo-500' },
-  { key: 'preparing', label: 'Being Prepared', icon: ChefHat, color: 'text-amber-500' },
-  { key: 'served', label: 'Served', icon: UtensilsCrossed, color: 'text-purple-500' },
-  { key: 'paid', label: 'Completed', icon: CheckCircle, color: 'text-green-500' },
+  { key: 'placed', label: 'Order Placed', desc: 'We received your order', icon: CheckCircle2, color: 'text-blue-500', bg: 'bg-blue-100' },
+  { key: 'confirmed', label: 'Confirmed', desc: 'Kitchen has accepted', icon: CheckCircle2, color: 'text-indigo-500', bg: 'bg-indigo-100' },
+  { key: 'preparing', label: 'Preparing', desc: 'Cooking in progress', icon: ChefHat, color: 'text-amber-500', bg: 'bg-amber-100' },
+  { key: 'served', label: 'Ready / Served', desc: 'Enjoy your meal', icon: UtensilsCrossed, color: 'text-emerald-500', bg: 'bg-emerald-100' },
 ];
 
-const STATUS_INDEX: Record<string, number> = {
-  placed: 0, confirmed: 1, preparing: 2, served: 3, paid: 4,
-};
+const STATUS_INDEX: Record<string, number> = { placed: 0, confirmed: 1, preparing: 2, served: 3, paid: 3 };
 
 export default function OrderStatus() {
   const { restaurantSlug, tableToken } = useParams<{ restaurantSlug: string; tableToken: string }>();
@@ -25,100 +23,108 @@ export default function OrderStatus() {
   const fetchStatus = async () => {
     try {
       const res = await api.get(`/customer/${restaurantSlug}/${tableToken}/status`);
-      if (res.data.success) setOrders(res.data.data);
-    } catch {/* noop */} finally { setLoading(false); }
+      if (res.data.success) {
+         setOrders(res.data.data);
+      }
+    } catch {
+       // Ignore error for status polling
+    } finally { 
+       setLoading(false); 
+    }
   };
 
   useEffect(() => {
     fetchStatus();
-
-    // Socket for live updates
-    const socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:3001');
+    const socket = io(SOCKET_BASE_URL);
     socket.emit('join_table', tableToken);
     socket.on('order_updated', fetchStatus);
-
     return () => { socket.disconnect(); };
   }, [tableToken]);
 
-  if (loading) return <div className="flex-1 flex items-center justify-center">Loading...</div>;
+  if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500 font-medium">Loading Status...</div>;
 
   return (
-    <div className="flex flex-col flex-1">
-      <header className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 p-4 flex items-center gap-3 z-10">
-        <button onClick={() => navigate(-1)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800">
+    <div className="flex flex-col min-h-screen bg-slate-50">
+      <header className="sticky top-0 bg-white border-b border-slate-200 px-4 py-4 flex items-center gap-4 z-10">
+        <button onClick={() => navigate(-1)} className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-600 active:scale-95">
           <ArrowLeft size={20} />
         </button>
-        <h1 className="text-lg font-bold">Order Status</h1>
+        <h1 className="text-xl font-bold text-slate-900 tracking-tight">Track Order</h1>
       </header>
 
-      <div className="p-4 space-y-4">
+      <div className="p-4 space-y-6 pb-12">
         {orders.length === 0 ? (
-          <div className="text-center text-gray-400 py-16">
-            <Clock size={40} className="mx-auto mb-3 opacity-50" />
-            <p>No active orders for this table</p>
-            <button onClick={() => navigate(-1)} className="mt-4 px-5 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold">Browse Menu</button>
+          <div className="flex flex-col items-center text-center text-slate-400 py-20 px-8">
+            <div className="w-24 h-24 bg-slate-100 rounded-full flex items-center justify-center mb-6">
+               <Clock size={40} className="text-slate-300" />
+            </div>
+            <p className="text-lg font-medium mb-6">No active orders right now.</p>
+            <button onClick={() => navigate(-1)} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-md">Go to Menu</button>
           </div>
         ) : orders.map(order => {
           const currentIdx = STATUS_INDEX[order.status] ?? 0;
           const totalItems = order.kots?.reduce((sum: number, k: any) => sum + k.items?.reduce((s: number, i: any) => s + i.quantity, 0), 0) || 0;
 
           return (
-            <div key={order.id} className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 overflow-hidden">
-              <div className="px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-100 dark:border-gray-700">
-                <div className="flex justify-between items-center">
-                  <h3 className="font-bold text-gray-900 dark:text-white">Order #{order.orderNumber}</h3>
-                  <span className="text-sm text-gray-500">{totalItems} items</span>
-                </div>
+            <div key={order.id} className="bg-white rounded-[2rem] border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.03)] overflow-hidden">
+              <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                 <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Order Number</h3>
+                    <p className="text-2xl font-black text-slate-900">#{order.orderNumber.split('-').pop()}</p>
+                 </div>
+                 <div className="text-right">
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Items</p>
+                    <p className="text-xl font-bold text-slate-900">{totalItems}</p>
+                 </div>
               </div>
               
-              {/* Status Steps */}
-              <div className="p-4">
+              <div className="p-8">
                 {STATUS_STEPS.map((step, idx) => {
-                  const done = idx <= currentIdx;
+                  const done = idx < currentIdx;
                   const active = idx === currentIdx;
                   const Icon = step.icon;
+                  
                   return (
-                    <div key={step.key} className="flex items-start gap-3 mb-4 last:mb-0">
-                      <div className={`flex-none w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all
-                        ${done ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30' : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800'}`}>
-                        {done ? (
-                          <Icon size={16} className={active ? step.color : 'text-blue-500'} />
-                        ) : (
-                          <div className="w-2.5 h-2.5 rounded-full bg-gray-200 dark:bg-gray-600" />
-                        )}
+                    <div key={step.key} className="flex gap-4 relative mb-8 last:mb-0">
+                      {/* Vertical Line */}
+                      {idx !== STATUS_STEPS.length - 1 && (
+                        <div className={`absolute left-6 top-10 w-0.5 h-12 -ml-[1px] ${done ? 'bg-blue-500' : 'bg-slate-100'}`} />
+                      )}
+                      
+                      <div className="relative z-10 flex-shrink-0">
+                         <div className={`w-12 h-12 rounded-full flex items-center justify-center border-4 border-white shadow-sm transition-colors duration-300
+                            ${done || active ? step.bg : 'bg-slate-50 text-slate-300'}`}>
+                            <Icon size={20} className={done || active ? step.color : 'text-slate-300'} />
+                         </div>
                       </div>
-                      <div className="flex-1 pt-1">
-                        <p className={`text-sm font-medium ${done ? 'text-gray-900 dark:text-white' : 'text-gray-400 dark:text-gray-500'}`}>
+
+                      <div className="flex-1 pt-2">
+                        <p className={`font-bold text-lg leading-tight mb-1 ${done || active ? 'text-slate-900' : 'text-slate-400'}`}>
                           {step.label}
                         </p>
-                        {active && (
-                          <div className="flex items-center gap-1 mt-0.5">
-                            <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                            <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                            <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-                          </div>
-                        )}
+                        <p className={`text-sm ${active ? 'text-slate-600' : 'text-slate-400'}`}>
+                          {step.desc}
+                        </p>
                       </div>
-                      {done && idx < currentIdx && <CheckCircle size={16} className="text-green-500 mt-1 flex-none" />}
                     </div>
                   );
                 })}
               </div>
 
-              {/* Items list */}
+              {/* Items List Breakdown */}
               {order.kots && order.kots.length > 0 && (
-                <div className="px-4 pb-4 border-t border-gray-100 dark:border-gray-700 pt-3">
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Items</h4>
-                  <div className="space-y-1.5">
+                <div className="px-6 pb-6 pt-4 bg-slate-50/50 border-t border-slate-100">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Order Details</h4>
+                  <div className="space-y-2">
                     {order.kots.flatMap((k: any) => k.items || []).map((item: any, i: number) => (
-                      <div key={i} className="flex justify-between text-sm">
-                        <span className="text-gray-700 dark:text-gray-300">{item.menuItem?.name || 'Item'}</span>
-                        <span className="text-gray-500">×{item.quantity}</span>
+                      <div key={i} className="flex justify-between text-sm font-medium">
+                        <span className="text-slate-700">{item.menuItem?.name || 'Item'}</span>
+                        <span className="text-slate-400">×{item.quantity}</span>
                       </div>
                     ))}
                   </div>
-                  <div className="flex justify-between font-bold text-sm mt-3 pt-2 border-t border-dashed border-gray-200 dark:border-gray-700">
-                    <span>Total</span>
+                  <div className="flex justify-between font-bold text-base mt-4 pt-3 border-t border-slate-200 text-slate-900">
+                    <span>Total Paid/Payable</span>
                     <span>${Number(order.total).toFixed(2)}</span>
                   </div>
                 </div>

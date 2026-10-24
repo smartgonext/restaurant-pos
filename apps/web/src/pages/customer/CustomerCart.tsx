@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
+import { postCustomerOrder } from '@/lib/offlineQueue';
 import { useCartStore } from '@/stores/cartStore';
-import { ArrowLeft, Trash2, Plus, Minus, CheckCircle } from 'lucide-react';
+import { ArrowLeft, Trash2, Plus, Minus, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function CustomerCart() {
@@ -18,8 +19,11 @@ export default function CustomerCart() {
     return sum + (item.price + modTotal) * item.quantity;
   }, 0);
 
-  const sgst = subtotal * 0.025;
-  const cgst = subtotal * 0.025;
+  const settings = (globalThis as any).__RESTAURANT_SETTINGS__ || {};
+  const sgstRate = Number(settings.sgstRate ?? 2.5);
+  const cgstRate = Number(settings.cgstRate ?? 2.5);
+  const sgst = subtotal * (sgstRate / 100);
+  const cgst = subtotal * (cgstRate / 100);
   const total = subtotal + sgst + cgst;
 
   const handlePlaceOrder = async () => {
@@ -34,11 +38,15 @@ export default function CustomerCart() {
           note: item.note,
         })),
       };
-      const res = await api.post(`/customer/${restaurantSlug}/${tableToken}/order`, payload);
-      if (res.data.success) {
-        setOrderId(res.data.data.id.toString());
+      const res = await postCustomerOrder(restaurantSlug as string, tableToken as string, payload);
+      if (res.data && res.data.data) {
+        const od = res.data.data;
+        setOrderId((od.id || od.tempId || '').toString());
         setConfirmed(true);
         clearCart();
+        if (od.offline) {
+          toast.success('Order queued locally and will sync when online');
+        }
       }
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to place order');
@@ -49,21 +57,21 @@ export default function CustomerCart() {
 
   if (confirmed) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen px-8 text-center">
-        <div className="w-20 h-20 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-6">
-          <CheckCircle className="text-green-600 dark:text-green-400" size={40} />
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 px-8 text-center">
+        <div className="w-24 h-24 rounded-full bg-green-100 flex items-center justify-center mb-6 shadow-xl shadow-green-500/20">
+          <CheckCircle2 className="text-green-600" size={48} />
         </div>
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Order Placed! 🎉</h2>
-        <p className="text-gray-500 dark:text-gray-400 mb-8">Your order is being prepared. Please wait.</p>
+        <h2 className="text-3xl font-bold text-slate-900 mb-3 tracking-tight">Order Placed! 🎉</h2>
+        <p className="text-slate-500 mb-10 text-lg">Your food is being prepared with care.</p>
         <button
           onClick={() => navigate(`/menu/${restaurantSlug}/${tableToken}/status`)}
-          className="w-full py-3 bg-blue-600 text-white rounded-xl font-semibold"
+          className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg shadow-lg shadow-blue-600/20 active:scale-95 transition-transform"
         >
           Track Order Status
         </button>
         <button
           onClick={() => navigate(`/menu/${restaurantSlug}/${tableToken}`)}
-          className="mt-3 w-full py-3 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold"
+          className="mt-4 w-full py-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold text-lg active:scale-95 transition-transform"
         >
           Back to Menu
         </button>
@@ -72,80 +80,83 @@ export default function CustomerCart() {
   }
 
   return (
-    <div className="flex flex-col flex-1 pb-28">
-      {/* Header */}
-      <header className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 p-4 flex items-center gap-3 z-10">
-        <button onClick={() => navigate(-1)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+    <div className="flex flex-col min-h-screen bg-slate-50 pb-48">
+      <header className="sticky top-0 bg-white border-b border-slate-200 px-4 py-4 flex items-center justify-between z-10">
+        <button onClick={() => navigate(-1)} className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-600 active:scale-95">
           <ArrowLeft size={20} />
         </button>
-        <h1 className="text-lg font-bold">My Order</h1>
-        <span className="ml-auto text-sm text-gray-500">{items.length} item(s)</span>
+        <h1 className="text-xl font-bold text-slate-900">Your Cart</h1>
+        <span className="text-sm font-semibold bg-blue-100 text-blue-700 px-3 py-1 rounded-full">{items.length} items</span>
       </header>
 
       {items.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center px-8 text-center text-gray-400">
-          <p className="text-lg font-medium mb-4">Your cart is empty</p>
-          <button onClick={() => navigate(-1)} className="px-6 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold">
+        <div className="flex-1 flex flex-col items-center justify-center px-8 text-center text-slate-400">
+          <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+             <Trash2 size={32} />
+          </div>
+          <p className="text-xl font-medium mb-6">Your cart is empty</p>
+          <button onClick={() => navigate(-1)} className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md shadow-blue-600/20">
             Browse Menu
           </button>
         </div>
       ) : (
-        <>
-          {/* Cart Items */}
-          <div className="flex-1 px-4 py-4 space-y-3 overflow-y-auto">
-            {items.map((item, i) => {
-              const modTotal = item.modifiers?.reduce((ms, m) => ms + (m.price || 0), 0) || 0;
-              const lineTotal = (item.price + modTotal) * item.quantity;
-              return (
-                <div key={i} className="bg-white dark:bg-gray-800 rounded-2xl p-4 border border-gray-100 dark:border-gray-700 flex gap-3">
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-gray-900 dark:text-white truncate">{item.name}</h4>
+        <div className="px-4 py-6 space-y-4">
+          {items.map((item, i) => {
+            const modTotal = item.modifiers?.reduce((ms, m) => ms + (m.price || 0), 0) || 0;
+            const lineTotal = (item.price + modTotal) * item.quantity;
+            return (
+              <div key={i} className="bg-white rounded-3xl p-5 border border-slate-100 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] flex flex-col gap-4">
+                <div className="flex justify-between items-start gap-4">
+                  <div className="flex-1">
+                    <h4 className="font-bold text-slate-900 text-lg leading-tight">{item.name}</h4>
                     {item.modifiers && item.modifiers.length > 0 && (
-                      <p className="text-xs text-gray-400 truncate">+ {item.modifiers.map(m => m.name).join(', ')}</p>
+                      <p className="text-sm text-slate-500 mt-1">+ {item.modifiers.map(m => m.name).join(', ')}</p>
                     )}
-                    <div className="mt-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700 rounded-xl p-1">
-                        <button onClick={() => updateQuantity(item.id, -1)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white dark:hover:bg-gray-600 transition-colors">
-                          <Minus size={14} />
-                        </button>
-                        <span className="text-sm font-semibold w-5 text-center">{item.quantity}</span>
-                        <button onClick={() => updateQuantity(item.id, 1)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white dark:hover:bg-gray-600 transition-colors">
-                          <Plus size={14} />
-                        </button>
-                      </div>
-                      <span className="font-bold">${lineTotal.toFixed(2)}</span>
-                    </div>
+                  </div>
+                  <span className="font-bold text-slate-900 text-lg">${lineTotal.toFixed(2)}</span>
+                </div>
+                
+                <div className="flex items-center justify-between mt-2 pt-4 border-t border-slate-50">
+                  <div className="flex items-center gap-3 bg-slate-50 rounded-xl p-1 border border-slate-100">
+                    <button onClick={() => updateQuantity(item.id, -1)} className="w-9 h-9 bg-white shadow-sm flex items-center justify-center rounded-lg text-slate-600 active:scale-95 transition-transform">
+                      <Minus size={16} />
+                    </button>
+                    <span className="text-base font-bold w-6 text-center text-slate-900">{item.quantity}</span>
+                    <button onClick={() => updateQuantity(item.id, 1)} className="w-9 h-9 bg-white shadow-sm flex items-center justify-center rounded-lg text-slate-600 active:scale-95 transition-transform">
+                      <Plus size={16} />
+                    </button>
                   </div>
                   <button
                     onClick={() => removeItem(item.id)}
-                    className="self-start p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                    className="flex items-center gap-2 text-red-500 bg-red-50 px-3 py-2 rounded-xl text-sm font-semibold active:scale-95 transition-colors"
                   >
-                    <Trash2 size={16} />
+                    <Trash2 size={16} /> Remove
                   </button>
                 </div>
-              );
-            })}
-          </div>
-
-          {/* Summary + Checkout */}
-          <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 px-4 pt-4 pb-8 shadow-2xl">
-            <div className="space-y-2 mb-4 text-sm text-gray-600 dark:text-gray-400">
-              <div className="flex justify-between"><span>Subtotal</span><span>${subtotal.toFixed(2)}</span></div>
-              <div className="flex justify-between"><span>SGST (2.5%)</span><span>${sgst.toFixed(2)}</span></div>
-              <div className="flex justify-between"><span>CGST (2.5%)</span><span>${cgst.toFixed(2)}</span></div>
-              <div className="flex justify-between font-bold text-base text-gray-900 dark:text-white pt-2 border-t border-dashed border-gray-200 dark:border-gray-700">
-                <span>Total</span><span>${total.toFixed(2)}</span>
               </div>
+            );
+          })}
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-5 pt-5 pb-8 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] z-20">
+          <div className="space-y-3 mb-5 text-sm font-medium text-slate-500 px-2">
+            <div className="flex justify-between"><span>Subtotal</span><span className="text-slate-900">${subtotal.toFixed(2)}</span></div>
+            <div className="flex justify-between"><span>SGST (2.5%)</span><span className="text-slate-900">${sgst.toFixed(2)}</span></div>
+            <div className="flex justify-between"><span>CGST (2.5%)</span><span className="text-slate-900">${cgst.toFixed(2)}</span></div>
+            <div className="flex justify-between font-bold text-xl text-slate-900 pt-3 border-t border-slate-100">
+              <span>Total to Pay</span><span>${total.toFixed(2)}</span>
             </div>
-            <button
-              onClick={handlePlaceOrder}
-              disabled={loading}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-70 text-white rounded-2xl font-bold text-base transition-colors"
-            >
-              {loading ? 'Placing Order...' : `Place Order • $${total.toFixed(2)}`}
-            </button>
           </div>
-        </>
+          <button
+            onClick={handlePlaceOrder}
+            disabled={loading}
+            className="w-full py-4 bg-blue-600 disabled:bg-blue-400 text-white rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-600/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+          >
+            {loading ? 'Processing...' : `Place Order • $${total.toFixed(2)}`}
+          </button>
+        </div>
       )}
     </div>
   );

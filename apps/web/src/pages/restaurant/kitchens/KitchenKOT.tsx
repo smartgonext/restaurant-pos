@@ -4,11 +4,10 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ChefHat, Clock, Play, CheckCircle, XCircle, Printer, Utensils } from 'lucide-react';
-import { cn, formatDateTime } from '@/lib/utils';
+import { cn, formatDateTime, resolveImageUrl } from '@/lib/utils';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
-
-const SERVER_URL = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3001';
+import { useAuthStore } from '@/stores/authStore';
 
 const kotStatusColors: Record<string, { bg: string; text: string; label: string }> = {
   pending: { bg: 'bg-danger/10 border-danger/20', text: 'text-danger', label: 'PENDING' },
@@ -17,12 +16,119 @@ const kotStatusColors: Record<string, { bg: string; text: string; label: string 
   cancelled: { bg: 'bg-text-muted/10 border-text-muted/20', text: 'text-text-muted', label: 'CANCELLED' },
 };
 
+// ── KOT printing helpers ──────────────────────────────────────────────
+function escapeHtml(value: any): string {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function kotTicketHtml(kot: any, restaurantName: string): string {
+  const order = kot.order || {};
+  const items = kot.items || [];
+  const tableName = order.table?.name || 'Walk-in';
+  const orderType = String(order.type || 'walk_in').replace(/_/g, ' ');
+  const orderNumber = order.orderNumber || `#${kot.id}`;
+  const time = formatDateTime(kot.createdAt);
+  const totalQty = items.reduce((s: number, it: any) => s + (Number(it.quantity) || 1), 0);
+
+  const itemRows = items.map((item: any) => {
+    const mods = (item.modifiers || []).map((m: any) => `<div class="mod">+ ${escapeHtml(m.name)}</div>`).join('');
+    const note = item.note ? `<div class="note">Note: ${escapeHtml(item.note)}</div>` : '';
+    return (
+      `<div class="item">
+        <div class="item-head">
+          <span class="qty">${Number(item.quantity) || 1}</span>
+          <span class="name">${escapeHtml(item.menuItem?.name || 'Item')}</span>
+        </div>
+        ${note}${mods}
+      </div>`
+    );
+  }).join('');
+
+  return `
+    <div class="ticket">
+      <div class="h">
+        <div class="rname">${escapeHtml(restaurantName)}</div>
+        <div class="kottitle">KITCHEN ORDER TICKET</div>
+        <div class="ordno">Order ${escapeHtml(orderNumber)}</div>
+      </div>
+      <div class="d"></div>
+      <div class="row"><span>Table</span><span class="b">${escapeHtml(tableName)}</span></div>
+      <div class="row"><span>Type</span><span class="b">${escapeHtml(orderType)}</span></div>
+      <div class="row"><span>Time</span><span>${escapeHtml(time)}</span></div>
+      <div class="row"><span>KOT #</span><span>${escapeHtml(kot.id)}</span></div>
+      <div class="d"></div>
+      ${itemRows}
+      <div class="d"></div>
+      <div class="foot">${totalQty} item${totalQty === 1 ? '' : 's'}</div>
+    </div>`;
+}
+
+function buildKotkotsHtml(kots: any[], restaurantName: string): string {
+  const tickets = kots.map((kot) => kotTicketHtml(kot, restaurantName)).join('<div class="pb"></div>');
+  return `<!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>KOT</title>
+        <style>
+          *{margin:0;padding:0;box-sizing:border-box}
+          body{font-family:'Courier New',monospace;color:#000;font-size:13px}
+          .ticket{width:302px;margin:0 auto;padding:12px}
+          .h{text-align:center;margin-bottom:8px}
+          .rname{font-size:16px;font-weight:bold;text-transform:uppercase}
+          .kottitle{font-size:13px;font-weight:bold;letter-spacing:1px;margin-top:2px}
+          .ordno{font-size:11px;margin-top:2px}
+          .d{border-top:1px dashed #000;margin:8px 0}
+          .row{display:flex;justify-content:space-between;margin:2px 0;font-size:12px}
+          .b{font-weight:bold}
+          .item{margin:6px 0}
+          .item-head{display:flex;gap:6px;font-weight:bold}
+          .qty{color:#1a7fc4;width:22px;text-align:right;flex-shrink:0}
+          .name{flex:1}
+          .mod{padding-left:28px;font-size:11px;font-style:italic}
+          .note{padding-left:28px;font-size:11px;font-weight:bold}
+          .foot{text-align:center;font-size:11px;margin-top:4px}
+          .pb{page-break-after:always}
+          @media print{.ticket{margin:0}}
+        </style>
+      </head>
+      <body>
+        ${tickets}
+      </body>
+    </html>`;
+}
+
+function openPrintWindow(title: string, html: string): boolean {
+  const w = window.open('', '_blank', 'width=420,height=760');
+  if (!w) return false;
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => { try { w.print(); } catch { /* ignore */ } }, 350);
+  return true;
+}
+
 export default function KitchenKOT() {
   const { data: kots, isLoading, refetch } = useQuery({
     queryKey: ['kitchen-kots'],
     queryFn: () => api.get('/restaurant/kots').then((r) => r.data.data),
     refetchInterval: 5000,
   });
+
+  const { user } = useAuthStore();
+  const restaurantName = user?.restaurant?.name || 'Restaurant';
+
+  const printKot = (kot: any) => {
+    const ok = openPrintWindow('KOT', buildKotkotsHtml([kot], restaurantName));
+    if (!ok) toast.error('Popup blocked — allow popups to print');
+  };
+
+  const printAll = () => {
+    if (!kots?.length) { toast.error('No orders to print'); return; }
+    const ok = openPrintWindow('KOTs', buildKotkotsHtml(kots, restaurantName));
+    if (!ok) toast.error('Popup blocked — allow popups to print');
+  };
 
   const updateKotStatus = async (id: number, status: string) => {
     try {
@@ -43,7 +149,7 @@ export default function KitchenKOT() {
         </div>
         <div className="flex gap-2">
            <Badge variant="info" dot className="animate-pulse">Live Updates</Badge>
-           <Button variant="secondary" size="sm" icon={<Printer size={14} />}>Print All</Button>
+           <Button variant="secondary" size="sm" icon={<Printer size={14} />} onClick={printAll}>Print All</Button>
         </div>
       </div>
 
@@ -91,7 +197,7 @@ export default function KitchenKOT() {
                                <span className="text-sm font-black text-blue-400 mt-0.5">{item.quantity}</span>
                                <div className="w-8 h-8 rounded bg-bg-tertiary overflow-hidden shrink-0 border border-border/50">
                                   {item.menuItem?.image ? (
-                                    <img src={item.menuItem.image.startsWith('http') ? item.menuItem.image : `${SERVER_URL}${item.menuItem.image}`} className="w-full h-full object-cover" />
+                                    <img src={resolveImageUrl(item.menuItem.image)} className="w-full h-full object-cover" />
                                   ) : (
                                     <div className="w-full h-full flex items-center justify-center text-[10px]">🍽️</div>
                                   )}
@@ -123,7 +229,7 @@ export default function KitchenKOT() {
                            Mark as Ready
                         </Button>
                       )}
-                      <Button variant="secondary" size="sm" className="h-8 w-8 p-0 shrink-0">
+                      <Button variant="secondary" size="sm" className="h-8 w-8 p-0 shrink-0" onClick={() => printKot(kot)}>
                          <Printer size={14} />
                       </Button>
                    </div>

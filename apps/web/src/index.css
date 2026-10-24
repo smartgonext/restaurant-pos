@@ -3,32 +3,260 @@
 @tailwind utilities;
 
 :root {
-  --bg-base: #020617;
-  --bg-primary: #0a0f1e;
-  --bg-secondary: #0d1526;
+  --bg-base: #0f1117;
+  --bg-primary: #1a1d27;
+  --bg-secondary: #1e2235;
+  --bg-tertiary: #111827;
+  --bg-elevated: #0b0f17;
+  --bg-card: #0f1724;
+  --bg-secondary-rgb: 30 34 53;
+  --border: #2a2d3e;
+  --border-rgb: 42 45 62;
+  --bg-hover: #12131a;
+  --bg-hover-rgb: 18 19 26;
   --accent-blue: #3b82f6;
   --accent-light: #0ea5e9;
-  --border: #1e3a5f;
-  --text: #f1f5f9;
-  --text-muted: #94a3b8;
+  --border: #2a2d3e;
+  --text: #ffffff;
+  --text-secondary: #e5e7eb;
+  --text-muted: #9ca3af;
+  --text-disabled: #6b7280;
   --radius: 8px;
   --radius-lg: 12px;
   --sidebar-width: 256px;
   --sidebar-collapsed: 72px;
   --topbar-height: 56px;
+  --gradient-sidebar: linear-gradient(180deg, #0a0f1e 0%, #020617 100%);
 }
 
 .light {
   --bg-base: #f8fafc;
   --bg-primary: #ffffff;
-  --bg-secondary: #f1f5f9;
-  --bg-tertiary: #e2e8f0;
+  --bg-secondary: #ffffff;
+  --bg-secondary-rgb: 255 255 255;
+  --bg-tertiary: #f1f5f9;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --border: #e2e8f0;
+  --border-rgb: 226 232 240;
+  --bg-hover: #f1f5f9;
+  --bg-hover-rgb: 241 245 249;
   --accent-blue: #2563eb;
   --accent-light: #0284c7;
-  --border: #cbd5e1;
   --text: #0f172a;
-  --text-muted: #475569;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-disabled: #94a3b8;
+  --gradient-sidebar: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  color-scheme: light;
 }
+
+/* Crisp Google-like Light Mode High Contrast & Professional Overrides */
+.light body {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+/* Light mode overrides for hardcoded dark background utilities */
+.light :is(.bg-\[\#0f1117\], .bg-\[\#1a1d27\], .bg-\[\#1e2235\], .bg-\[\#0b0f17\], .bg-\[\#0f1724\], .bg-gray-900, .bg-slate-900, .bg-slate-950, .bg-slate-800, .bg-gray-800, .bg-zinc-900, .bg-zinc-950, .bg-neutral-900, .bg-neutral-950) {
+  background-color: #ffffff !important;
+  color: #0f172a;
+}
+
+.light :is(.bg-gray-800\/50, .bg-slate-800\/50, .bg-slate-900\/50, .bg-\[\#111827\], .bg-gray-900\/50) {
+  background-color: #f8fafc !important;
+  color: #0f172a;
+}
+
+/* Light mode high-contrast text rules */
+.light :is(h1, h2, h3, h4, h5, h6, th, label, strong):not(.bg-\[\#1a1c23\] *):not(.bg-\[\#0f1014\] *):not(.bg-gray-900 *):not(.bg-slate-900 *):not(.bg-slate-950 *):not(.bg-gray-800 *):not(.bg-black *) {
+  color: #0f172a !important;
+}
+
+.light :is(.text-white, .text-gray-50, .text-slate-50, .text-zinc-50, .text-neutral-50, .text-gray-100, .text-slate-100, .text-gray-200, .text-slate-200):not(.btn-primary):not(.btn-primary *):not(button *):not(.bg-blue-600 *):not(.bg-emerald-600 *):not(.bg-red-600 *):not(.bg-indigo-600 *):not(.bg-purple-600 *):not(.bg-green-600 *):not(.bg-\[\#1a1c23\] *):not(.bg-\[\#0f1014\] *):not(.bg-gray-900 *):not(.bg-slate-900 *):not(.bg-slate-950 *):not(.bg-gray-800 *):not(.bg-black *) {
+  color: #0f172a !important;
+}
+
+/* Explicit rule: Any text inside dark containers or cards in light mode MUST STAY BRIGHT WHITE */
+.light :is(.bg-\[\#1a1c23\], .bg-\[\#0f1014\], .bg-gray-900, .bg-slate-900, .bg-slate-950, .bg-gray-800, .bg-black) :is(.text-white, .text-gray-50, .text-slate-50, .text-gray-100, .text-slate-100, .text-gray-200, .text-slate-200, h1, h2, h3, h4, h5, h6, p, div, span) {
+  color: #ffffff !important;
+}
+
+.light :is(.text-gray-400, .text-slate-400, .text-gray-300, .text-slate-300) {
+  color: #475569 !important;
+}
+
+.light :is(.text-gray-500, .text-slate-500) {
+  color: #64748b !important;
+}
+
+.light :is(.shadow-card, [class*="shadow-card"]) {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05), 0 0 0 1px #e2e8f0 !important;
+}
+
+/* Input controls, search bars & textareas */
+.light input,
+.light select,
+.light textarea,
+.light .glass-input {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+.light input::placeholder,
+.light textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* Borders */
+.light :is(.border-\[\#2a2d3e\], .border-gray-800, .border-slate-800, .border-gray-700, .border-slate-700, .border-gray-800\/50) {
+  border-color: #e2e8f0 !important;
+}
+
+/* Cards, Glass Containers & Panels */
+.light .glass-card {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05) !important;
+  color: #0f172a !important;
+}
+
+.light .stat-card {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Tables */
+.light table th {
+  background-color: #f8fafc !important;
+  color: #475569 !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+  font-weight: 600;
+}
+
+.light table td {
+  border-bottom: 1px solid #f1f5f9 !important;
+  color: #1e293b !important;
+}
+
+.light .table-row:hover {
+  background-color: #f8fafc !important;
+}
+
+/* Sidebar & Navigation - Keep Sidebar Dark and Premium in both themes */
+.light aside,
+.light .sidebar,
+aside,
+.sidebar {
+  background: linear-gradient(180deg, #0b1329 0%, #070c18 100%) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.light aside .sidebar-link,
+.light .sidebar .sidebar-link,
+aside .sidebar-link,
+.sidebar .sidebar-link {
+  color: #94a3b8 !important;
+}
+
+.light aside .sidebar-link:hover,
+.light .sidebar .sidebar-link:hover,
+aside .sidebar-link:hover,
+.sidebar .sidebar-link:hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  color: #ffffff !important;
+}
+
+.light aside .sidebar-link.active,
+.light .sidebar .sidebar-link.active,
+aside .sidebar-link.active,
+.sidebar .sidebar-link.active {
+  background: #2563eb !important;
+  color: #ffffff !important;
+  border-left-color: transparent !important;
+  font-weight: 600 !important;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3) !important;
+}
+
+/* Ensure text inside sidebar logo/header/footer stays bright and crisp in both modes */
+.light aside :is(h1, h2, h3, h4, h5, h6, span, p, a, button, div, svg):not(.btn-primary):not(.btn-primary *):not(.bg-blue-600 *):not(.bg-blue-600),
+aside :is(h1, h2, h3, h4, h5, h6, span, p, a, button, div, svg):not(.btn-primary):not(.btn-primary *):not(.bg-blue-600 *):not(.bg-blue-600) {
+  color: #ffffff !important;
+}
+
+.light aside :is(.text-text-primary, .text-text, .text-text-secondary),
+aside :is(.text-text-primary, .text-text, .text-text-secondary) {
+  color: #ffffff !important;
+}
+
+.light aside :is(.text-text-muted, .text-muted, .text-text-disabled),
+aside :is(.text-text-muted, .text-muted, .text-text-disabled) {
+  color: #94a3b8 !important;
+}
+
+.light aside :is(.border-border, .border-border\/50),
+aside :is(.border-border, .border-border\/50) {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Sub-navigation links inside aside */
+.light aside nav .border-l,
+aside nav .border-l {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.light aside nav a.text-text-muted,
+aside nav a.text-text-muted {
+  color: #94a3b8 !important;
+}
+
+.light aside nav a.text-text-muted:hover,
+aside nav a.text-text-muted:hover {
+  color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+.light aside nav a.text-blue-400.bg-blue-500\/10,
+aside nav a.text-blue-400.bg-blue-500\/10 {
+  color: #3b82f6 !important;
+  background-color: rgba(59, 130, 246, 0.12) !important;
+}
+
+/* Flyout Submenu (Collapsed Mode) - Keep Dark */
+.light .sidebar-flyout,
+.sidebar-flyout {
+  background-color: #0b1329 !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+}
+
+.light .sidebar-flyout :is(span, p, a, button, div, svg),
+.sidebar-flyout :is(span, p, a, button, div, svg) {
+  color: #ffffff !important;
+}
+
+.light .sidebar-flyout .text-text-muted,
+.light .sidebar-flyout .text-blue-400,
+.sidebar-flyout .text-text-muted,
+.sidebar-flyout .text-blue-400 {
+  color: #94a3b8 !important;
+}
+
+.light .sidebar-flyout a:hover,
+.sidebar-flyout a:hover {
+  color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+.light .sidebar-flyout a.text-blue-400.bg-blue-500\/10,
+.sidebar-flyout a.text-blue-400.bg-blue-500\/10 {
+  color: #3b82f6 !important;
+  background-color: rgba(59, 130, 246, 0.12) !important;
+  border-left-color: transparent !important;
+}
+
 
 @layer base {
   * {
@@ -37,6 +265,25 @@
 
   body {
     @apply bg-bg-base text-text-primary font-sans;
+    font-size: 12px;
+    /* Aggressive zoom-out to look like 75% */
+    line-height: 1.5;
+  }
+
+  h1 {
+    @apply text-xl font-black uppercase tracking-tight;
+  }
+
+  h2 {
+    @apply text-lg font-extrabold tracking-tight;
+  }
+
+  h3 {
+    @apply text-base font-bold;
+  }
+
+  h4 {
+    @apply text-sm font-bold;
   }
 
   /* Custom scrollbar */
@@ -60,29 +307,24 @@
 
 @layer components {
   .glass-card {
-    @apply bg-bg-secondary/80 backdrop-blur-xl border border-border rounded-xl shadow-card;
+    background-color: rgb(var(--bg-secondary-rgb) / 0.8);
+    @apply backdrop-blur-xl border border-border rounded-xl shadow-card;
   }
 
   .glass-input {
-    @apply bg-bg-tertiary border border-border rounded-lg px-3 py-2 text-text-primary
-           placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-blue-500/50
-           focus:border-blue-500 transition-all duration-200;
+    @apply bg-bg-tertiary border border-border rounded-lg px-3 py-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all duration-200;
   }
 
   .btn-primary {
-    @apply bg-gradient-primary text-white font-medium px-4 py-2 rounded-lg
-           hover:opacity-90 active:scale-[0.98] transition-all duration-200
-           shadow-glow-sm hover:shadow-glow;
+    @apply bg-gradient-primary text-white font-medium px-4 py-2 rounded-lg hover:opacity-90 active:scale-[0.98] transition-all duration-200 shadow-glow-sm hover:shadow-glow;
   }
 
   .btn-secondary {
-    @apply bg-bg-tertiary text-text-primary border border-border px-4 py-2 rounded-lg
-           hover:bg-bg-hover transition-all duration-200;
+    @apply bg-bg-tertiary text-text-primary border border-border px-4 py-2 rounded-lg hover:bg-bg-hover transition-all duration-200;
   }
 
   .btn-danger {
-    @apply bg-danger/10 text-danger border border-danger/20 px-4 py-2 rounded-lg
-           hover:bg-danger/20 transition-all duration-200;
+    @apply bg-danger/10 text-danger border border-danger/20 px-4 py-2 rounded-lg hover:bg-danger/20 transition-all duration-200;
   }
 
   .status-badge {
@@ -90,9 +332,7 @@
   }
 
   .sidebar-link {
-    @apply flex items-center gap-3 px-3 py-2 rounded-lg text-text-secondary
-           hover:bg-bg-hover hover:text-text-primary transition-all duration-200
-           text-sm font-medium;
+    @apply flex items-center gap-2 px-3 py-1.5 rounded-lg text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-all duration-200 text-sm font-medium;
   }
 
   .sidebar-link.active {
@@ -104,8 +344,16 @@
   }
 
   .table-row {
-    @apply border-b border-border/50 hover:bg-bg-hover/50 transition-colors duration-150;
+    border-bottom-width: 1px;
+    border-bottom-style: solid;
+    border-bottom-color: rgb(var(--border-rgb) / 0.5);
+    transition: background-color 150ms;
   }
+
+  .table-row:hover {
+    background-color: rgb(var(--bg-hover-rgb) / 0.5);
+  }
+
 }
 
 @layer utilities {

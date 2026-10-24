@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { Plus, Search, Shield, Edit, Trash2, Mail, Download } from 'lucide-react';
+import { Plus, Search, Shield, Edit, Trash2, Mail, Download, Eye, EyeOff } from 'lucide-react';
 import { formatDate, getStatusColor, getInitials } from '@/lib/utils';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
@@ -16,6 +16,8 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 const roleColors: Record<string, string> = {
   admin: 'bg-purple-500/10 text-purple-400',
   branch_head: 'bg-blue-500/10 text-blue-400',
+  branch_admin: 'bg-blue-500/10 text-blue-400',
+  billing_staff: 'bg-orange-500/10 text-orange-400',
   waiter: 'bg-success/10 text-success',
   chef: 'bg-kot/10 text-kot',
 };
@@ -24,6 +26,8 @@ export default function Staff() {
   const [showAdd, setShowAdd] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [search, setSearch] = useState('');
+  const [showAddPassword, setShowAddPassword] = useState(false);
+  const [showEditPassword, setShowEditPassword] = useState(false);
   const [formData, setFormData] = useState({ name: '', email: '', password: 'staff123', role: 'waiter', phone: '', isActive: true });
   const [editData, setEditData] = useState<any>(null);
   const [deleteData, setDeleteData] = useState<{ id: number; name: string } | null>(null);
@@ -34,6 +38,11 @@ export default function Staff() {
   const { data: staff, isLoading, refetch } = useQuery({
     queryKey: ['staff'],
     queryFn: () => api.get('/restaurant/staff').then((r) => r.data.data),
+  });
+
+  const { data: roles = [] } = useQuery({
+    queryKey: ['roles'],
+    queryFn: () => api.get('/restaurant/roles').then((r) => r.data.data),
   });
 
   const handleCreate = async () => {
@@ -183,14 +192,19 @@ export default function Staff() {
                         </div>
                       ) : (
                         <select 
-                          className="glass-input py-1 px-2 text-xs" 
+                          className="glass-input py-1 px-2 text-xs capitalize" 
                           value={s.role} 
                           onChange={(e) => handleUpdateRole(s.id, e.target.value)}
                         >
                           <option value="admin">Admin</option>
+                          <option value="branch_admin">Branch Admin</option>
+                          <option value="billing_staff">Billing Staff</option>
                           <option value="branch_head">Branch Head</option>
                           <option value="waiter">Waiter</option>
                           <option value="chef">Chef</option>
+                          {roles.map((r: any) => (
+                            <option key={r.id} value={r.name}>{r.name}</option>
+                          ))}
                         </select>
                       )}
                     </td>
@@ -236,16 +250,31 @@ export default function Staff() {
             <Input label="Full Name *" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="John Doe" />
             <Input label="Email *" type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="john@restaurant.com" />
             <Input label="Phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="+1 555-0123" />
-            <Input label="Password *" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} placeholder="Initial password" type="password" />
+            <div className="relative">
+              <Input label="Password *" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} placeholder="Initial password" type={showAddPassword ? 'text' : 'password'} />
+              <button
+                type="button"
+                onClick={() => setShowAddPassword(v => !v)}
+                className="absolute right-3 top-[38px] text-text-muted hover:text-text-primary transition-colors"
+                tabIndex={-1}
+              >
+                {showAddPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-text-secondary">Role *</label>
-              <select className="glass-input" value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value })}>
+              <select className="glass-input capitalize" value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value })}>
                 <option value="admin">Admin</option>
+                <option value="branch_admin">Branch Admin</option>
+                <option value="billing_staff">Billing Staff</option>
                 <option value="branch_head">Branch Head</option>
                 <option value="waiter">Waiter</option>
                 <option value="chef">Chef</option>
+                {roles.map((r: any) => (
+                  <option key={r.id} value={r.name}>{r.name}</option>
+                ))}
               </select>
             </div>
             <div className="flex items-center gap-2 mt-7">
@@ -276,21 +305,36 @@ export default function Staff() {
               <Input label="Full Name *" value={editData.name} onChange={(e) => setEditData({ ...editData, name: e.target.value })} placeholder="John Doe" />
               <Input label="Email (Read-only)" value={editData.email} disabled className="opacity-50" />
               <Input label="Phone" value={editData.phone || ''} onChange={(e) => setEditData({ ...editData, phone: e.target.value })} placeholder="+1 555-0123" />
-              <Input label="Reset Password" value={editData.password || ''} onChange={(e) => setEditData({ ...editData, password: e.target.value })} placeholder="Leave blank to keep current" type="password" />
+              <div className="relative">
+                <Input label="Reset Password" value={editData.password || ''} onChange={(e) => setEditData({ ...editData, password: e.target.value })} placeholder="Leave blank to keep current" type={showEditPassword ? 'text' : 'password'} />
+                <button
+                  type="button"
+                  onClick={() => setShowEditPassword(v => !v)}
+                  className="absolute right-3 top-[38px] text-text-muted hover:text-text-primary transition-colors"
+                  tabIndex={-1}
+                >
+                  {showEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-text-secondary">Role *</label>
                 <select 
-                  className="glass-input" 
+                  className="glass-input capitalize" 
                   value={editData.role} 
                   onChange={(e) => setEditData({ ...editData, role: e.target.value })}
                   disabled={user?.id === editData.id}
                 >
                   <option value="admin">Admin</option>
+                  <option value="branch_admin">Branch Admin</option>
+                  <option value="billing_staff">Billing Staff</option>
                   <option value="branch_head">Branch Head</option>
                   <option value="waiter">Waiter</option>
                   <option value="chef">Chef</option>
+                  {roles.map((r: any) => (
+                    <option key={r.id} value={r.name}>{r.name}</option>
+                  ))}
                 </select>
               </div>
               <div className="flex items-center gap-2 mt-7">
