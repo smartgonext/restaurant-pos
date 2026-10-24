@@ -1,6 +1,6 @@
 {
   "name": "restaurant-saas-electron",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Restaurant SaaS POS Application",
   "author": "Restaurant SaaS POS",
   "main": "main.js",
