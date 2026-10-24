@@ -4,6 +4,7 @@ import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import fastifyCompress from '@fastify/compress';
 import formbody from '@fastify/formbody';
 import pkg from '@prisma/client';
 const { PrismaClient } = pkg;
@@ -298,6 +299,12 @@ export async function buildApp() {
     }
   });
 
+  // ── High Performance Gzip / Deflate Compression ──────────────────────────
+  await app.register(fastifyCompress, {
+    encodings: ['gzip', 'deflate'],
+    threshold: 1024, // Compress anything larger than 1KB
+  });
+
   await app.register(formbody);
 
   await app.register(multipart, {
@@ -406,6 +413,16 @@ export async function buildApp() {
         root: webDist,
         prefix: '/',
         decorateReply: true,
+        maxAge: 31536000000, // 1 year for hashed assets
+        immutable: true,
+        setHeaders: (res, pathName) => {
+          if (pathName.endsWith('.html') || pathName.endsWith('index.html')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          } else {
+            // Content-hashed static JS/CSS/Fonts/Images: Cache permanently in Chrome
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        }
       });
 
       const indexHtmlPath = path.join(webDist, 'index.html');
@@ -414,6 +431,7 @@ export async function buildApp() {
         if (request.url.startsWith('/api/')) {
           return reply.code(404).send({ success: false, error: 'Not Found' });
         }
+        reply.header('Cache-Control', 'no-cache, no-store, must-revalidate');
         if (typeof reply.sendFile === 'function') {
           return reply.sendFile('index.html');
         }
