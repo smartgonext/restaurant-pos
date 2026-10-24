@@ -1600,7 +1600,6 @@ export async function restaurantRoutes(app) {
                                     mrp: true,
                                     purchaseRate: true,
                                     profitPercent: true,
-                                    sellingPrice: true,
                                     isActive: true,
                                     createdAt: true
                                 },
@@ -1626,32 +1625,47 @@ export async function restaurantRoutes(app) {
                     return !!category && !resolveCategoryKOT(category);
                 });
             }
-            const normalized = result.map((item) => ({
-                ...item,
-                category: item.category
-                    ? {
-                        ...item.category,
-                        isKOTEnabled: resolveCategoryKOT(item.category),
-                    }
-                    : item.category,
-                itemModifiers: (item.itemModifiers || []).map((im) => {
-                    let options = [];
-                    if (im.modifierGroup) {
-                        try {
-                            options = typeof im.modifierGroup.options === 'string'
-                                ? JSON.parse(im.modifierGroup.options)
-                                : (Array.isArray(im.modifierGroup.options) ? im.modifierGroup.options : []);
-                        }
-                        catch (e) { }
-                    }
-                    return {
-                        ...im,
-                        modifierGroup: im.modifierGroup
-                            ? { ...im.modifierGroup, options }
-                            : im.modifierGroup
+            const normalized = result.map((item) => {
+                let enrichedInventoryItem = item.inventoryItem;
+                if (enrichedInventoryItem && Array.isArray(enrichedInventoryItem.inventoryMRPs)) {
+                    enrichedInventoryItem = {
+                        ...enrichedInventoryItem,
+                        inventoryMRPs: enrichedInventoryItem.inventoryMRPs.map((m) => {
+                            const purchase = Number(m.purchaseRate ?? 0);
+                            const profit = Number(m.profitPercent ?? 0);
+                            const selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+                            return { ...m, sellingPrice: selling };
+                        })
                     };
-                })
-            }));
+                }
+                return {
+                    ...item,
+                    inventoryItem: enrichedInventoryItem,
+                    category: item.category
+                        ? {
+                            ...item.category,
+                            isKOTEnabled: resolveCategoryKOT(item.category),
+                        }
+                        : item.category,
+                    itemModifiers: (item.itemModifiers || []).map((im) => {
+                        let options = [];
+                        if (im.modifierGroup) {
+                            try {
+                                options = typeof im.modifierGroup.options === 'string'
+                                    ? JSON.parse(im.modifierGroup.options)
+                                    : (Array.isArray(im.modifierGroup.options) ? im.modifierGroup.options : []);
+                            }
+                            catch (e) { }
+                        }
+                        return {
+                            ...im,
+                            modifierGroup: im.modifierGroup
+                                ? { ...im.modifierGroup, options }
+                                : im.modifierGroup
+                        };
+                    })
+                };
+            });
             return { success: true, data: normalized };
         }
         catch (err) {
