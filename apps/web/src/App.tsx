@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
 import { setupElectronPrintNotifications } from '@/lib/electronPrint';
 import { startOfflineSync } from '@/lib/offlineQueue';
+import { useEnterKeyNavigation } from '@/hooks/useEnterKeyNavigation';
 
 export default function App() {
   const { theme, setTheme } = useThemeStore();
@@ -70,89 +71,8 @@ export default function App() {
     }
   }, [login]);
 
-  // Handle global Enter key navigation for inputs
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Enter') return;
-
-      const target = e.target as HTMLElement;
-      if (!target) return;
-
-      // Only intercept for text-like inputs and select elements
-      const isInput = target.tagName === 'INPUT' && !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'hidden'].includes((target as HTMLInputElement).type);
-      const isSelect = target.tagName === 'SELECT';
-
-      if (!isInput && !isSelect) return;
-
-      // Find the closest logical container (e.g. form, modal, card, or dialog)
-      const container = target.closest('form, [role="dialog"], .modal, .card, [class*="modal"], [class*="card"]') || document.body;
-
-      // Find all potential focusable elements
-      const selector = 'input, select, textarea, button, [tabindex]';
-      const allElements = Array.from(container.querySelectorAll(selector)) as HTMLElement[];
-
-      // Helper to check if element is secondary or cancel button
-      const isSecondaryOrCancel = (el: HTMLElement) => {
-        if (el.tagName !== 'BUTTON' && !(el.tagName === 'INPUT' && (el as HTMLInputElement).type === 'button')) {
-          return false;
-        }
-        const text = el.textContent?.trim().toLowerCase() || '';
-        const ariaLabel = el.getAttribute('aria-label')?.toLowerCase() || '';
-        const className = el.className.toLowerCase();
-        
-        const skipWords = ['cancel', 'close', 'reset', 'back', 'no', 'dismiss', 'exit'];
-        const matchesText = skipWords.some(word => text.includes(word) || ariaLabel.includes(word));
-        const matchesClass = className.includes('secondary') || className.includes('cancel') || className.includes('close');
-        
-        return matchesText || matchesClass;
-      };
-
-      // Helper to check visibility
-      const isVisible = (el: HTMLElement) => {
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        const hasSize = rect.width > 0 && rect.height > 0;
-        const isNotHidden = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-        return hasSize && isNotHidden;
-      };
-
-      // Filter list of active focusable elements
-      const focusable = allElements.filter(el => {
-        if (!isVisible(el) || (el as any).disabled) return false;
-
-        const tagName = el.tagName;
-        if (tagName === 'INPUT') {
-          const inputType = (el as HTMLInputElement).type;
-          if (['hidden', 'checkbox', 'radio', 'file', 'image', 'submit', 'button', 'reset'].includes(inputType)) {
-            return false;
-          }
-          return true;
-        }
-        if (tagName === 'SELECT' || tagName === 'TEXTAREA') {
-          return true;
-        }
-        if (tagName === 'BUTTON') {
-          return !isSecondaryOrCancel(el);
-        }
-        const tabIndex = el.getAttribute('tabindex');
-        if (tabIndex && tabIndex !== '-1') {
-          return !isSecondaryOrCancel(el);
-        }
-        return false;
-      });
-
-      const index = focusable.indexOf(target);
-      if (index !== -1 && index < focusable.length - 1) {
-        // Prevent default browser behavior (e.g. immediate submission)
-        e.preventDefault();
-        // Shift focus to the next element
-        focusable[index + 1].focus();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  // Universal keyboard-friendly form, dropdown & button navigation across the entire application
+  useEnterKeyNavigation();
 
 
   return (

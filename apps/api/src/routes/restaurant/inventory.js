@@ -16,12 +16,19 @@ export async function inventoryRoutes(app) {
      * "MRP" (maximum retail price / printed price). The SELLING PRICE that
      * the POS uses is always the computed sellingPrice field added here.
      */
-    const computeSellingPrice = (m) => {
+    const computeSellingPrice = (m, fallbackPrice = 0) => {
         if (!m)
             return m;
         const purchase = Number(m.purchaseRate ?? 0);
         const profit = Number(m.profitPercent ?? 0); // ← never modified here
-        const selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+        let selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+        if (selling <= 0) {
+            if (Number(m.mrp ?? 0) > 0) {
+                selling = Number(m.mrp);
+            } else if (Number(fallbackPrice ?? 0) > 0) {
+                selling = Number(fallbackPrice);
+            }
+        }
         return { ...m, sellingPrice: selling };
     };
     /**
@@ -266,8 +273,9 @@ export async function inventoryRoutes(app) {
                 include: { unit: true }
             });
 
-            // Dual sync: InventoryItem to MenuItem
-            try {
+            // Dual sync: InventoryItem to MenuItem (only if explicitly requested and not skipped)
+            if (body.syncToMenu === true && !body.skipMenuSync) {
+              try {
                 let menuCategory = await prisma.itemCategory.findFirst({
                     where: { restaurantId, name: invCat.name }
                 });
@@ -303,6 +311,7 @@ export async function inventoryRoutes(app) {
                 }
             } catch (e) {
                 console.error('Error syncing inventory item to menu item:', e);
+              }
             }
 
             return { success: true, data: item };
@@ -559,6 +568,9 @@ export async function inventoryRoutes(app) {
                 });
             }
             const category = await prisma.itemCategory.create({ data: { restaurantId, name, isKOTEnabled: false, groupId: nonKotGroup.id } });
+            emitToRestaurant(restaurantId, 'categories_updated', { action: 'created', category });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            emitToRestaurant(restaurantId, 'inventory_updated', { action: 'refresh' });
             return { success: true, data: category };
         }
         catch (err) {
@@ -607,6 +619,9 @@ export async function inventoryRoutes(app) {
                     groupId: nonKotGroup?.id ?? undefined
                 },
             });
+            emitToRestaurant(restaurantId, 'categories_updated', { action: 'updated', category: updated });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            emitToRestaurant(restaurantId, 'inventory_updated', { action: 'refresh' });
             return { success: true, data: updated };
         }
         catch (err) {
@@ -636,6 +651,9 @@ export async function inventoryRoutes(app) {
                 }
             }
             await prisma.itemCategory.delete({ where: { id: catId } });
+            emitToRestaurant(restaurantId, 'categories_updated', { action: 'deleted', categoryId: catId });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            emitToRestaurant(restaurantId, 'inventory_updated', { action: 'refresh' });
             return { success: true };
         }
         catch (err) {
@@ -1008,6 +1026,19 @@ export async function inventoryRoutes(app) {
             const inv = await prisma.inventoryItem.findFirst({ where: { id: body.inventoryItemId, restaurantId } });
             if (!inv)
                 return reply.status(404).send({ success: false, error: 'Inventory item not found' });
+            const existingActive = await prisma.inventoryItemMRP.findFirst({
+                where: {
+                    inventoryItemId: body.inventoryItemId,
+                    isActive: true,
+                    mrp: body.mrp,
+                    purchaseRate: body.purchaseRate,
+                },
+                orderBy: { createdAt: 'desc' }
+            });
+            if (existingActive) {
+                return { success: true, data: computeSellingPrice(existingActive) };
+            }
+
             const profitPercent = await resolveProfitPercent({
                 restaurantId,
                 inventoryItemId: body.inventoryItemId,
@@ -1190,25 +1221,38 @@ export async function inventoryRoutes(app) {
                 for (const it of body.items) {
                     let mrpId = it.inventoryItemMRPId ?? null;
                     if (!mrpId) {
-                        const profitPct = await resolveProfitPercent({
-                            restaurantId,
-                            inventoryItemId: it.inventoryItemId,
-                            supplierId: body.supplierId,
-                            profitPercent: it.profitPercent,
-                        });
                         const storedMrp = it.mrp !== undefined ? Number(it.mrp) : Number(it.unitCost); // mrp = printed max retail; may differ from selling price
-                        const newMRP = await tx.inventoryItemMRP.create({
-                            data: {
+                        const existingMRP = await tx.inventoryItemMRP.findFirst({
+                            where: {
                                 inventoryItemId: it.inventoryItemId,
-                                supplierId: body.supplierId,
+                                isActive: true,
                                 mrp: storedMrp,
                                 purchaseRate: it.unitCost,
-                                profitPercent: profitPct,
-                                effectiveFrom: new Date(),
-                                isActive: true
-                            }
+                            },
+                            orderBy: { createdAt: 'desc' }
                         });
-                        mrpId = newMRP.id;
+                        if (existingMRP) {
+                            mrpId = existingMRP.id;
+                        } else {
+                            const profitPct = await resolveProfitPercent({
+                                restaurantId,
+                                inventoryItemId: it.inventoryItemId,
+                                supplierId: body.supplierId,
+                                profitPercent: it.profitPercent,
+                            });
+                            const newMRP = await tx.inventoryItemMRP.create({
+                                data: {
+                                    inventoryItemId: it.inventoryItemId,
+                                    supplierId: body.supplierId,
+                                    mrp: storedMrp,
+                                    purchaseRate: it.unitCost,
+                                    profitPercent: profitPct,
+                                    effectiveFrom: new Date(),
+                                    isActive: true
+                                }
+                            });
+                            mrpId = newMRP.id;
+                        }
                     }
                     const itemSubtotal = Number(it.unitCost) * Number(it.quantity);
                     const discAmt = itemSubtotal * (Number(it.discountPercent ?? 0) / 100);

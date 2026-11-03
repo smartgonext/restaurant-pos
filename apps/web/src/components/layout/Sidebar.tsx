@@ -18,6 +18,7 @@ import { useLayoutStore } from '@/stores/layoutStore';
 import toast from 'react-hot-toast';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
+import amoraLogo from '@/assets/amora-logo.png';
 
 interface NavItem {
   id: string;
@@ -273,12 +274,12 @@ export function Sidebar() {
     >
       {/* Logo */}
       <div className="flex items-center gap-3 px-4 h-[var(--topbar-height)] border-b border-border/50 shrink-0">
-        <div className="w-8 h-8 rounded-lg bg-gradient-primary flex items-center justify-center shrink-0">
-          <UtensilsCrossed className="w-4 h-4 text-white" />
+        <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center shrink-0 bg-emerald-950/40 border border-emerald-500/20">
+          <img src={amoraLogo} alt="Amora" className="w-full h-full object-contain p-0.5" onError={(e) => { e.currentTarget.src = './amora-logo.png'; }} />
         </div>
         {!collapsed && (
-          <span className="text-sm font-bold text-text-primary truncate">
-            {isSuperAdmin ? 'RestaurantSaaS' : user?.restaurant?.name || 'Restaurant'}
+          <span className="text-base font-black tracking-wider uppercase truncate text-slate-900 dark:text-white">
+            {user?.restaurant?.name || 'AMORA'}
           </span>
         )}
       </div>

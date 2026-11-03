@@ -1,0 +1,26 @@
+{
+  "common": {
+    "dashboard": "डैशबोर्ड",
+    "menu": "मेन्यू",
+    "orders": "ऑर्डर",
+    "reports": "रिपोर्ट्स",
+    "settings": "सेटिंग्स",
+    "save": "सहेजें",
+    "cancel": "रद्द करें",
+    "loading": "लोड हो रहा है...",
+    "search": "खोजें..."
+  },
+  "nav": {
+    "pos": "पीओएस",
+    "waiter_requests": "वेटर अनुरोध",
+    "reservations": "आरक्षण",
+    "customers": "ग्राहक",
+    "staff": "कर्मचारी",
+    "delivery": "डिलीवरी",
+    "expenses": "खर्चे",
+    "payments": "भुगतान",
+    "cash_register": "कैश रजिस्टर",
+    "inventory": "इन्वेंट्री",
+    "ai_insights": "एआई इनसाइट्स"
+  }
+}

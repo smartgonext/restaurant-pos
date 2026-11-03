@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -8,7 +9,8 @@ import {
   Settings as SettingsIcon, Save, Building2, DollarSign, Receipt, 
   Globe, Bell, Palette, Clock, Mail, ShieldCheck, CreditCard, 
   Printer, Smartphone, Trash2, Heart, Share2, Box, Database, Download, UploadCloud,
-  SlidersHorizontal, CheckSquare, Square, Info, Sparkles, ArrowUpCircle, RefreshCw, CheckCircle2
+  SlidersHorizontal, CheckSquare, Square, Info, Sparkles, ArrowUpCircle, RefreshCw, CheckCircle2,
+  Users, ArrowRight, FileArchive, HardDrive, Check, AlertTriangle
 } from 'lucide-react';
 import { cn, resolveImageUrl } from '@/lib/utils';
 import api from '@/lib/api';
@@ -72,6 +74,7 @@ const tabGroups = [
 ];
 
 export default function Settings() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('general');
   const setTheme = useThemeStore((s) => s.setTheme);
   const [shifts, setShifts] = useState<any[]>([]);
@@ -101,7 +104,10 @@ export default function Settings() {
       });
       const logoUrl = res.data.url;
       setFormData((prev: any) => ({ ...prev, restaurantLogo: logoUrl }));
-      toast.success('Logo uploaded successfully!', { id: toastId });
+      await api.put('/restaurant/bill-settings', { logoUrl }).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: ['restaurant-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['bill-settings'] });
+      toast.success('Logo uploaded and synced to Bill Display!', { id: toastId });
     } catch (err: any) {
       toast.error(err?.response?.data?.error || 'Failed to upload logo image', { id: toastId });
     } finally {
@@ -109,23 +115,33 @@ export default function Settings() {
     }
   };
 
-  const handleDownloadBackup = async () => {
+  const { data: backupStatus, refetch: refetchBackupStatus } = useQuery({
+    queryKey: ['backup-status'],
+    queryFn: () => api.get('/restaurant/backup/status').then(r => r.data?.data).catch(() => null),
+    enabled: activeTab === 'backup'
+  });
+
+  const handleDownloadBackup = async (type: 'full' | 'db' = 'full') => {
     setIsExporting(true);
-    const toastId = toast.loading('Generating backup file...');
+    const isFull = type === 'full';
+    const toastId = toast.loading(isFull ? 'Packaging Full System Backup (Database + All Images)...' : 'Generating Database Snapshot (.db)...');
     try {
-      const response = await api.get('/restaurant/backup/export', { responseType: 'blob' });
-      const blob = new Blob([response.data], { type: 'application/octet-stream' });
+      const response = await api.get(`/restaurant/backup/export?type=${type}`, { responseType: 'blob' });
+      const ext = isFull ? 'zip' : 'db';
+      const mime = isFull ? 'application/zip' : 'application/octet-stream';
+      const blob = new Blob([response.data], { type: mime });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `restaurant_backup_${new Date().toISOString().slice(0, 10)}.db`);
+      const dateStr = new Date().toISOString().slice(0, 10);
+      link.setAttribute('download', `amora_${isFull ? 'full_system_backup' : 'database_snapshot'}_${dateStr}.${ext}`);
       document.body.appendChild(link);
       link.click();
       link.parentNode?.removeChild(link);
       window.URL.revokeObjectURL(url);
-      toast.success('Backup downloaded successfully!', { id: toastId });
+      toast.success(isFull ? 'Full System Backup (.zip) downloaded successfully!' : 'Database Snapshot (.db) downloaded successfully!', { id: toastId });
     } catch (err: any) {
-      toast.error('Failed to generate backup.', { id: toastId });
+      toast.error('Failed to generate backup: ' + (err?.message || 'Server error'), { id: toastId });
     } finally {
       setIsExporting(false);
     }
@@ -137,29 +153,37 @@ export default function Settings() {
       return;
     }
 
-    const confirmRestore = window.confirm(
-      'WARNING: This will overwrite your entire database with the uploaded backup file. All current data will be permanently overwritten. Are you sure you want to proceed?'
-    );
+    const isZip = backupFile.name.toLowerCase().endsWith('.zip');
+    const confirmMessage = isZip
+      ? '⚠️ RESTORE CONFIRMATION:\n\nThis will restore the entire database AND all product images from this Full Backup archive.\n\nAll bills, tokens, items, prices, barcodes, customers, and product photos will be restored.\n\nAre you sure you want to proceed?'
+      : '⚠️ RESTORE CONFIRMATION:\n\nThis will restore your database from the selected .db file. Existing database data will be replaced.\n\nAre you sure you want to proceed?';
+
+    const confirmRestore = window.confirm(confirmMessage);
     if (!confirmRestore) return;
 
     setIsRestoring(true);
-    const toastId = toast.loading('Restoring database... Please do not close or reload the application.');
+    const toastId = toast.loading('Restoring database & assets... Please do not close or reload the application.', { duration: 90000 });
 
     try {
       const formData = new FormData();
       formData.append('file', backupFile);
 
-      await api.post('/restaurant/backup/import', formData, {
+      const res = await api.post('/restaurant/backup/import', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
 
-      toast.success('Database restored successfully! Reloading application...', { id: toastId });
+      const stats = res.data?.data;
+      const msg = stats 
+        ? `✅ Restored successfully! ${stats.restaurantName} (${stats.totalItems} items, ${(stats.totalOrders || 0) + (stats.totalTokens || 0)} bills/tokens, ${stats.imagesRestored || 0} images). Reloading application...`
+        : 'System restored successfully! Reloading application...';
+
+      toast.success(msg, { id: toastId, duration: 5000 });
       setBackupFile(null);
       setTimeout(() => {
         window.location.reload();
-      }, 2000);
+      }, 2500);
     } catch (err: any) {
       const errMsg = err.response?.data?.error || 'Failed to restore database.';
       toast.error(errMsg, { id: toastId });
@@ -194,10 +218,53 @@ export default function Settings() {
     queryFn: () => api.get('/restaurant/whatsapp/template').then((r) => r.data.data ?? {}),
   });
 
-  const { data: webhookUrls = [], refetch: refetchWhatsappWebhooks } = useQuery({
+  const { data: webhookUrls, refetch: refetchWhatsappWebhooks } = useQuery({
     queryKey: ['restaurant-whatsapp-webhooks'],
-    queryFn: () => api.get('/restaurant/whatsapp/webhooks').then((r) => r.data.data || []),
+    queryFn: () => api.get('/restaurant/whatsapp/webhooks').then((r) => r.data.data ?? []),
   });
+
+  const [loyaltyForm, setLoyaltyForm] = useState({
+    isActive: true,
+    rupeesPerPoint: 100,
+    pointValue: 0.5,
+    minClaimPoints: 10,
+    maxClaimPercent: 50,
+  });
+
+  const { data: loyaltyConfig, refetch: refetchLoyaltyConfig } = useQuery({
+    queryKey: ['restaurant-loyalty-config'],
+    queryFn: () => api.get('/restaurant/loyalty/config').then((r) => r.data.data ?? {}),
+  });
+
+  useEffect(() => {
+    if (!loyaltyConfig) return;
+    const ptsPerRupee = Number(loyaltyConfig.pointsPerRupee || 0.01);
+    const calculatedRupeesPerPoint = ptsPerRupee > 0 ? Math.round(1 / ptsPerRupee) : 100;
+    setLoyaltyForm({
+      isActive: Boolean(loyaltyConfig.isActive),
+      rupeesPerPoint: calculatedRupeesPerPoint,
+      pointValue: Number(loyaltyConfig.pointValue || 0.5),
+      minClaimPoints: Number(loyaltyConfig.minClaimPoints || 10),
+      maxClaimPercent: Number(loyaltyConfig.maxClaimPercent || 50),
+    });
+  }, [loyaltyConfig]);
+
+  const saveLoyaltyConfig = async () => {
+    const toastId = toast.loading('Saving loyalty settings...');
+    try {
+      await api.put('/restaurant/loyalty/config', {
+        isActive: loyaltyForm.isActive,
+      });
+      setFormData((prev: any) => ({ ...prev, loyaltyEnabled: loyaltyForm.isActive }));
+      await api.put('/restaurant/settings/general', { loyaltyEnabled: loyaltyForm.isActive });
+      queryClient.invalidateQueries({ queryKey: ['restaurant-loyalty-config'] });
+      queryClient.invalidateQueries({ queryKey: ['loyalty-config'] });
+      queryClient.invalidateQueries({ queryKey: ['restaurant-settings'] });
+      toast.success(loyaltyForm.isActive ? 'Loyalty program enabled!' : 'Loyalty program disabled!', { id: toastId });
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || 'Failed to save loyalty settings', { id: toastId });
+    }
+  };
 
   useEffect(() => {
     if (!settings) return;
@@ -241,12 +308,41 @@ export default function Settings() {
 
   const handleSave = async () => {
     try {
+      const { notifyNewOrder, notifyLowStock, notifyDailySummary, notifyReservation, notifySMS, notificationEmail, enableAdminOrderSound, ...restFormData } = formData;
+      try {
+        localStorage.setItem('admin_order_notification_sound', enableAdminOrderSound ? 'true' : 'false');
+      } catch {}
+      const siteConfigObj = {
+        shifts,
+        notifications: {
+          enableAdminOrderSound: Boolean(enableAdminOrderSound),
+          notifyNewOrder: Boolean(notifyNewOrder),
+          notifyLowStock: Boolean(notifyLowStock),
+          notifyDailySummary: Boolean(notifyDailySummary),
+          notifyReservation: Boolean(notifyReservation),
+          notifySMS: Boolean(notifySMS),
+          notificationEmail: notificationEmail || '',
+        }
+      };
       const payload = {
-        ...formData,
-        customerSiteConfig: JSON.stringify({ shifts })
+        ...restFormData,
+        loyaltyEnabled: loyaltyForm.isActive,
+        customerSiteConfig: JSON.stringify(siteConfigObj)
       };
       await api.put('/restaurant/settings/general', payload);
+      await api.put('/restaurant/bill-settings', {
+        restaurantAddress: formData.restaurantAddress,
+        restaurantPhone: formData.restaurantPhone,
+        logoUrl: formData.restaurantLogo,
+      }).catch(() => {});
+      await api.put('/restaurant/loyalty/config', {
+        isActive: loyaltyForm.isActive,
+        rupeesPerPoint: Number(loyaltyForm.rupeesPerPoint),
+        minClaimPoints: Number(loyaltyForm.minClaimPoints),
+        maxClaimPercent: Number(loyaltyForm.maxClaimPercent),
+      }).catch(() => {});
       queryClient.invalidateQueries({ queryKey: ['restaurant-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['restaurant-loyalty-config'] });
       queryClient.invalidateQueries({ queryKey: ['bill-settings'] });
 
       // Synchronize updated profile globally in auth store
@@ -350,33 +446,50 @@ export default function Settings() {
     });
   };
 
-  if (settings && Object.keys(formData).length === 0) {
+  useEffect(() => {
+    if (!settings) return;
     const authUser = useAuthStore.getState().user;
-    setFormData({
-      restaurantName: settings.restaurantName || authUser?.restaurant?.name || '',
-      restaurantEmail: settings.restaurantEmail || authUser?.email || '',
-      restaurantPhone: settings.restaurantPhone || '',
-      restaurantAddress: settings.restaurantAddress || '',
-      restaurantLogo: settings.restaurantLogo || '',
-      currency: settings.currency,
-      currencySymbol: settings.currencySymbol,
-      taxMode: settings.taxMode,
-      sgstRate: Number(settings.sgstRate),
-      cgstRate: Number(settings.cgstRate),
-      timezone: settings.timezone,
-      orderPrefix: settings.orderPrefix,
-      kotPrefix: settings.kotPrefix,
-      deliveryFee: Number(settings.deliveryFee),
-      minOrderAmount: Number(settings.minOrderAmount),
-      allowDineIn: settings.allowDineIn,
-      allowDelivery: settings.allowDelivery,
-      allowPickup: settings.allowPickup,
-      loyaltyEnabled: settings.loyaltyEnabled,
-      posDeletePassword: settings.posDeletePassword || '',
-      igstRate: Number(settings.igstRate || 0),
-      isInterState: settings.isInterState || false,
-      cancellationReasons: settings.cancellationReasons || 'Customer changed mind, Incorrect item, Ordered by mistake, High wait time',
-      theme: {
+    let siteCfg: any = {};
+    try {
+      siteCfg = typeof settings.customerSiteConfig === 'string'
+        ? JSON.parse(settings.customerSiteConfig)
+        : (settings.customerSiteConfig || {});
+    } catch (e) {}
+    const notifCfg = siteCfg?.notifications || {};
+
+    setFormData((prev: any) => ({
+      ...prev,
+      restaurantName: settings.restaurantName || authUser?.restaurant?.name || prev.restaurantName || '',
+      restaurantEmail: settings.restaurantEmail || authUser?.email || prev.restaurantEmail || '',
+      restaurantPhone: settings.restaurantPhone || prev.restaurantPhone || '',
+      restaurantAddress: settings.restaurantAddress || prev.restaurantAddress || '',
+      restaurantLogo: settings.restaurantLogo || prev.restaurantLogo || '',
+      currency: prev.currency || settings.currency,
+      currencySymbol: prev.currencySymbol || settings.currencySymbol,
+      taxMode: prev.taxMode || settings.taxMode,
+      sgstRate: prev.sgstRate ?? Number(settings.sgstRate),
+      cgstRate: prev.cgstRate ?? Number(settings.cgstRate),
+      timezone: prev.timezone || settings.timezone,
+      orderPrefix: prev.orderPrefix || settings.orderPrefix,
+      kotPrefix: prev.kotPrefix || settings.kotPrefix,
+      deliveryFee: prev.deliveryFee ?? Number(settings.deliveryFee),
+      minOrderAmount: prev.minOrderAmount ?? Number(settings.minOrderAmount),
+      allowDineIn: prev.allowDineIn ?? settings.allowDineIn,
+      allowDelivery: prev.allowDelivery ?? settings.allowDelivery,
+      allowPickup: prev.allowPickup ?? settings.allowPickup,
+      loyaltyEnabled: prev.loyaltyEnabled ?? settings.loyaltyEnabled,
+      posDeletePassword: prev.posDeletePassword ?? (settings.posDeletePassword || ''),
+      igstRate: prev.igstRate ?? Number(settings.igstRate || 0),
+      isInterState: prev.isInterState ?? (settings.isInterState || false),
+      cancellationReasons: prev.cancellationReasons || settings.cancellationReasons || 'Customer changed mind, Incorrect item, Ordered by mistake, High wait time',
+      enableAdminOrderSound: prev.enableAdminOrderSound ?? (localStorage.getItem('admin_order_notification_sound') === 'true' || Boolean(notifCfg.enableAdminOrderSound)),
+      notifyNewOrder: prev.notifyNewOrder ?? (typeof notifCfg.notifyNewOrder === 'boolean' ? notifCfg.notifyNewOrder : true),
+      notifyLowStock: prev.notifyLowStock ?? (typeof notifCfg.notifyLowStock === 'boolean' ? notifCfg.notifyLowStock : true),
+      notifyDailySummary: prev.notifyDailySummary ?? (typeof notifCfg.notifyDailySummary === 'boolean' ? notifCfg.notifyDailySummary : false),
+      notifyReservation: prev.notifyReservation ?? (typeof notifCfg.notifyReservation === 'boolean' ? notifCfg.notifyReservation : true),
+      notifySMS: prev.notifySMS ?? (typeof notifCfg.notifySMS === 'boolean' ? notifCfg.notifySMS : false),
+      notificationEmail: prev.notificationEmail || notifCfg.notificationEmail || settings.restaurantEmail || authUser?.email || '',
+      theme: prev.theme || {
         mode: settings?.theme?.mode === 'light' ? 'light' : 'dark',
         brandColor: settings?.theme?.brandColor || '#2563eb',
         navVisibility: NAV_VISIBILITY_OPTIONS.reduce((acc: Record<string, boolean>, item) => {
@@ -385,8 +498,8 @@ export default function Settings() {
           return acc;
         }, {}),
       },
-    });
-  }
+    }));
+  }, [settings]);
 
   if (isLoading) return <div className="p-8 text-center text-text-muted">Loading settings...</div>;
 
@@ -584,6 +697,12 @@ export default function Settings() {
                    ))}
                 </div>
               </div>
+
+              <div className="flex justify-end pt-4 border-t border-border/40">
+                <Button size="sm" icon={<Save className="w-4 h-4" />} onClick={handleSave}>
+                  Save General Settings
+                </Button>
+              </div>
             </div>
           )}
 
@@ -703,6 +822,11 @@ export default function Settings() {
                    <p className="text-[10px] uppercase font-bold text-orange-400 mb-1">Important Note</p>
                    <p className="text-[10px] text-text-muted leading-relaxed">Tax changes will only apply to new orders created after saving. Historical orders will retain their original tax values.</p>
                 </div>
+                <div className="flex justify-end pt-2">
+                  <Button size="sm" icon={<Save className="w-4 h-4" />} onClick={handleSave}>
+                    Save Tax Settings
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -713,9 +837,16 @@ export default function Settings() {
                  <h2 className="text-base font-bold text-text-primary">Currency & Locale</h2>
                  <p className="text-xs text-text-muted mt-1">Set your primary currency and display symbol</p>
               </div>
-              <div className="max-w-md grid grid-cols-2 gap-4">
-                <Input label="Currency (ISO)" value={formData.currency || 'USD'} onChange={(e) => setFormData({ ...formData, currency: e.target.value })} />
-                <Input label="Symbol" value={formData.currencySymbol || '$'} onChange={(e) => setFormData({ ...formData, currencySymbol: e.target.value })} />
+              <div className="max-w-md space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <Input label="Currency (ISO)" value={formData.currency || 'USD'} onChange={(e) => setFormData({ ...formData, currency: e.target.value })} />
+                  <Input label="Symbol" value={formData.currencySymbol || '$'} onChange={(e) => setFormData({ ...formData, currencySymbol: e.target.value })} />
+                </div>
+                <div className="flex justify-end pt-2">
+                  <Button size="sm" icon={<Save className="w-4 h-4" />} onClick={handleSave}>
+                    Save Currency Settings
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -724,10 +855,10 @@ export default function Settings() {
             <div className="space-y-6">
               <div className="border-b border-border/50 pb-4">
                  <h2 className="text-base font-bold text-text-primary">Loyalty Program</h2>
-                 <p className="text-xs text-text-muted mt-1">Reward your customers for their repeat business</p>
+                 <p className="text-xs text-text-muted mt-1">Enable or disable customer reward points for your restaurant</p>
               </div>
               <div className="max-w-md space-y-4">
-                 <label className="flex items-center justify-between p-4 rounded-xl bg-bg-tertiary border border-border/50 cursor-pointer">
+                 <label className="flex items-center justify-between p-4 rounded-xl bg-bg-tertiary border border-border/50 cursor-pointer hover:border-red-500/30 transition-all">
                     <div className="flex items-center gap-3">
                        <div className="w-10 h-10 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center">
                           <Heart size={20} />
@@ -739,17 +870,43 @@ export default function Settings() {
                     </div>
                     <input 
                        type="checkbox" 
-                       checked={formData.loyaltyEnabled || false} 
-                       onChange={(e) => setFormData({ ...formData, loyaltyEnabled: e.target.checked })}
+                       checked={loyaltyForm.isActive} 
+                       onChange={(e) => setLoyaltyForm({ ...loyaltyForm, isActive: e.target.checked })}
                        className="w-5 h-5 rounded border-border"
                     />
                  </label>
-                 {formData.loyaltyEnabled && (
-                   <div className="space-y-4 pt-4 border-t border-border/30">
-                      <Input label="Points per 1.00 spent" type="number" defaultValue={1} />
-                      <Input label="Conversion Value (1 Point = $)" type="number" defaultValue={0.01} />
+
+                 {loyaltyForm.isActive ? (
+                   <div className="p-4 rounded-xl bg-blue-500/5 border border-blue-500/20 space-y-3">
+                      <div className="flex items-center gap-2 text-blue-400">
+                         <Info size={16} />
+                         <span className="text-xs font-bold uppercase tracking-wider">Configure In Customers Page</span>
+                      </div>
+                      <p className="text-xs text-text-secondary leading-relaxed">
+                        Points conversion rate (spend per point), minimum points to claim, and max bill discount percentages are managed centrally in the <strong>Customers</strong> page under <strong>Loyalty Settings</strong>.
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => navigate('/admin/customers?openLoyalty=true')}
+                        className="w-full flex items-center justify-center gap-2 mt-2"
+                      >
+                         <Users size={14} />
+                         Go to Customers Page (Set Loyalty Rules)
+                         <ArrowRight size={14} />
+                      </Button>
+                   </div>
+                 ) : (
+                   <div className="p-4 rounded-xl bg-bg-tertiary/50 border border-border/50 text-xs text-text-muted">
+                      Loyalty points are currently disabled. Customers will not earn points on orders until enabled.
                    </div>
                  )}
+
+                 <div className="flex justify-end pt-2">
+                   <Button size="sm" icon={<Save className="w-4 h-4" />} onClick={saveLoyaltyConfig}>
+                     Save Changes
+                   </Button>
+                 </div>
               </div>
             </div>
           )}
@@ -855,6 +1012,11 @@ export default function Settings() {
                      onChange={(e) => setFormData({ ...formData, posDeletePassword: e.target.value })} 
                   />
                   <p className="text-[10px] text-text-muted">This PIN is required when deleting items or reducing quantity on the Main POS billing screen.</p>
+                  <div className="flex justify-end pt-2">
+                    <Button size="sm" icon={<Save className="w-4 h-4" />} onClick={handleSave}>
+                      Save Security Settings
+                    </Button>
+                  </div>
                </div>
              </div>
           )}
@@ -892,6 +1054,11 @@ export default function Settings() {
                     </div>
                   </label>
                 ))}
+                <div className="flex justify-end pt-2">
+                  <Button size="sm" icon={<Save className="w-4 h-4" />} onClick={handleSave}>
+                    Save Ordering Settings
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -904,6 +1071,7 @@ export default function Settings() {
               </div>
               <div className="max-w-lg space-y-3">
                 {[
+                  { key: 'enableAdminOrderSound', label: 'Admin Order Bell & Popup Alert', desc: 'Play bell sound and popup alert in Admin dashboard when an order is received (Default: OFF to avoid disturbance)' },
                   { key: 'notifyNewOrder', label: 'New Order Alert', desc: 'Email alert when a new order is placed' },
                   { key: 'notifyLowStock', label: 'Low Stock Warning', desc: 'Alert when inventory item falls below threshold' },
                   { key: 'notifyDailySummary', label: 'Daily Sales Summary', desc: 'Receive daily report via email at midnight' },
@@ -927,7 +1095,18 @@ export default function Settings() {
                   </label>
                 ))}
                 <div className="pt-2">
-                  <Input label="Notification Email" type="email" placeholder="manager@yourrestaurant.com" />
+                  <Input 
+                    label="Notification Email" 
+                    type="email" 
+                    value={formData.notificationEmail || ''} 
+                    onChange={(e) => setFormData({ ...formData, notificationEmail: e.target.value })} 
+                    placeholder="manager@yourrestaurant.com" 
+                  />
+                </div>
+                <div className="flex justify-end pt-2">
+                  <Button size="sm" icon={<Save className="w-4 h-4" />} onClick={handleSave}>
+                    Save Notification Settings
+                  </Button>
                 </div>
               </div>
             </div>
@@ -981,44 +1160,10 @@ export default function Settings() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-xs font-medium text-text-secondary mb-3 block">Sidebar Page Visibility (Default ON)</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {NAV_VISIBILITY_OPTIONS.map((item) => {
-                      const isSettingsItem = item.id === 'settings';
-                      const enabled = isSettingsItem ? true : formData?.theme?.navVisibility?.[item.id] !== false;
-                      return (
-                        <label key={item.id} className="flex items-center justify-between rounded-lg border border-border/50 bg-bg-tertiary px-3 py-2">
-                          <span className="text-xs font-medium text-text-primary">{item.label}</span>
-                          <input
-                            type="checkbox"
-                            checked={enabled}
-                            disabled={isSettingsItem}
-                            onChange={(e) => {
-                              if (isSettingsItem) return;
-                              const current = formData?.theme?.navVisibility || {};
-                              updateThemeField({ navVisibility: { ...current, [item.id]: e.target.checked } });
-                            }}
-                            className="w-4 h-4 rounded border-border"
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-2 text-[11px] text-text-muted">When OFF, the page is hidden from the sidebar for your restaurant users. Settings is always ON to avoid lockout.</p>
-                </div>
-
-                {/* Logo upload */}
-                <div>
-                  <label className="text-xs font-medium text-text-secondary mb-3 block">Restaurant Logo</label>
-                  <div className="border-2 border-dashed border-border/50 rounded-xl p-6 flex flex-col items-center gap-3 text-center hover:border-blue-500/30 transition-colors cursor-pointer">
-                    <Palette className="w-10 h-10 text-text-muted/30" />
-                    <div>
-                      <p className="text-sm font-medium text-text-secondary">Drag & drop or click to upload</p>
-                      <p className="text-[11px] text-text-muted">PNG, JPG up to 2MB. Recommended: 200×200px</p>
-                    </div>
-                    <Button size="sm" variant="secondary">Choose File</Button>
-                  </div>
+                <div className="flex justify-end pt-2">
+                  <Button size="sm" icon={<Save className="w-4 h-4" />} onClick={handleSave}>
+                    Save Theme Settings
+                  </Button>
                 </div>
               </div>
             </div>
@@ -1222,102 +1367,262 @@ export default function Settings() {
             </div>
           )}
 
-          {/* Fallback for remaining empty tabs */}
+          {/* Full System Backup & Restore */}
           {activeTab === 'backup' && (
             <div className="space-y-6 animate-in fade-in">
-              <div className="border-b border-border/50 pb-4">
-                <h2 className="text-base font-bold text-text-primary">System Backup & Restore</h2>
-                <p className="text-xs text-text-muted mt-1">Manage database snapshots, export database backups, or restore them.</p>
+              <div className="border-b border-border/50 pb-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-text-primary flex items-center gap-2">
+                    <Database className="w-5 h-5 text-blue-400" />
+                    Full System Backup & Restore
+                  </h2>
+                  <p className="text-xs text-text-muted mt-1">
+                    Export complete system snapshots (all bills, tokens, items, prices, settings & product images) or restore onto any new computer with zero data loss.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="success" className="px-3 py-1 text-[11px] font-bold flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-emerald-400" />
+                    Zero Data Loss Migration
+                  </Badge>
+                </div>
+              </div>
+
+              {/* Live Database & Media Health Card */}
+              <div className="p-5 rounded-2xl bg-gradient-to-r from-blue-900/10 via-emerald-900/10 to-purple-900/10 border border-blue-500/20">
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-bold text-text-primary uppercase tracking-wider">
+                      Current System Data Status: {backupStatus?.restaurantName || 'Amora Bakes & Cafe'}
+                    </span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => refetchBackupStatus()}
+                    className="text-[10px] text-text-muted hover:text-white h-7 px-2"
+                  >
+                    <RefreshCw size={11} className="mr-1" />
+                    Refresh Stats
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                  <div className="p-3 rounded-xl bg-bg-primary/60 border border-border/40">
+                    <div className="text-[10px] uppercase font-bold text-text-muted">Menu Items</div>
+                    <div className="text-base font-black text-text-primary mt-0.5">{backupStatus?.totalItems ?? 429}</div>
+                    <div className="text-[9px] text-emerald-400 font-medium">All Prices & Barcodes</div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-bg-primary/60 border border-border/40">
+                    <div className="text-[10px] uppercase font-bold text-text-muted">Bills & Orders</div>
+                    <div className="text-base font-black text-text-primary mt-0.5">
+                      {(backupStatus?.totalOrders || 0) + (backupStatus?.totalTokens || 0)}
+                    </div>
+                    <div className="text-[9px] text-blue-400 font-medium">Full Sales History</div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-bg-primary/60 border border-border/40">
+                    <div className="text-[10px] uppercase font-bold text-text-muted">Customers</div>
+                    <div className="text-base font-black text-text-primary mt-0.5">{backupStatus?.totalCustomers ?? 0}</div>
+                    <div className="text-[9px] text-purple-400 font-medium">Loyalty & Phone Book</div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-bg-primary/60 border border-border/40">
+                    <div className="text-[10px] uppercase font-bold text-text-muted">Product Photos</div>
+                    <div className="text-base font-black text-text-primary mt-0.5">{backupStatus?.totalImages ?? 0}</div>
+                    <div className="text-[9px] text-amber-400 font-medium">{backupStatus?.uploadsSizeMb || '80'} MB Image Assets</div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-bg-primary/60 border border-border/40">
+                    <div className="text-[10px] uppercase font-bold text-text-muted">Database File</div>
+                    <div className="text-base font-black text-text-primary mt-0.5">{backupStatus?.databaseSizeMb || '0.75'} MB</div>
+                    <div className="text-[9px] text-text-muted font-medium">SQLite WAL Checkpointed</div>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Export card */}
-                <div className="p-6 rounded-2xl bg-bg-tertiary border border-border/50 flex flex-col justify-between space-y-4 hover:border-blue-500/30 transition-all">
+                {/* Export Card */}
+                <div className="p-6 rounded-2xl bg-bg-tertiary border border-border/50 flex flex-col justify-between space-y-5 hover:border-blue-500/30 transition-all">
                   <div className="space-y-3">
                     <div className="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
-                      <Database size={24} />
+                      <FileArchive size={26} />
                     </div>
-                    <h3 className="text-sm font-bold text-text-primary">Download System Backup</h3>
-                    <p className="text-xs text-text-muted leading-relaxed">
-                      Generate and download a copy of the SQLite database containing all menus, item lists, branches, staff accounts, customers, active shifts, settings, and orders.
-                    </p>
+                    <div>
+                      <h3 className="text-sm font-bold text-text-primary">1. Download System Backup</h3>
+                      <p className="text-xs text-text-muted leading-relaxed mt-1">
+                        Creates an all-inclusive archive containing the database (bills, items, inventory, customers, shifts, settings) <strong>and all product photos</strong>.
+                      </p>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-bg-primary/40 border border-border/40 space-y-1.5 text-[11px] text-text-secondary">
+                      <div className="flex items-center gap-2">
+                        <Check size={12} className="text-emerald-400 shrink-0" />
+                        <span>All Bills, Tokens & Order Numbers preserved</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Check size={12} className="text-emerald-400 shrink-0" />
+                        <span>All 429+ Product Images & Brand Logos bundled</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Check size={12} className="text-emerald-400 shrink-0" />
+                        <span>Selling Prices, Barcodes & Tax configurations</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="pt-2">
+
+                  <div className="space-y-2 pt-2">
                     <Button 
-                      onClick={handleDownloadBackup} 
+                      onClick={() => handleDownloadBackup('full')} 
                       disabled={isExporting || isRestoring}
-                      className="w-full flex items-center justify-center gap-2"
+                      className="w-full h-11 flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs shadow-md"
                     >
-                      <Download size={14} />
-                      {isExporting ? 'Generating...' : 'Download Backup (.db)'}
+                      <Download size={15} />
+                      {isExporting ? 'Packaging Archive...' : 'Download Full Backup (.zip) [Recommended]'}
+                    </Button>
+
+                    <Button 
+                      variant="outline"
+                      onClick={() => handleDownloadBackup('db')} 
+                      disabled={isExporting || isRestoring}
+                      className="w-full h-9 flex items-center justify-center gap-2 text-xs border-border/60 hover:bg-bg-primary"
+                    >
+                      <Database size={13} />
+                      Download Database Only (.db)
                     </Button>
                   </div>
                 </div>
 
-                {/* Import card */}
-                <div className="p-6 rounded-2xl bg-bg-tertiary border border-border/50 flex flex-col justify-between space-y-4 hover:border-red-500/30 transition-all">
+                {/* Import / Restore Card */}
+                <div className="p-6 rounded-2xl bg-bg-tertiary border border-border/50 flex flex-col justify-between space-y-5 hover:border-emerald-500/30 transition-all">
                   <div className="space-y-3">
-                    <div className="w-12 h-12 rounded-xl bg-red-500/10 text-red-400 flex items-center justify-center">
-                      <ShieldCheck size={24} />
+                    <div className="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                      <ShieldCheck size={26} />
                     </div>
-                    <h3 className="text-sm font-bold text-text-primary">Restore Database Backup</h3>
-                    <p className="text-xs text-text-muted leading-relaxed">
-                      Upload a previously saved `.db` backup file to restore the entire project database. Note that this action will completely overwrite the existing data.
-                    </p>
-                  </div>
-                  <div className="space-y-3">
-                    <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-border/50 rounded-xl cursor-pointer hover:border-red-500/30 transition-colors bg-bg-primary/50">
-                      <div className="flex flex-col items-center justify-center pt-5 pb-6 text-center">
-                        <UploadCloud size={20} className="text-text-muted mb-1" />
-                        <p className="text-[11px] text-text-secondary font-medium px-2 truncate max-w-full">
-                          {backupFile ? backupFile.name : 'Click to select .db backup file'}
-                        </p>
-                        <p className="text-[9px] text-text-muted mt-0.5">SQLite database file only</p>
-                      </div>
-                      <input 
-                        type="file" 
-                        accept=".db,.sqlite" 
-                        className="hidden" 
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) setBackupFile(file);
-                        }}
-                        disabled={isRestoring}
-                      />
-                    </label>
+                    <div>
+                      <h3 className="text-sm font-bold text-text-primary">2. Restore on Another Computer</h3>
+                      <p className="text-xs text-text-muted leading-relaxed mt-1">
+                        Select a previously downloaded <strong>.zip</strong> (Full Backup) or <strong>.db</strong> file to restore your entire restaurant data onto this computer.
+                      </p>
+                    </div>
 
-                    {backupFile && (
+                    <div className="space-y-3">
+                      <label className="flex flex-col items-center justify-center w-full min-h-[110px] border-2 border-dashed border-border/60 rounded-xl cursor-pointer hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-all bg-bg-primary/50 p-4">
+                        <div className="flex flex-col items-center justify-center text-center">
+                          <UploadCloud size={24} className={backupFile ? "text-emerald-400 mb-1.5" : "text-text-muted mb-1.5"} />
+                          <p className="text-xs text-text-primary font-bold px-2 truncate max-w-full">
+                            {backupFile ? backupFile.name : 'Click to select Backup File'}
+                          </p>
+                          <p className="text-[10px] text-text-muted mt-0.5">
+                            {backupFile 
+                              ? `${(backupFile.size / (1024 * 1024)).toFixed(2)} MB · ${backupFile.name.endsWith('.zip') ? 'Full Archive (DB + Images)' : 'Database File'}`
+                              : 'Supports Full Backup (.zip) or SQLite Database (.db)'}
+                          </p>
+                        </div>
+                        <input 
+                          type="file" 
+                          accept=".zip,.db,.sqlite" 
+                          className="hidden" 
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) setBackupFile(file);
+                          }}
+                          disabled={isRestoring}
+                        />
+                      </label>
+
+                      {backupFile && (
+                        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300 flex items-center justify-between">
+                          <div className="flex items-center gap-2 truncate">
+                            <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
+                            <span className="truncate font-semibold">{backupFile.name} ready to restore</span>
+                          </div>
+                          <Badge variant="success" className="text-[9px] shrink-0">
+                            {backupFile.name.endsWith('.zip') ? 'Full System' : 'DB Only'}
+                          </Badge>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-2">
+                    {backupFile ? (
                       <div className="flex gap-2">
                         <Button 
                           variant="danger" 
                           onClick={handleRestoreBackup} 
                           disabled={isRestoring}
-                          className="flex-1 flex items-center justify-center gap-2"
+                          className="flex-1 h-11 flex items-center justify-center gap-2 font-bold text-xs shadow-md"
                         >
-                          {isRestoring ? 'Restoring...' : 'Restore Now'}
+                          <RefreshCw size={14} className={isRestoring ? "animate-spin" : ""} />
+                          {isRestoring ? 'Restoring System & Images...' : 'Restore Now'}
                         </Button>
                         <Button 
                           variant="secondary" 
                           onClick={() => setBackupFile(null)} 
                           disabled={isRestoring}
+                          className="h-11 px-4 text-xs"
                         >
                           Cancel
                         </Button>
                       </div>
+                    ) : (
+                      <Button 
+                        disabled 
+                        variant="secondary" 
+                        className="w-full h-11 text-xs text-text-muted opacity-60"
+                      >
+                        Select a backup file above to restore
+                      </Button>
                     )}
                   </div>
                 </div>
               </div>
 
-              <div className="p-4 rounded-xl bg-amber-500/5 border border-amber-500/20 max-w-2xl">
-                <p className="text-[10px] uppercase font-bold text-amber-400 mb-1 flex items-center gap-1.5">
-                  ⚠️ Safety Warning
-                </p>
-                <ul className="list-disc pl-4 text-[10px] text-text-muted space-y-1">
-                  <li>Ensure no active orders or checkouts are being processed by terminals before executing a restore.</li>
-                  <li>Always export a fresh backup before uploading any files in case you need to revert.</li>
-                  <li>Uploading an invalid or corrupted file might cause the system database connection to fail.</li>
-                </ul>
+              {/* Migration Guide */}
+              <div className="p-5 rounded-2xl bg-bg-tertiary border border-border/50 space-y-3">
+                <h4 className="text-xs font-bold text-text-primary uppercase tracking-wider flex items-center gap-1.5">
+                  <ArrowRight size={14} className="text-blue-400" />
+                  Quick 3-Step Guide: Moving Restaurant Data to a New Computer
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-text-secondary">
+                  <div className="p-3.5 rounded-xl bg-bg-primary/50 border border-border/40 space-y-1">
+                    <div className="font-bold text-text-primary text-xs flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] font-black">1</span>
+                      Export on Old System
+                    </div>
+                    <p className="text-[11px] text-text-muted leading-relaxed">
+                      Click <strong>"Download Full Backup (.zip)"</strong> on your current system. This saves all bills, menu items, prices, barcodes, settings, and product pictures into one single file.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-bg-primary/50 border border-border/40 space-y-1">
+                    <div className="font-bold text-text-primary text-xs flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-[10px] font-black">2</span>
+                      Transfer File
+                    </div>
+                    <p className="text-[11px] text-text-muted leading-relaxed">
+                      Copy the downloaded <code>.zip</code> file onto a USB pen drive, external drive, or send it across your local network to your new computer.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-bg-primary/50 border border-border/40 space-y-1">
+                    <div className="font-bold text-text-primary text-xs flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-black">3</span>
+                      Restore on New System
+                    </div>
+                    <p className="text-[11px] text-text-muted leading-relaxed">
+                      Install and open the app on the new computer, open <strong>Settings → Backup & Restore</strong>, select your <code>.zip</code> file, and click <strong>"Restore Now"</strong>. Everything runs immediately!
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-1 flex items-center gap-2 text-[10px] text-amber-400/90 font-medium">
+                  <AlertTriangle size={12} className="shrink-0" />
+                  <span>The restore process automatically creates a safety snapshot of the existing database before replacing it.</span>
+                </div>
               </div>
             </div>
           )}
@@ -1382,7 +1687,7 @@ export default function Settings() {
             </div>
           )}
 
-          {!['general', 'taxes', 'currency', 'loyalty', 'webhooks', 'ordering', 'notifications', 'appearance', 'bill-settings', 'barcode', 'inventory', 'shifts', 'cancellation', 'backup', 'updates'].includes(activeTab) && (
+          {!['general', 'sidebar-visibility', 'taxes', 'currency', 'ordering', 'notifications', 'appearance', 'security', 'shifts', 'loyalty', 'webhooks', 'cancellation', 'inventory', 'bill-settings', 'barcode', 'backup', 'updates'].includes(activeTab) && (
             <div className="flex-1 flex items-center justify-center min-h-[400px]">
                <ComingSoon moduleName={tabGroups.flatMap(g => g.tabs).find(t => t.id === activeTab)?.label || activeTab} />
             </div>

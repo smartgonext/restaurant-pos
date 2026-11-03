@@ -47,9 +47,12 @@ export function exportToExcel(data: any[], opts: ExportOptions | string) {
   ws['!cols'] = colWidths;
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, options.title || 'Report');
+  const rawSheetName = (typeof options === 'object' && options.title) ? options.title : 'Report';
+  const safeSheetName = rawSheetName.replace(/[\\/?*:[\]]/g, '').slice(0, 31) || 'Report';
+  XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
 
-  XLSX.writeFile(wb, `${options.filename}-${dateStr()}.xlsx`);
+  const safeFilename = (options.filename || 'report').replace(/[^a-zA-Z0-9_-]/g, '_');
+  XLSX.writeFile(wb, `${safeFilename}-${dateStr()}.xlsx`);
 }
 
 // ─── PDF Export ────────────────────────────────────────────────────────────────
@@ -101,7 +104,8 @@ export function exportToPDF(data: any[], opts: ExportOptions | string) {
     },
   });
 
-  doc.save(`${options.filename}-${dateStr()}.pdf`);
+  const safePdfFilename = (options.filename || 'report').replace(/[^a-zA-Z0-9_-]/g, '_');
+  doc.save(`${safePdfFilename}-${dateStr()}.pdf`);
 }
 
 // ─── Print Export ──────────────────────────────────────────────────────────────

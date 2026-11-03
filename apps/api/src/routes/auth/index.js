@@ -10,7 +10,7 @@ function parseCookies(cookieHeader) {
     }, {});
 }
 function setRefreshTokenCookie(request, reply, refreshToken) {
-    const maxAge = 7 * 24 * 60 * 60; // 7 days
+    const maxAge = 365 * 24 * 60 * 60; // 365 days
     const isProduction = process.env.NODE_ENV === 'production';
     const origin = (request.headers && (request.headers.origin || request.headers.referer)) || '';
     const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1') || !isProduction;
@@ -83,15 +83,15 @@ export async function authRoutes(app) {
             restaurantId: staff.restaurantId,
             branchId: staff.branchId,
             staffId: staff.id,
-        }, { expiresIn: process.env.JWT_EXPIRES_IN || '15m' });
-        const refreshToken = app.jwt.sign({ id: staff.id, type: 'refresh', accountType: 'staff' }, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' });
+        }, { expiresIn: process.env.JWT_EXPIRES_IN || '365d' });
+        const refreshToken = app.jwt.sign({ id: staff.id, type: 'refresh', accountType: 'staff' }, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '365d' });
         // Save RefreshToken to DB
         await prisma.refreshToken.create({
             data: {
                 token: refreshToken,
                 userId: staff.id,
                 restaurantId: staff.restaurantId,
-                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+                expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 365 days
             }
         });
         // Set refresh token as httpOnly cookie. Frontend should not persist this value.
@@ -133,13 +133,13 @@ export async function authRoutes(app) {
         if (!validPassword) {
             return reply.status(401).send({ success: false, error: 'Invalid credentials' });
         }
-        const token = app.jwt.sign({ id: admin.id, role: admin.role }, { expiresIn: '1d' });
-        const refreshToken = app.jwt.sign({ id: admin.id, type: 'refresh', accountType: 'superadmin' }, { expiresIn: '7d' });
+        const token = app.jwt.sign({ id: admin.id, role: admin.role }, { expiresIn: process.env.JWT_EXPIRES_IN || '365d' });
+        const refreshToken = app.jwt.sign({ id: admin.id, type: 'refresh', accountType: 'superadmin' }, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '365d' });
         await prisma.refreshToken.create({
             data: {
                 token: refreshToken,
                 userId: admin.id,
-                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+                expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 365 days
             }
         });
         setRefreshTokenCookie(request, reply, refreshToken);
@@ -185,7 +185,7 @@ export async function authRoutes(app) {
                 // SECURITY: Generate NEW refresh token (rotation)
                 const newRefreshToken = app.jwt.sign(
                     { id: staff.id, type: 'refresh', accountType: 'staff' },
-                    { expiresIn: '7d' }
+                    { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '365d' }
                 );
                 // Save new token AND revoke old one atomically
                 await Promise.all([
@@ -194,7 +194,7 @@ export async function authRoutes(app) {
                             token: newRefreshToken,
                             userId: staff.id,
                             restaurantId: staff.restaurantId,
-                            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+                            expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
                         }
                     }),
                     prisma.refreshToken.update({
@@ -209,7 +209,7 @@ export async function authRoutes(app) {
                     restaurantId: staff.restaurantId,
                     branchId: staff.branchId,
                     staffId: staff.id,
-                }, { expiresIn: process.env.JWT_EXPIRES_IN || '15m' });
+                }, { expiresIn: process.env.JWT_EXPIRES_IN || '365d' });
                 setRefreshTokenCookie(request, reply, newRefreshToken);
                 return { success: true, data: { token: accessToken } };
             }
@@ -221,7 +221,7 @@ export async function authRoutes(app) {
                 // SECURITY: Generate NEW refresh token (rotation)
                 const newRefreshToken = app.jwt.sign(
                     { id: admin.id, type: 'refresh', accountType: 'superadmin' },
-                    { expiresIn: '7d' }
+                    { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '365d' }
                 );
                 // Save new token AND revoke old one atomically
                 await Promise.all([
@@ -229,7 +229,7 @@ export async function authRoutes(app) {
                         data: {
                             token: newRefreshToken,
                             userId: admin.id,
-                            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+                            expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
                         }
                     }),
                     prisma.refreshToken.update({
@@ -238,7 +238,7 @@ export async function authRoutes(app) {
                     })
                 ]);
                 // Generate new access token
-                const accessToken = app.jwt.sign({ id: admin.id, role: admin.role }, { expiresIn: '1d' });
+                const accessToken = app.jwt.sign({ id: admin.id, role: admin.role }, { expiresIn: process.env.JWT_EXPIRES_IN || '365d' });
                 setRefreshTokenCookie(request, reply, newRefreshToken);
                 return { success: true, data: { token: accessToken } };
             }

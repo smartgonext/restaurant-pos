@@ -7,6 +7,15 @@ import { soundManager } from '@/lib/sounds';
 import { useMainposStore } from '@/stores/mainposStore';
 import { useSubposStore } from '@/stores/subposStore';
 
+function isAdminSoundEnabled(): boolean {
+  try {
+    // Default is OFF (false) to prevent disturbance as requested
+    return localStorage.getItem('admin_order_notification_sound') === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export function useRealtimeOrders() {
   const { socket } = useSocket();
   const addNotification = useNotificationStore((state) => state.addNotification);
@@ -30,9 +39,11 @@ export function useRealtimeOrders() {
       }
       const orderNumber = order?.orderNumber || order?.id || 'Unknown';
 
-      soundManager.playOrderBell();
-      toast.success(`New Order Received: #${orderNumber}`, { duration: 6000 });
-      addNotification({ message: `New Order: #${orderNumber}`, type: 'order' });
+      if (isAdminSoundEnabled()) {
+        soundManager.playOrderBell();
+        toast.success(`New Order Received: #${orderNumber}`, { duration: 6000 });
+        addNotification({ message: `New Order: #${orderNumber}`, type: 'order' });
+      }
       
       // Invalidate query to refresh orders and dashboard automatically
       queryClient.invalidateQueries({ queryKey: ['orders'] });
@@ -81,9 +92,11 @@ export function useRealtimeOrders() {
         return;
       }
       const kotNumber = kot?.kotNumber || kot?.id || 'Unknown';
-      soundManager.playOrderBell();
-      toast.success(`New Kitchen Order: #${kotNumber}`);
-      addNotification({ message: `New KOT: #${kotNumber}`, type: 'kitchen' });
+      if (isAdminSoundEnabled()) {
+        soundManager.playOrderBell();
+        toast.success(`New Kitchen Order: #${kotNumber}`);
+        addNotification({ message: `New KOT: #${kotNumber}`, type: 'kitchen' });
+      }
       queryClient.invalidateQueries({ queryKey: ['kitchen-kots'] });
       // New KOT may affect sales/items reports and dashboard
       queryClient.invalidateQueries({ queryKey: ['reports'] });
@@ -99,7 +112,9 @@ export function useRealtimeOrders() {
 
     const handleTokenCreated = (data: any) => {
       const tokenNumber = data?.tokenNumber || data?.token?.tokenNumber || data?.tokenId;
-      toast.success(`New Token created ${tokenNumber ? `#${tokenNumber}` : ''}`);
+      if (isAdminSoundEnabled()) {
+        toast.success(`New Token created ${tokenNumber ? `#${tokenNumber}` : ''}`);
+      }
       queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       // Create token affects reports and dashboard totals
@@ -114,7 +129,9 @@ export function useRealtimeOrders() {
 
     const handleTokenUpdated = (data: any) => {
       const tokenNumber = data?.tokenNumber || data?.token?.tokenNumber || data?.id;
-      toast(`Token updated ${tokenNumber ? `#${tokenNumber}` : ''}`);
+      if (isAdminSoundEnabled()) {
+        toast(`Token updated ${tokenNumber ? `#${tokenNumber}` : ''}`);
+      }
       queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       // Token updates may change customer points / loyalty state
@@ -132,7 +149,9 @@ export function useRealtimeOrders() {
 
     const handleTokenPaid = (data: any) => {
       const tokenNumber = data?.tokenNumber || data?.token?.tokenNumber || data?.tokenId;
-      toast.success(`Token paid ${tokenNumber ? `#${tokenNumber}` : ''}`);
+      if (isAdminSoundEnabled()) {
+        toast.success(`Token paid ${tokenNumber ? `#${tokenNumber}` : ''}`);
+      }
       queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       // Payments can award or deduct loyalty points — refresh customer lists

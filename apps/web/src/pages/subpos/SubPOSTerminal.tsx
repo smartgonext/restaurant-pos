@@ -26,6 +26,7 @@ import { useWeightedBarcodeScanner } from '@/hooks/useWeightedBarcodeScanner';
 import { isKgMeasuredItem, parseWeightFromBarcode } from '@/lib/weightedBarcodeParser';
 import { useTouchLongPress } from '@/hooks/useTouchLongPress';
 import { ItemOptionsModal } from '@/components/modals/ItemOptionsModal';
+import { ReorderableCategoryBar } from '@/components/pos/ReorderableCategoryBar';
 
 // ── Axios instance ────────────────────────────────────────────────────────────
 const subposApi = axios.create({ baseURL: `${API_BASE_URL}/subpos` });
@@ -122,13 +123,34 @@ interface TokenResult {
 }
 
 // ── Core pricing helpers ──────────────────────────────────────────────────────
-function getMRPSellingPrice(m: InventoryMRP): number {
-  if (m.sellingPrice !== undefined && m.sellingPrice !== null) return Number(m.sellingPrice);
-  return Number(m.purchaseRate) * (1 + Number(m.profitPercent ?? 0) / 100);
+function getMRPSellingPrice(m: InventoryMRP, fallbackPrice: number = 0): number {
+  if (m.sellingPrice !== undefined && m.sellingPrice !== null && Number(m.sellingPrice) > 0) {
+    return Number(m.sellingPrice);
+  }
+  const purchase = Number(m.purchaseRate ?? 0);
+  const profit = Number(m.profitPercent ?? 0);
+  const computed = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+  if (computed > 0) return computed;
+  if (m.mrp !== undefined && m.mrp !== null && Number(m.mrp) > 0) {
+    return Number(m.mrp);
+  }
+  return Number(fallbackPrice || 0);
 }
 
 function getActiveMRPs(mrps: InventoryMRP[]): InventoryMRP[] {
-  return (mrps ?? []).filter(m => m.isActive !== false);
+  const active = (mrps ?? []).filter(m => m.isActive !== false);
+  const seen = new Set<string>();
+  const unique: InventoryMRP[] = [];
+  for (const m of active) {
+    const sp = Math.round(getMRPSellingPrice(m) * 100) / 100;
+    const mrp = Math.round(Number(m.mrp ?? sp) * 100) / 100;
+    const key = `${mrp}_${sp}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(m);
+    }
+  }
+  return unique;
 }
 
 function getLineTaxBreakdown(amount: number, taxType?: string | null, taxPercent?: number | null) {
@@ -155,7 +177,13 @@ type PosPackOption = {
   unitLabel?: string;
 };
 
-import { printHtmlOrFallback } from '@/lib/electronPrint';
+import { printHtmlOrFallback, printKOTTicket, getPrinterSettings } from '@/lib/electronPrint';
+
+const fmtAmt = (val: number | string | null | undefined) => {
+  const n = Number(val || 0);
+  if (isNaN(n)) return '0';
+  return n % 1 === 0 ? String(Math.round(n)) : n.toFixed(2);
+};
 
 // ── Print token slip ──────────────────────────────────────────────────────────
 function printTokenSlip(
@@ -195,9 +223,11 @@ function printTokenSlip(
         <div style="font-size:12pt;font-weight:700;margin-top:6px;">Total: <strong>${totalAmt}</strong></div>
         <div style="margin:10px 0"><img class="qr" src="${qrUrl}" alt="QR"/></div>
         <div style="font-size:10pt;color:#555">Scan to retrieve order</div>
+        <div style="font-size:8pt;color:#777;margin-top:8px;font-weight:600;">Powered by SmartGoNext</div>
       </body></html>
     `;
-    await printHtmlOrFallback(html);
+    const pSettings = getPrinterSettings(settings as any);
+    await printHtmlOrFallback(html, { deviceName: pSettings.billPrinterName || undefined });
   };
   invokePrint().catch(err => console.error('Print token failed', err));
 }
@@ -217,7 +247,10 @@ function TouchMenuItemCard({
   onLongPress: (item: MenuItem) => void;
 }) {
   const activeMRPs = getActiveMRPs(item.inventoryItem?.inventoryMRPs ?? []);
-  const displayPrice = activeMRPs.length > 0 ? getMRPSellingPrice(activeMRPs[0]) : Number(item.price);
+  const rawPrice = activeMRPs.length > 0
+    ? getMRPSellingPrice(activeMRPs[0], Number(item.price || 0))
+    : Number(item.price || 0);
+  const displayPrice = rawPrice > 0 ? rawPrice : Number(item.price || 0);
 
   const touchHandlers = useTouchLongPress({
     onClick: () => {
@@ -233,19 +266,20 @@ function TouchMenuItemCard({
     <div
       {...touchHandlers}
       className={cn(
-        "flex flex-col rounded-lg overflow-hidden border transition-all group scale-100 active:scale-95 select-none cursor-pointer",
+        "flex flex-col rounded-lg overflow-hidden border transition-all group scale-100 active:scale-95 select-none cursor-pointer touch-pan-y",
         isDisabled ? "opacity-50 pointer-events-none" : "",
         isLight
           ? "bg-white border-slate-200 hover:border-purple-500 hover:shadow-md text-slate-900"
           : "bg-[#1a1c23] border-gray-800 hover:border-gray-600 text-white"
       )}
     >
-      <div className={cn("relative w-full h-32 overflow-hidden flex items-center justify-center", isLight ? "bg-slate-50" : "bg-[#14151a]")}>
+      <div className={cn("relative w-full h-32 overflow-hidden flex items-center justify-center p-1.5", isLight ? "bg-slate-50" : "bg-[#14151a]")}>
         <img
           src={resolveImageUrl(item.image) || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name.charAt(0))}&background=1a1c23&color=fff`}
-          className="w-full h-full object-cover transition-all group-hover:scale-105"
+          className="w-full h-full object-contain transition-all group-hover:scale-105"
           alt={item.name}
           onError={(e) => {
+            e.currentTarget.onerror = null;
             e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name.charAt(0))}&background=1a1c23&color=fff`;
           }}
         />
@@ -266,6 +300,94 @@ function TouchMenuItemCard({
         <h4 className={cn("text-[11px] font-bold uppercase truncate mb-1", isLight ? "text-slate-800" : "text-white")}>{item.name}</h4>
         <span className={cn("text-xs font-black tracking-tight", isLight ? "text-purple-700" : "text-purple-400")}>{formatCurrency(displayPrice)}</span>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QUANTITY EDITOR MODAL (Auto-selects on open, permits multi-digit input 10, 15, etc.)
+// ─────────────────────────────────────────────────────────────────────────────
+interface QtyEditorModalProps {
+  cartItem: LocalCartItem;
+  initialValue: string;
+  onApply: (qty: number) => void;
+  onClose: () => void;
+}
+
+function QtyEditorModal({ cartItem, initialValue, onApply, onClose }: QtyEditorModalProps) {
+  const [val, setVal] = useState(initialValue);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Select all on initial mount ONLY, so typing immediately replaces initial number
+    // and typing double digits (10, 15) works smoothly without re-selecting on every stroke
+    const timer = setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.select();
+      }
+    }, 50);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const presets = getQtyPresets(cartItem.salesUnit);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsed = parseQtyInput(val);
+    if (parsed == null || parsed <= 0) {
+      toast.error('Enter a valid quantity');
+      return;
+    }
+    onApply(parsed);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[150]" onClick={onClose}>
+      <form
+        className="bg-[#1a1c23] rounded-xl border border-gray-800 p-4 w-full max-w-sm shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={handleSubmit}
+      >
+        <div className="text-white font-black text-sm uppercase tracking-wide mb-2">Edit Quantity</div>
+        <div className="text-gray-400 text-xs mb-3">{cartItem.displayName || cartItem.name}</div>
+
+        <select
+          className="w-full bg-[#0f1014] border border-gray-700 text-white text-xs rounded-lg px-2 py-2 mb-2"
+          value=""
+          onChange={(e) => {
+            const num = Number(e.target.value);
+            if (Number.isFinite(num) && num > 0) setVal(String(num));
+          }}
+        >
+          <option value="">Preset quantity</option>
+          {presets.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+        </select>
+
+        <input
+          ref={inputRef}
+          type="text"
+          inputMode="decimal"
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') onClose();
+          }}
+          placeholder="Type quantity (e.g. 10, 15, 0.5)"
+          className="w-full bg-[#0f1014] border border-gray-700 text-white text-lg font-bold rounded-lg px-3 py-2 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+        />
+        <div className="mt-2 text-xs text-gray-400">Preview: {formatQtyDisplay(Number(val || 0), cartItem.salesUnit)}</div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" className="px-3 py-1.5 text-xs bg-gray-800 rounded text-gray-300 hover:bg-gray-700" onClick={onClose}>Cancel</button>
+          <button
+            type="submit"
+            className="px-4 py-2 text-xs bg-purple-600 hover:bg-purple-500 rounded text-white font-bold transition active:scale-95"
+          >
+            Apply (Enter)
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -311,8 +433,10 @@ export default function SubPOSTerminal() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
 
+  const processScannedBarcodeRef = useRef<(rawBarcode: string) => boolean>(() => false);
+
   useWeightedBarcodeScanner((scanResult) => {
-    const processed = processScannedBarcode(scanResult.rawBarcode);
+    const processed = processScannedBarcodeRef.current(scanResult.rawBarcode);
     if (!processed) {
       setSearchQuery(scanResult.rawBarcode);
     }
@@ -363,7 +487,8 @@ export default function SubPOSTerminal() {
     const allMRPs = item.inventoryItem?.inventoryMRPs ?? item.inventoryMRPs ?? [];
     const activeMRPs = getActiveMRPs(allMRPs);
     if (activeMRPs.length > 0) {
-      basePrice = getMRPSellingPrice(activeMRPs[0]);
+      const mrpPrice = getMRPSellingPrice(activeMRPs[0], basePrice);
+      if (mrpPrice > 0) basePrice = mrpPrice;
     }
 
     const modPriceTotal = modifiers.reduce((sum, m) => sum + (m.price || 0), 0);
@@ -407,6 +532,17 @@ export default function SubPOSTerminal() {
   const [qtyEditor, setQtyEditor] = useState<{ id: string; value: string } | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
+  const customerNameInputRef = useRef<HTMLInputElement | null>(null);
+  const customerPhoneInputRef = useRef<HTMLInputElement | null>(null);
+  const createTokenBtnRef = useRef<HTMLButtonElement | null>(null);
+  const focusCustomerName = useCallback(() => {
+    toast.error('Customer Name is REQUIRED! Please enter customer name before generating token.');
+    if (customerNameInputRef.current) {
+      customerNameInputRef.current.focus();
+      customerNameInputRef.current.select();
+      customerNameInputRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, []);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [lastToken, setLastToken] = useState<TokenResult | null>(null);
   const [showPrintPreview, setShowPrintPreview] = useState(false);
@@ -545,6 +681,9 @@ export default function SubPOSTerminal() {
   const searchRef = useRef<HTMLInputElement>(null);
   const cartScrollRef = useRef<HTMLDivElement | null>(null);
   const isAppendingRef = useRef(false);
+  const displayWindowRef = useRef<Window | null>(null);
+  const isPresentingRef = useRef(sessionStorage.getItem('subpos_is_presenting') === 'true');
+  const [isCustomerDisplayActive, setIsCustomerDisplayActive] = useState(sessionStorage.getItem('subpos_is_presenting') === 'true');
 
   if (!isAuthenticated) return <Navigate to="/subpos" replace />;
 
@@ -700,11 +839,12 @@ export default function SubPOSTerminal() {
   }, [findInventoryMRPsByName, updateLocalCartItem]);
 
   // ── Token lookup ──
-  const lookupToken = async () => {
-    if (!lookupInput.trim()) return;
+  const lookupToken = async (overrideCode?: string | any) => {
+    const raw = (typeof overrideCode === 'string' ? overrideCode : lookupInput).trim();
+    if (!raw) return;
     try {
-      const isNum = /^\d+$/.test(lookupInput.trim());
-      const body = isNum ? { tokenNumber: Number(lookupInput.trim()) } : { qrCode: lookupInput.trim() };
+      const isNum = /^\d+$/.test(raw);
+      const body = isNum ? { tokenNumber: Number(raw) } : { qrCode: raw };
       const { data } = await subposApi.post('/token/lookup', body);
       const tokenData = data.data;
       setLoadedToken(tokenData);
@@ -776,10 +916,20 @@ export default function SubPOSTerminal() {
     return null;
   };
 
-  const processScannedBarcode = (rawBarcode: string) => {
+  const processScannedBarcode = (rawBarcode: string): boolean => {
     const code = String(rawBarcode || '').trim();
     if (!code) return false;
 
+    // 1. Token QR code / Token Number detection (UUID or TOK-xxx)
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(code);
+    const isTokPrefix = /^TOK-?\d+$/i.test(code);
+    if (isUuid || isTokPrefix) {
+      setSearchQuery('');
+      lookupToken(code);
+      return true;
+    }
+
+    // 2. Weight-based barcode parsing
     const weightResult = parseWeightFromBarcode(code);
     if (weightResult && weightResult.isWeightBased) {
       const item = allItems.find(i => {
@@ -808,7 +958,7 @@ export default function SubPOSTerminal() {
         const activeMRPs = getActiveMRPs(allMRPs);
         if (activeMRPs.length > 0) {
           const active = activeMRPs[0];
-          const price = getMRPSellingPrice(active);
+          const price = getMRPSellingPrice(active, Number(item.price || 0)) || Number(item.price || 0);
           addCartEntry({
             item,
             price,
@@ -839,6 +989,7 @@ export default function SubPOSTerminal() {
       }
     }
 
+    // 3. Pack variant matching
     const packMatch = findPackByBarcode(code);
     if (packMatch) {
       const displayName = `${packMatch.item.name} - ${packMatch.pack.label}`;
@@ -856,13 +1007,32 @@ export default function SubPOSTerminal() {
       return true;
     }
 
-    const exactMatch = allItems.find(i => i.productQR === code || String(i.id) === code);
+    // 4. Product Barcode / SKU / QR match -> automatically add to cart
+    const cleanCode = code.toLowerCase();
+    const exactMatch = allItems.find(i => {
+      const qr = String(i.productQR || '').trim().toLowerCase();
+      const bc = String(i.inventoryItem?.barcode || '').trim().toLowerCase();
+      const sku = String(i.inventoryItem?.sku || '').trim().toLowerCase();
+      const id = String(i.id).trim().toLowerCase();
+      if (qr && qr === cleanCode) return true;
+      if (bc && bc === cleanCode) return true;
+      if (sku && sku === cleanCode) return true;
+      if (id === cleanCode) return true;
+      if (Array.isArray(i.inventoryItem?.inventoryMRPs)) {
+        if (i.inventoryItem.inventoryMRPs.some((m: any) => String(m.barcode || '').trim().toLowerCase() === cleanCode)) {
+          return true;
+        }
+      }
+      return false;
+    });
     if (exactMatch) {
       handleAddToCart(exactMatch);
       setSearchQuery('');
+      toast.success(`Scanned: ${exactMatch.name}`, { duration: 800, icon: '🏷️' });
       return true;
     }
 
+    // 5. Text match
     const textMatches = allItems.filter(item => {
       const q = code.toLowerCase();
       return item.name.toLowerCase().includes(q) ||
@@ -870,14 +1040,24 @@ export default function SubPOSTerminal() {
         (item.productQR && item.productQR.toLowerCase().includes(q)) ||
         String(item.id) === code;
     });
-    if (textMatches.length === 1) {
+    if (textMatches.length === 1 && searchQuery.trim().toLowerCase() === cleanCode) {
       handleAddToCart(textMatches[0]);
       setSearchQuery('');
       return true;
     }
 
+    // 6. Fallback: If numeric and no menu items matched, try loading as a token number
+    if (/^\d+$/.test(code)) {
+      setSearchQuery('');
+      lookupToken(code);
+      return true;
+    }
+
+    toast.error('Item not found for scanning');
+    setSearchQuery('');
     return false;
   };
+  processScannedBarcodeRef.current = processScannedBarcode;
 
   // ── Filtered items ──
   const filteredItems = allItems.filter((item) => {
@@ -951,7 +1131,13 @@ export default function SubPOSTerminal() {
     return returnedId;
   };
 
+  const lastAddRef = useRef<{ id: number; time: number }>({ id: 0, time: 0 });
   const handleAddToCart = (item: MenuItem) => {
+    const now = Date.now();
+    if (lastAddRef.current.id === item.id && now - lastAddRef.current.time < 350) {
+      return; // Prevent touch double-fire
+    }
+    lastAddRef.current = { id: item.id, time: now };
     playSound();
     const packs = getPackOptions(item);
     if (packs.length > 0) {
@@ -962,7 +1148,7 @@ export default function SubPOSTerminal() {
     const activeMRPs = getActiveMRPs(allMRPs);
     if (activeMRPs.length > 0) {
       const active = activeMRPs[0];
-      const price = getMRPSellingPrice(active);
+      const price = getMRPSellingPrice(active, Number(item.price || 0)) || Number(item.price || 0);
       addCartEntry({
         item,
         price,
@@ -998,7 +1184,8 @@ export default function SubPOSTerminal() {
 
     if (activeMRPs.length > 0) {
       const active = activeMRPs[0];
-      basePrice = getMRPSellingPrice(active);
+      const mrpPrice = getMRPSellingPrice(active, basePrice);
+      if (mrpPrice > 0) basePrice = mrpPrice;
       mrpId = active.id;
       purchaseRate = active.purchaseRate;
       profitPercent = active.profitPercent;
@@ -1042,27 +1229,15 @@ export default function SubPOSTerminal() {
       e.preventDefault();
       const rawBarcode = searchQuery.trim();
       if (!rawBarcode) return;
-
-      if (processScannedBarcode(rawBarcode)) return;
-
-      const exactMatch = allItems.find(i => i.productQR === rawBarcode || String(i.id) === rawBarcode);
-      if (exactMatch) {
-        handleAddToCart(exactMatch);
-        setSearchQuery('');
-        toast.success(`Scanned: ${exactMatch.name}`, { duration: 800, icon: '🏷️' });
-      } else if (filteredItems.length === 1) {
-        handleAddToCart(filteredItems[0]);
-        setSearchQuery('');
-      } else if (rawBarcode.length > 0) {
-        toast.error('Item not found for scanning');
-        setSearchQuery('');
-      }
+      processScannedBarcodeRef.current(rawBarcode);
     }
   };
 
   // ── Cart item actions ──
   const changeLocalItemMRP = (cartItemId: string, selectedMRP: InventoryMRP) => {
-    const newPrice = getMRPSellingPrice(selectedMRP);
+    const existingCartItem = localCart.find(p => p.id === cartItemId);
+    const fallbackPrice = existingCartItem ? Number(existingCartItem.price || 0) : 0;
+    const newPrice = getMRPSellingPrice(selectedMRP, fallbackPrice) || fallbackPrice;
     setLocalCart(prev => prev.map(p => p.id === cartItemId ? {
       ...p,
       inventoryItemMRPId: selectedMRP.id,
@@ -1158,7 +1333,35 @@ export default function SubPOSTerminal() {
       playTokenSound();
       setLastToken(result);
       setShowPrintPreview(true);
-      printTokenSlip(result, localCart, customerName, customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings);
+      
+      const pSettings = getPrinterSettings(billSettings as any);
+      if (pSettings.autoPrintBill) {
+        printTokenSlip(result, localCart, customerName, customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings);
+      }
+
+      // Check if cart contains any KOT items and print to dedicated KOT printer
+      const isKotCartItem = (i: LocalCartItem) =>
+        Boolean((i as any).category?.isKOTEnabled) || (!i.inventoryItemMRPId && !i.salesUnit);
+      const kotItems = localCart.filter(isKotCartItem);
+
+      if (kotItems.length > 0 && pSettings.autoPrintKot) {
+        printKOTTicket({
+          tokenNumber: result.tokenNumber,
+          customerName,
+          customerPhone,
+          time: new Date(),
+          orderType: 'Sub POS Token',
+          waiterName: terminal?.name,
+          items: kotItems.map(ki => ({
+            name: ki.name,
+            quantity: ki.quantity,
+            unit: ki.salesUnit || undefined,
+          }))
+        }, terminal?.name || 'SMARTGONEXT Bakery', billSettings).catch(err => {
+          console.error('[KOT] SubPOS print KOT error:', err);
+        });
+      }
+
       setLocalCart([]);
       setCustomerName('');
       setCustomerPhone('');
@@ -1169,8 +1372,95 @@ export default function SubPOSTerminal() {
       toast.success(`Token #${result.tokenNumber} created!`);
       searchRef.current?.focus();
     },
-    onError: (err: any) => toast.error(err?.response?.data?.error || err?.message || 'Failed to create token'),
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to create token');
+      if (!customerName || !customerName.trim()) {
+        focusCustomerName();
+      }
+    },
   });
+
+  const presentToCustomer = async () => {
+    const activeRid = user?.restaurant?.id || (terminal as any)?.restaurantId || (billSettings as any)?.restaurantId || '';
+    const ridParam = activeRid ? `rid=${encodeURIComponent(String(activeRid))}` : '';
+    const displayUrl = `/admin/customer-display${ridParam ? `?${ridParam}` : ''}`;
+
+    // Electron: use IPC to open dedicated customer display window
+    const electron = (window as any).electron || (window as any).electronAPI;
+    if (electron && electron.openCustomerDisplay) {
+      electron.openCustomerDisplay(displayUrl);
+      isPresentingRef.current = true;
+      setIsCustomerDisplayActive(true);
+      sessionStorage.setItem('subpos_is_presenting', 'true');
+      toast.success('Customer screen opened on secondary monitor', { duration: 2500 });
+      return;
+    }
+
+    if (localCart.length > 0) {
+      const mappedItems = localCart.map(i => {
+        const mi = allItems.find(ai => ai.id === i.menuItemId);
+        const resolvedName = i.displayName || i.name;
+        const resolved = resolveImageUrl(mi?.image ?? null) ||
+          `https://ui-avatars.com/api/?name=${encodeURIComponent(resolvedName.charAt(0) || 'A')}&background=1a1c23&color=fff`;
+        return { menuItemId: i.menuItemId, name: resolvedName, price: i.price, quantity: i.quantity, image: resolved };
+      });
+      const subtotal = mappedItems.reduce((s, it) => s + it.price * it.quantity, 0);
+      const tax = mappedItems.reduce((sum, item) => {
+        const menu = allItems.find(m => m.id === item.menuItemId);
+        const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), menu?.taxType, Number(menu?.taxPercent ?? 0));
+        return sum + Number(line.tax || 0);
+      }, 0);
+      const payload = { restaurantId: activeRid, items: mappedItems, subtotal, tax, total: subtotal + tax };
+      try {
+        if (socket) socket.emit('customer_display_update', payload);
+      } catch { /* silent */ }
+    }
+
+    const isFile = window.location.protocol === 'file:';
+    const baseUrl = isFile
+      ? `${window.location.origin}${window.location.pathname}`
+      : window.location.origin;
+    const finalUrl = isFile ? `${baseUrl}#${displayUrl}` : `${baseUrl}${displayUrl}`;
+
+    if (displayWindowRef.current && !displayWindowRef.current.closed) {
+      displayWindowRef.current.location.href = finalUrl;
+      displayWindowRef.current.focus();
+    } else {
+      const newTab = window.open(finalUrl, '_blank');
+      if (newTab) {
+        displayWindowRef.current = newTab;
+      } else {
+        window.location.href = finalUrl;
+      }
+    }
+
+    isPresentingRef.current = true;
+    setIsCustomerDisplayActive(true);
+    sessionStorage.setItem('subpos_is_presenting', 'true');
+    toast.success('Customer display opened', { duration: 2000 });
+  };
+
+  // Auto Broadcast Live Cart to Customer Display
+  useEffect(() => {
+    if (!socket || !isPresentingRef.current) return;
+    const activeRid = user?.restaurant?.id || (terminal as any)?.restaurantId || (billSettings as any)?.restaurantId;
+    if (!activeRid) return;
+    const mappedItems = localCart.map(i => {
+      const mi = allItems.find(ai => ai.id === i.menuItemId);
+      const resolvedName = i.displayName || i.name;
+      const resolved = resolveImageUrl(mi?.image ?? null) ||
+        `https://ui-avatars.com/api/?name=${encodeURIComponent(resolvedName.charAt(0) || 'A')}&background=1a1c23&color=fff`;
+      return { menuItemId: i.menuItemId, name: resolvedName, price: i.price, quantity: i.quantity, image: resolved };
+    });
+    const subtotal = mappedItems.reduce((s, it) => s + it.price * it.quantity, 0);
+    const tax = mappedItems.reduce((sum, item) => {
+      const menu = allItems.find(m => m.id === item.menuItemId);
+      const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), menu?.taxType, Number(menu?.taxPercent ?? 0));
+      return sum + Number(line.tax || 0);
+    }, 0);
+    const payload = { restaurantId: activeRid, items: mappedItems, subtotal, tax, total: subtotal + tax };
+    socket.emit('customer_display_update', payload);
+  }, [localCart, socket, user?.restaurant?.id, terminal, billSettings, allItems]);
 
   return (
     <div className={cn(
@@ -1184,8 +1474,11 @@ export default function SubPOSTerminal() {
         isLight ? "bg-white border-slate-200 text-slate-900 shadow-sm" : "bg-[#1a1c23] border-gray-800 text-white"
       )}>
         <div className="flex items-center gap-3">
-          <CreditCard className="w-5 h-5 text-purple-500" />
-          <span className={cn("font-bold uppercase tracking-wide text-sm", isLight ? "text-slate-800" : "text-gray-200")}>{terminal?.name ?? 'SUB POS'}</span>
+          <div className="flex items-center gap-1.5">
+            <span className={cn("font-black tracking-wider text-sm uppercase", isLight ? "text-slate-900" : "text-white")}>AMORA</span>
+            <span className={cn("text-xs font-semibold tracking-wide", isLight ? "text-slate-500" : "text-slate-400")}>·</span>
+            <span className={cn("font-bold uppercase tracking-wide text-sm", isLight ? "text-slate-800" : "text-gray-200")}>{terminal?.name ?? 'SUB POS'}</span>
+          </div>
           {user?.name && (
             <span className={cn("px-2 py-0.5 text-[10px] font-black uppercase rounded-md border tracking-wider", isLight ? "bg-purple-100 text-purple-800 border-purple-200" : "bg-purple-500/10 text-purple-300 border-purple-500/20")}>
               Staff: {user.name}
@@ -1210,6 +1503,20 @@ export default function SubPOSTerminal() {
           >
             {isLight ? <Moon className="w-3.5 h-3.5 text-indigo-600" /> : <Sun className="w-3.5 h-3.5 text-amber-400" />}
             <span>{isLight ? "Dark" : "Light"}</span>
+          </button>
+          {/* Customer Screen Button */}
+          <button
+            onClick={() => presentToCustomer()}
+            className={cn(
+              "py-1.5 px-2.5 rounded-md text-[11px] font-bold uppercase transition flex items-center gap-1.5 border",
+              isCustomerDisplayActive
+                ? (isLight ? "bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200" : "bg-emerald-950/60 text-emerald-300 border-emerald-700/80 hover:bg-emerald-900/60")
+                : (isLight ? "bg-slate-200 text-slate-800 border-slate-300 hover:bg-slate-300" : "bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700")
+            )}
+            title="Open or refresh Customer Display on secondary monitor"
+          >
+            <span>🖥️ Customer Screen</span>
+            <span className={cn("w-2 h-2 rounded-full", isCustomerDisplayActive ? "bg-emerald-400 animate-pulse" : "bg-gray-400")} />
           </button>
           <span className={cn(
             "px-2.5 py-1 text-[10px] font-bold uppercase rounded-md border tracking-wider",
@@ -1411,6 +1718,10 @@ export default function SubPOSTerminal() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={handleSearchKeyDown}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                  onFocus={(e) => (e.target as HTMLInputElement).select()}
+                  data-enter-ignore="true"
+                  data-enter-action="search"
                   placeholder="Search menu items or scan barcode..."
                   className={cn(
                     "w-full rounded-md py-2 pl-9 pr-4 text-sm outline-none transition-all",
@@ -1430,43 +1741,14 @@ export default function SubPOSTerminal() {
             </div>
 
             {/* Horizontal category buttons */}
-            <div className="flex w-full max-w-full min-w-0 items-center gap-1.5 overflow-x-auto pb-1 pt-1 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-              {(() => {
-                const denseCategories = categories.length > 20;
-                const chipClass = denseCategories
-                  ? 'shrink-0 whitespace-nowrap rounded-md border px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-all snap-start leading-none'
-                  : 'shrink-0 whitespace-nowrap rounded-md border px-3 py-2 text-[10px] font-bold uppercase tracking-wider transition-all snap-start leading-none';
-                return (
-                  <>
-                    <button
-                      onClick={() => setSelectedCategoryId(null)}
-                      className={cn(
-                        chipClass,
-                        selectedCategoryId === null
-                          ? (isLight ? 'bg-purple-600 border-purple-600 text-white font-black shadow-md' : 'bg-purple-500/20 border-purple-500 text-purple-300 font-black shadow-lg shadow-purple-500/10')
-                          : (isLight ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-200 hover:text-slate-900 shadow-sm' : 'bg-[#1a1c23] border-gray-800 text-gray-400 hover:bg-gray-800 hover:text-white')
-                      )}
-                    >
-                      All Items
-                    </button>
-                    {categories.map((cat) => (
-                      <button
-                        key={cat.id}
-                        onClick={() => setSelectedCategoryId(cat.id)}
-                        className={cn(
-                          chipClass,
-                          selectedCategoryId === cat.id
-                            ? (isLight ? 'bg-purple-600 border-purple-600 text-white font-black shadow-md' : 'bg-purple-500/20 border-purple-500 text-purple-300 font-black shadow-lg shadow-purple-500/10')
-                            : (isLight ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-200 hover:text-slate-900 shadow-sm' : 'bg-[#1a1c23] border-gray-800 text-gray-400 hover:bg-gray-800 hover:text-white')
-                        )}
-                      >
-                        {cat.name}
-                      </button>
-                    ))}
-                  </>
-                );
-              })()}
-            </div>
+            <ReorderableCategoryBar
+              categories={categories}
+              activeCategoryId={selectedCategoryId}
+              onSelectCategory={(id) => setSelectedCategoryId(id === 'all' || id === null ? null : Number(id))}
+              isLight={isLight}
+              storageKey="pos_category_order"
+              className="w-full max-w-full min-w-0"
+            />
           </div>
 
           {/* Items grid */}
@@ -1577,14 +1859,24 @@ export default function SubPOSTerminal() {
                 type="text"
                 value={lookupInput}
                 onChange={(e) => setLookupInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookupToken(); } }}
+                onClick={(e) => (e.target as HTMLInputElement).select()}
+                onFocus={(e) => (e.target as HTMLInputElement).select()}
+                data-enter-ignore="true"
+                data-enter-action="lookup"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    lookupToken();
+                  }
+                }}
                 placeholder="Scan QR or Enter #"
                 className={cn(
                   "flex-1 rounded-md py-2 pl-3 pr-4 text-sm font-black outline-none transition-all",
                   isLight ? "bg-white border border-slate-300 text-slate-900 placeholder-slate-400 focus:border-purple-600" : "bg-[#0f1014] border border-gray-800 text-white placeholder-gray-600 focus:border-purple-500"
                 )}
               />
-              <button onClick={lookupToken} className="bg-purple-600 hover:bg-purple-500 text-white px-4 rounded-md font-bold text-xs transition">
+              <button onClick={() => lookupToken()} className="bg-purple-600 hover:bg-purple-500 text-white px-4 rounded-md font-bold text-xs transition">
                 Find
               </button>
             </div>
@@ -1632,6 +1924,7 @@ export default function SubPOSTerminal() {
                             alt={itemName}
                             className="w-10 h-10 rounded-md object-cover flex-shrink-0"
                             onError={(e) => {
+                              e.currentTarget.onerror = null;
                               e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(itemName)}&background=1a1c23&color=fff`;
                             }}
                           />
@@ -1675,6 +1968,7 @@ export default function SubPOSTerminal() {
                               alt={item.name}
                               className="w-12 h-12 rounded-md object-cover flex-shrink-0"
                               onError={(e) => {
+                                e.currentTarget.onerror = null;
                                 e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name)}&background=1a1c23&color=fff`;
                               }}
                             />
@@ -1706,110 +2000,128 @@ export default function SubPOSTerminal() {
                         const label = item.displayName || item.name;
                         const imgSrc = resolveImageUrl(mi?.image ?? null) || `https://ui-avatars.com/api/?name=${encodeURIComponent(label)}&background=1a1c23&color=fff`;
 
-                        return (
-                          <div id={`local-${item.id}`} key={item.id} className={cn(
-                            "flex gap-3 p-2 rounded relative overflow-hidden group items-start border transition-all",
-                            isLight ? "bg-purple-50/70 border-purple-200 text-slate-900 shadow-sm" : "bg-purple-500/5 border-purple-500/20 text-white"
-                          )}>
-                            <div className="absolute left-0 top-0 bottom-0 w-1 bg-purple-600" />
-                            <img 
-                              src={imgSrc} 
-                              alt={label} 
-                              className="w-12 h-12 rounded-md object-cover flex-shrink-0 ml-2 mt-0.5" 
-                              onError={(e) => {
-                                e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(label)}&background=1a1c23&color=fff`;
-                              }}
-                            />
-                            <div className="flex-1 min-w-0 pl-1">
-                              <h4 className={cn("text-xs font-bold uppercase truncate leading-tight mb-1", isLight ? "text-slate-900" : "text-white")}>{label}</h4>
-                              {item.modifiers && item.modifiers.length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-0.5 mb-1.5">
-                                  {item.modifiers.map((m, i) => (
-                                    <span key={i} className={cn("text-[8px] border rounded px-1 py-0.5 font-bold uppercase", isLight ? "bg-purple-100 border-purple-300 text-purple-800" : "bg-purple-500/15 border-purple-500/30 text-purple-300")}>
-                                      +{m.name} (+₹{Number(m.price).toFixed(2)})
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
+                          return (
+                            <div id={`local-${item.id}`} key={item.id} className={cn(
+                              "flex gap-2 p-2 rounded relative overflow-hidden group items-center border transition-all",
+                              isLight ? "bg-purple-50/70 border-purple-200 text-slate-900 shadow-sm" : "bg-purple-500/5 border-purple-500/20 text-white"
+                            )}>
+                              <div className="absolute left-0 top-0 bottom-0 w-1 bg-purple-600" />
 
-                              {/* MRP selector */}
-                              {activeMRPs.length > 1 ? (
-                                <div className="space-y-1">
-                                  <select
-                                    value={String(item.inventoryItemMRPId ?? (selectedMRP?.id ?? ''))}
-                                    onChange={(e) => {
-                                      const mrp = activeMRPs.find(m => m.id === Number(e.target.value));
-                                      if (mrp) changeLocalItemMRP(item.id, mrp);
-                                    }}
-                                    className={cn("w-full border text-xs rounded-lg px-2 py-1.5 focus:outline-none", isLight ? "bg-white border-slate-300 text-slate-900 focus:border-purple-600" : "bg-[#0f1014] border border-gray-700 text-white focus:border-purple-500")}
-                                  >
-                                    {activeMRPs.map(m => {
-                                      const mrpValue = Number(m.mrp ?? getMRPSellingPrice(m));
-                                      return (
-                                        <option key={m.id} value={m.id}>
-                                          MRP: ₹{mrpValue.toFixed(2)}
-                                        </option>
-                                      );
-                                    })}
-                                  </select>
-                                  {selectedMRP && (
-                                    <div className={cn("text-[10px] px-1", isLight ? "text-slate-600" : "text-gray-500")}>
-                                      Selling: <span className="text-green-600 font-bold">₹{getMRPSellingPrice(selectedMRP).toFixed(2)}</span>
-                                      {' · '}Cost: ₹{Number(selectedMRP.purchaseRate).toFixed(2)}
-                                      {' · '}Profit: {Number(selectedMRP.profitPercent ?? 0).toFixed(1)}%
-                                      {selectedMRP.createdAt ? ` · ${new Date(selectedMRP.createdAt).toLocaleDateString()}` : ''}
+                              {/* 🛠️ LEFT: Edit Options Button 🛠️ */}
+                              <button
+                                onClick={() => {
+                                  setOptionsModalTarget({
+                                    item: mi || { name: item.displayName || item.name, price: item.price },
+                                    cartItemId: item.id,
+                                    existingQty: item.quantity,
+                                    existingIsParcel: (item as any).isParcel || item.displayName?.includes('[PARCEL]'),
+                                    existingNotes: (item as any).notes || '',
+                                    existingSelectedModifiers: item.modifiers || [],
+                                  });
+                                }}
+                                className={cn("p-1.5 rounded-lg border transition flex-shrink-0 ml-1 active:scale-95", isLight ? "bg-white hover:bg-indigo-50 text-indigo-600 border-indigo-200 shadow-xs" : "bg-[#161824] hover:bg-indigo-500/10 text-indigo-400 border-indigo-500/30")}
+                                title="Edit Item Options (Parcel, Modifiers, Notes)"
+                              >
+                                <Edit size={14} />
+                              </button>
+
+                              <img 
+                                src={imgSrc} 
+                                alt={label} 
+                                className="w-12 h-12 rounded-md object-cover flex-shrink-0 ml-1 mt-0.5" 
+                                onError={(e) => {
+                                  e.currentTarget.onerror = null;
+                                  e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(label)}&background=1a1c23&color=fff`;
+                                }}
+                              />
+                              <div className="flex-1 min-w-0 pl-1">
+                                <h4 className={cn("text-xs font-bold uppercase truncate leading-tight mb-1", isLight ? "text-slate-900" : "text-white")}>{label}</h4>
+                                {item.modifiers && item.modifiers.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-0.5 mb-1.5">
+                                    {item.modifiers.map((m, i) => (
+                                      <span key={i} className={cn("text-[8px] border rounded px-1 py-0.5 font-bold uppercase", isLight ? "bg-purple-100 border-purple-300 text-purple-800" : "bg-purple-500/15 border-purple-500/30 text-purple-300")}>
+                                        +{m.name} (+₹{Number(m.price).toFixed(2)})
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {/* MRP selector */}
+                                {activeMRPs.length > 1 ? (
+                                  <div className="space-y-1">
+                                    <select
+                                      value={String(item.inventoryItemMRPId ?? (selectedMRP?.id ?? ''))}
+                                      onChange={(e) => {
+                                        const mrp = activeMRPs.find(m => m.id === Number(e.target.value));
+                                        if (mrp) changeLocalItemMRP(item.id, mrp);
+                                      }}
+                                      className={cn("w-full border text-xs rounded-lg px-2 py-1.5 focus:outline-none", isLight ? "bg-white border-slate-300 text-slate-900 focus:border-purple-600" : "bg-[#0f1014] border border-gray-700 text-white focus:border-purple-500")}
+                                    >
+                                      {activeMRPs.map(m => {
+                                        const mrpValue = Number(m.mrp ?? getMRPSellingPrice(m));
+                                        return (
+                                          <option key={m.id} value={m.id}>
+                                            MRP: ₹{fmtAmt(mrpValue)}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                    {selectedMRP && (
+                                      <div className={cn("text-[10px] px-1 font-semibold flex items-center gap-2", isLight ? "text-slate-700" : "text-gray-300")}>
+                                        <span>MRP: <strong className={isLight ? "text-slate-900" : "text-white"}>₹{fmtAmt(selectedMRP.mrp ?? getMRPSellingPrice(selectedMRP))}</strong></span>
+                                        <span>·</span>
+                                        <span>Rate: <strong className="text-green-500 font-bold">₹{fmtAmt(getMRPSellingPrice(selectedMRP))}</strong></span>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : activeMRPs.length === 1 ? (
+                                  <div className={cn("text-[10px] space-y-0.5", isLight ? "text-slate-700" : "text-gray-300")}>
+                                    <div className="flex items-center gap-2">
+                                      <span>MRP: <strong className={isLight ? "text-slate-900" : "text-white"}>₹{fmtAmt(activeMRPs[0].mrp ?? getMRPSellingPrice(activeMRPs[0]))}</strong></span>
+                                      <span>·</span>
+                                      <span>Rate: <strong className="text-green-500 font-bold">₹{fmtAmt(getMRPSellingPrice(activeMRPs[0]))}</strong></span>
                                     </div>
-                                  )}
-                                </div>
-                              ) : activeMRPs.length === 1 ? (
-                                <div className={cn("text-[11px] space-y-0.5", isLight ? "text-slate-600" : "text-gray-400")}>
-                                  <div>Selling: <span className="text-green-600 font-bold">₹{getMRPSellingPrice(activeMRPs[0]).toFixed(2)}</span></div>
-                                  <div>Cost: ₹{Number(activeMRPs[0].purchaseRate).toFixed(2)} · Profit: {Number(activeMRPs[0].profitPercent ?? 0).toFixed(1)}%</div>
-                                  {activeMRPs[0].createdAt && <div className={isLight ? "text-slate-500" : "text-gray-600"}>Added: {new Date(activeMRPs[0].createdAt).toLocaleDateString()}</div>}
-                                </div>
-                              ) : (
-                                <div className={cn("text-[11px]", isLight ? "text-slate-600" : "text-gray-400")}>{formatCurrency(item.price)}</div>
-                              )}
-                            </div>
+                                  </div>
+                                ) : (
+                                  <div className={cn("text-[11px]", isLight ? "text-slate-600" : "text-gray-400")}>{formatCurrency(item.price)}</div>
+                                )}
+                              </div>
 
-                            {/* Qty controls + total */}
-                            <div className="flex flex-col items-end justify-between gap-2">
-                              <div className={cn("flex items-center gap-1 rounded-lg p-1 border", isLight ? "bg-white border-slate-300" : "bg-[#0f1014] border-gray-800")}>
-                                <button onClick={() => updateLocalQty(item.id, -1)} className={cn("w-7 h-7 rounded-md flex items-center justify-center transition active:scale-95 text-sm font-bold", isLight ? "bg-slate-200 hover:bg-slate-300 text-slate-800" : "bg-gray-800 hover:bg-gray-700 text-gray-300")}>-</button>
-                                <button
-                                  onClick={() => setQtyEditor({ id: item.id, value: String(item.quantity) })}
-                                  className={cn("font-black text-[11px] w-[72px] text-center truncate transition", isLight ? "text-slate-900 hover:text-purple-700" : "text-white hover:text-purple-300")}
-                                  title="Edit quantity"
-                                >
-                                  {formatQtyDisplay(item.quantity, item.salesUnit)}
-                                </button>
-                                <button onClick={() => updateLocalQty(item.id, 1)} className={cn("w-7 h-7 rounded-md flex items-center justify-center transition active:scale-95 text-sm font-bold", isLight ? "bg-slate-200 hover:bg-slate-300 text-slate-800" : "bg-gray-800 hover:bg-gray-700 text-gray-300")}>+</button>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <div className={cn("text-xs font-black", isLight ? "text-slate-900" : "text-white")}>{formatCurrency(item.price * item.quantity)}</div>
-                                <button
-                                  onClick={() => {
-                                    setOptionsModalTarget({
-                                      item: mi || { name: item.displayName || item.name, price: item.price },
-                                      cartItemId: item.id,
-                                      existingQty: item.quantity,
-                                      existingIsParcel: (item as any).isParcel || item.displayName?.includes('[PARCEL]'),
-                                      existingNotes: (item as any).notes || '',
-                                      existingSelectedModifiers: item.modifiers || [],
-                                    });
-                                  }}
-                                  className={cn("text-gray-400 hover:text-indigo-400 transition p-1 rounded", isLight ? "hover:bg-slate-200" : "hover:bg-gray-800")}
-                                  title="Edit Item Options (Parcel, Modifiers, Notes)"
-                                >
-                                  <Edit size={13} />
-                                </button>
-                                <button onClick={() => removeLocalItem(item.id)} className="text-gray-400 hover:text-red-500 transition">
-                                  <Trash2 size={13} />
-                                </button>
+                              {/* Qty controls + total */}
+                              <div className="flex flex-col items-end justify-between gap-2">
+                                <div className={cn("flex items-center gap-1 rounded-lg p-1 border", isLight ? "bg-white border-slate-300" : "bg-[#0f1014] border-gray-800")}>
+                                  <button
+                                    onClick={() => updateLocalQty(item.id, -1)}
+                                    className={cn("w-8 h-8 rounded-md flex items-center justify-center transition active:scale-90 text-base font-black select-none", isLight ? "bg-slate-200 hover:bg-slate-300 text-slate-800" : "bg-gray-800 hover:bg-gray-700 text-gray-200")}
+                                    title="Decrease quantity"
+                                  >
+                                    -
+                                  </button>
+                                  <button
+                                    onClick={() => setQtyEditor({ id: item.id, value: String(item.quantity) })}
+                                    className={cn("font-black text-[11px] min-w-[56px] text-center truncate px-1 transition", isLight ? "text-slate-900 hover:text-purple-700" : "text-white hover:text-purple-300")}
+                                    title="Edit quantity"
+                                  >
+                                    {formatQtyDisplay(item.quantity, item.salesUnit)}
+                                  </button>
+                                  <button
+                                    onClick={() => updateLocalQty(item.id, 1)}
+                                    className={cn("w-8 h-8 rounded-md flex items-center justify-center transition active:scale-90 text-base font-black select-none", isLight ? "bg-slate-200 hover:bg-slate-300 text-slate-800" : "bg-gray-800 hover:bg-gray-700 text-gray-200")}
+                                    title="Increase quantity"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <div className={cn("text-xs font-black", isLight ? "text-slate-900" : "text-white")}>{formatCurrency(item.price * item.quantity)}</div>
+                                  {/* 🗑️ RIGHT: Normal Delete button 🗑️ */}
+                                  <button onClick={() => removeLocalItem(item.id)} className="text-gray-400 hover:text-red-500 transition p-1 rounded hover:bg-red-500/10 active:scale-95" title="Remove item">
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        );
+                          );
                       })}
                     </div>
                   </div>
@@ -1846,9 +2158,19 @@ export default function SubPOSTerminal() {
                   <div className="relative flex-1">
                     <User className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 z-10", isLight ? "text-slate-300" : "text-slate-600")} />
                     <input
+                      ref={customerNameInputRef}
                       type="text"
+                      data-enter-ignore="true"
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          customerPhoneInputRef.current?.focus();
+                          customerPhoneInputRef.current?.select();
+                        }
+                      }}
                       placeholder="Cust Name * (Required)"
                       className={cn("w-full pl-8 pr-3 py-2 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm", isLight ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400" : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400")}
                     />
@@ -1856,11 +2178,22 @@ export default function SubPOSTerminal() {
                   <div className="relative flex-1">
                     <Phone className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 z-10", isLight ? "text-slate-300" : "text-slate-600")} />
                     <input
+                      ref={customerPhoneInputRef}
                       type="tel"
+                      data-enter-ignore="true"
                       value={customerPhone}
                       onFocus={() => setShowCustomerDropdown(true)}
                       onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 200)}
                       onChange={(e) => { setCustomerPhone(e.target.value); setShowCustomerDropdown(true); }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setShowCustomerDropdown(false);
+                          (e.target as HTMLElement).blur();
+                          createTokenBtnRef.current?.focus();
+                        }
+                      }}
                       placeholder="Phone (Opt)"
                       className={cn("w-full pl-8 pr-3 py-2 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm", isLight ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400" : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400")}
                     />
@@ -1906,75 +2239,37 @@ export default function SubPOSTerminal() {
                       <span>{formatCurrency(localCartTax)}</span>
                     </div>
                   )}
+                  {loadedToken?.status === 'paid' && (
+                    <div className="flex justify-between text-emerald-600 font-bold">
+                      <span>Status</span>
+                      <span className="uppercase font-black">PAID (₹{Number(loadedToken.total).toFixed(2)})</span>
+                    </div>
+                  )}
                   <div className={cn("flex justify-between items-center text-base font-black pt-2 border-t mt-2", isLight ? "text-slate-900 border-slate-300" : "text-white border-gray-800")}>
-                    <span>TOTAL DUE</span>
-                    {isEditingTotal ? (
-                      <div className="flex items-center gap-1">
-                        <span className="text-sm font-black text-green-600">₹</span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          autoFocus
-                          value={totalInputVal}
-                          onChange={(e) => setTotalInputVal(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              const val = parseFloat(totalInputVal);
-                              if (!isNaN(val) && val >= 0) {
-                                setCustomTotalOverride(val);
-                                toast.success(`Total updated to ₹${val.toFixed(2)}`);
-                              } else {
-                                setCustomTotalOverride(null);
-                              }
-                              setIsEditingTotal(false);
-                            } else if (e.key === 'Escape') {
-                              setIsEditingTotal(false);
-                            }
-                          }}
-                          onBlur={() => {
-                            const val = parseFloat(totalInputVal);
-                            if (!isNaN(val) && val >= 0) {
-                              setCustomTotalOverride(val);
-                            } else {
-                              setCustomTotalOverride(null);
-                            }
-                            setIsEditingTotal(false);
-                          }}
-                          className={cn(
-                            "w-28 px-2 py-1 border-2 rounded-lg text-base font-black outline-none shadow-inner",
-                            isLight ? "bg-white border-green-600 text-green-900" : "bg-[#0f1014] border-green-400 text-green-300"
-                          )}
-                        />
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setTotalInputVal(String(displayTotal));
-                          setIsEditingTotal(true);
-                        }}
-                        className={cn(
-                          "flex items-center gap-1.5 px-2 py-1 rounded-lg border transition group cursor-pointer hover:scale-105 active:scale-95",
-                          customTotalOverride !== null
-                            ? (isLight ? "bg-amber-100 border-amber-400 text-amber-900 font-black" : "bg-amber-500/20 border-amber-500/50 text-amber-300 font-black")
-                            : (isLight ? "bg-green-50 border-green-300 text-green-700 hover:bg-green-100 font-black" : "bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 font-black")
-                        )}
-                        title="Click to edit TOTAL DUE amount for this bill"
-                      >
-                        <span className="font-black text-base">{formatCurrency(displayTotal)}</span>
-                        <Edit size={13} className="opacity-70 group-hover:opacity-100" />
-                        {customTotalOverride !== null && (
-                          <span className="text-[9px] font-bold uppercase bg-amber-500 text-black px-1.5 py-0.5 rounded">Edited</span>
-                        )}
-                      </button>
-                    )}
+                    <span>{loadedToken?.status === 'paid' && localCart.length === 0 ? 'TOTAL PAID' : 'TOTAL DUE'}</span>
+                    <span className={cn("font-black text-xl", isLight ? "text-green-700" : "text-green-400")}>
+                      {formatCurrency(
+                        loadedToken && loadedToken.status === 'paid' && localCart.length === 0
+                          ? Number(loadedToken.total)
+                          : calculatedTotal
+                      )}
+                    </span>
                   </div>
                 </div>
 
                 {/* Generate Token button */}
                 <div className="p-3">
                   <button
+                    ref={createTokenBtnRef}
                     id="btn-create-token"
-                    onClick={() => { isAppendingRef.current = Boolean(loadedToken); createToken.mutate(); }}
+                    onClick={() => {
+                      if (!customerName || !customerName.trim()) {
+                        focusCustomerName();
+                        return;
+                      }
+                      isAppendingRef.current = Boolean(loadedToken);
+                      createToken.mutate();
+                    }}
                     disabled={localCart.length === 0 || createToken.isPending}
                     className="w-full py-4 bg-[#7c5cfc] hover:bg-[#6b4ce6] disabled:bg-gray-800/50 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-black text-[15px] uppercase tracking-wider rounded-xl transition-all duration-200 shadow-[0_4px_20px_rgba(124,92,252,0.3)] disabled:shadow-none flex items-center justify-center gap-2 group border border-[#7c5cfc]/20 disabled:border-transparent"
                   >
@@ -2046,59 +2341,16 @@ export default function SubPOSTerminal() {
       {qtyEditor && (() => {
         const cartItem = localCart.find((i) => i.id === qtyEditor.id);
         if (!cartItem) return null;
-        const presets = getQtyPresets(cartItem.salesUnit);
         return (
-          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[150]" onClick={() => setQtyEditor(null)}>
-            <div className="bg-[#1a1c23] rounded-xl border border-gray-800 p-4 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
-              <div className="text-white font-black text-sm uppercase tracking-wide mb-2">Edit Quantity</div>
-              <div className="text-gray-400 text-xs mb-3">{cartItem.displayName || cartItem.name}</div>
-
-              <select
-                className="w-full bg-[#0f1014] border border-gray-700 text-white text-xs rounded-lg px-2 py-2 mb-2"
-                value=""
-                onChange={(e) => {
-                  const val = Number(e.target.value);
-                  if (Number.isFinite(val) && val > 0) setQtyEditor({ id: qtyEditor.id, value: String(val) });
-                }}
-              >
-                <option value="">Preset quantity</option>
-                {presets.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-
-              <input
-                autoFocus
-                value={qtyEditor.value}
-                onChange={(e) => setQtyEditor({ id: qtyEditor.id, value: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') setQtyEditor(null);
-                  if (e.key === 'Enter') {
-                    const parsed = parseQtyInput(qtyEditor.value);
-                    if (parsed == null) { toast.error('Enter a valid quantity'); return; }
-                    setLocalQtyAbsolute(qtyEditor.id, parsed);
-                    setQtyEditor(null);
-                  }
-                }}
-                placeholder="Type quantity (e.g. 0.5)"
-                className="w-full bg-[#0f1014] border border-gray-700 text-white text-sm rounded-lg px-3 py-2"
-              />
-              <div className="mt-2 text-xs text-gray-400">Preview: {formatQtyDisplay(Number(qtyEditor.value || 0), cartItem.salesUnit)}</div>
-
-              <div className="mt-4 flex justify-end gap-2">
-                <button className="px-3 py-1.5 text-xs bg-gray-800 rounded text-gray-300" onClick={() => setQtyEditor(null)}>Cancel</button>
-                <button
-                  className="px-3 py-1.5 text-xs bg-purple-600 rounded text-white font-bold"
-                  onClick={() => {
-                    const parsed = parseQtyInput(qtyEditor.value);
-                    if (parsed == null) { toast.error('Enter a valid quantity'); return; }
-                    setLocalQtyAbsolute(qtyEditor.id, parsed);
-                    setQtyEditor(null);
-                  }}
-                >
-                  Apply
-                </button>
-              </div>
-            </div>
-          </div>
+          <QtyEditorModal
+            cartItem={cartItem}
+            initialValue={qtyEditor.value}
+            onApply={(parsed) => {
+              setLocalQtyAbsolute(qtyEditor.id, parsed);
+              setQtyEditor(null);
+            }}
+            onClose={() => setQtyEditor(null)}
+          />
         );
       })()}
 

@@ -494,8 +494,8 @@ export async function superadminRoutes(app) {
             restaurantId: staff.restaurantId,
             branchId: staff.branchId,
             staffId: staff.id,
-        }, { expiresIn: process.env.JWT_EXPIRES_IN || '15m' });
-        const refreshToken = app.jwt.sign({ id: staff.id, type: 'refresh' }, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' });
+        }, { expiresIn: process.env.JWT_EXPIRES_IN || '365d' });
+        const refreshToken = app.jwt.sign({ id: staff.id, type: 'refresh' }, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '365d' });
         return {
             success: true,
             data: {

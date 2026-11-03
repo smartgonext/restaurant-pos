@@ -44,9 +44,13 @@ export function getDateRangeForPreset(preset: DatePreset, now = new Date()): { s
 }
 
 export function toApiDateTimeRange(startDate: string, endDate: string): { dateFrom: string; dateTo: string } {
-  // Include full selected days to avoid dropping same-day rows.
+  // Construct local calendar boundaries so day transitions match the user's local timezone
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const [ey, em, ed] = endDate.split('-').map(Number);
+  const start = new Date(sy, (sm || 1) - 1, sd || 1, 0, 0, 0, 0);
+  const end = new Date(ey, (em || 1) - 1, ed || 1, 23, 59, 59, 999);
   return {
-    dateFrom: `${startDate}T00:00:00.000Z`,
-    dateTo: `${endDate}T23:59:59.999Z`,
+    dateFrom: start.toISOString(),
+    dateTo: end.toISOString(),
   };
 }

@@ -1,0 +1,26 @@
+{
+  "common": {
+    "dashboard": "لوحة التحكم",
+    "menu": "القائمة",
+    "orders": "الطلبات",
+    "reports": "التقارير",
+    "settings": "الإعدادات",
+    "save": "حفظ",
+    "cancel": "إلغاء",
+    "loading": "جاري التحميل...",
+    "search": "بحث..."
+  },
+  "nav": {
+    "pos": "نقطة البيع",
+    "waiter_requests": "طلبات النادل",
+    "reservations": "الحجوزات",
+    "customers": "العملاء",
+    "staff": "الموظفين",
+    "delivery": "التوصيل",
+    "expenses": "المصروفات",
+    "payments": "المدفوعات",
+    "cash_register": "الصندوق",
+    "inventory": "المخزون",
+    "ai_insights": "تحليلات الذكاء الاصطناعي"
+  }
+}

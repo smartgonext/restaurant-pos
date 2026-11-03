@@ -162,12 +162,13 @@ export default function CustomerDisplay() {
       }
     };
 
-    const handleShowQR = (data: any) => setUpiData(data);
-    const handleSplitUpdate = (data: any) => setSplitDetails(data);
+    const handleShowQR = (data: any) => setUpiData(data && (data.upiUri || Number(data.amount) > 0) ? data : null);
+    const handleSplitUpdate = (data: any) => setSplitDetails(data && (data.method1 || data.amount1) ? data : null);
 
     socket.on('new_order', handleNewOrder);
     socket.on('order_updated', handleNewOrder);
     socket.on('customer_display_update', handleDisplayUpdate);
+    socket.on('customer_display_show_bill', handleDisplayUpdate);
     socket.on('customer_display_reset', handleReset);
     socket.on('customer_display_show_qr', handleShowQR);
     socket.on('customer_display_split_update', handleSplitUpdate);
@@ -179,6 +180,7 @@ export default function CustomerDisplay() {
       socket.off('new_order', handleNewOrder);
       socket.off('order_updated', handleNewOrder);
       socket.off('customer_display_update', handleDisplayUpdate);
+      socket.off('customer_display_show_bill', handleDisplayUpdate);
       socket.off('customer_display_reset', handleReset);
       socket.off('customer_display_show_qr', handleShowQR);
       socket.off('customer_display_split_update', handleSplitUpdate);
@@ -211,6 +213,37 @@ export default function CustomerDisplay() {
       setTotal(calcTot);
     }
   }, [latestOrder, socket]);
+
+  // Auto-fetch token when loaded directly or passed via URL param
+  useEffect(() => {
+    if (!tokenParam) return;
+    const fetchTokenDetails = async () => {
+      try {
+        const isNum = /^\d+$/.test(tokenParam.trim());
+        const body = isNum ? { tokenNumber: Number(tokenParam) } : { qrCode: tokenParam.trim() };
+        const res = await api.post('/mainpos/token/lookup', body).catch(() => null);
+        const tok = res?.data?.data;
+        if (tok && Array.isArray(tok.items)) {
+          setOrderNumber(String(tok.tokenNumber));
+          const mappedItems = tok.items.filter((i: any) => !i.isRemoved).map((i: any) => ({
+            name: i.menuItemName || i.menuItem?.name || 'Item',
+            category: i.menuItem?.category?.name || '',
+            quantity: Number(i.quantity ?? 1),
+            price: Number(i.linePrice ?? i.price ?? 0),
+            image: resolveImageUrl(i.menuItem?.image) || null,
+          }));
+          setCart(mappedItems);
+          setSubtotal(Number(tok.subtotal || 0));
+          setTax(Number(tok.tax || ((tok.sgst || 0) + (tok.cgst || 0) + (tok.igst || 0)) || 0));
+          setDiscount(Number(tok.discountApplied || 0));
+          setTotal(Number(tok.total || 0));
+        }
+      } catch (_) {
+        // silent
+      }
+    };
+    fetchTokenDetails();
+  }, [tokenParam]);
 
   const closeQR = () => setUpiData(null);
 
@@ -264,16 +297,49 @@ export default function CustomerDisplay() {
     )}>
       {/* Top Header Bar */}
       <div className={cn(
-        "h-16 px-8 flex items-center justify-between backdrop-blur-xl z-20 border-b transition-colors duration-200",
-        isLight ? "bg-white/90 border-slate-200 shadow-sm" : "bg-[#111625]/90 border-slate-800/80"
+        "h-20 px-8 flex items-center justify-between backdrop-blur-xl z-20 border-b transition-colors duration-200",
+        isLight ? "bg-white/95 border-slate-200 shadow-sm" : "bg-[#111625]/95 border-slate-800/80"
       )}>
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center text-white font-black text-lg shadow-lg shadow-purple-500/20">
-            {(billSettings?.restaurantName || 'S')[0].toUpperCase()}
+        <div className="flex items-center gap-3.5">
+          {/* Restaurant Logo with fallback */}
+          <div className="w-12 h-12 rounded-xl border flex items-center justify-center overflow-hidden bg-white/5 shadow-md flex-shrink-0">
+            <img
+              src={resolveImageUrl(billSettings?.logoUrl || billSettings?.logo || '/amora-logo.png')}
+              alt="Logo"
+              className="w-full h-full object-contain p-1"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+                const parent = e.currentTarget.parentElement;
+                if (parent && !parent.querySelector('.fallback-initial')) {
+                  const span = document.createElement('span');
+                  span.className = 'fallback-initial font-black text-xl text-purple-400';
+                  span.innerText = (billSettings?.restaurantName || 'S')[0].toUpperCase();
+                  parent.appendChild(span);
+                }
+              }}
+            />
           </div>
-          <div>
-            <span className={cn("font-extrabold text-lg tracking-tight", isLight ? "text-slate-900" : "text-white")}>{billSettings?.restaurantName || 'SMARTGONEXT POS'}</span>
-            <span className={cn("ml-2 text-xs font-semibold px-2 py-0.5 rounded border", isLight ? "bg-purple-50 text-purple-700 border-purple-200" : "bg-purple-500/10 text-purple-400 border-purple-500/20")}>Live Checkout</span>
+          <div className="flex flex-col justify-center">
+            <div className="flex items-center gap-2">
+              <span className={cn("font-black text-xl tracking-tight leading-tight", isLight ? "text-slate-900" : "text-white")}>
+                {billSettings?.restaurantName || 'SMARTGONEXT POS'}
+              </span>
+              <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full border tracking-wide", isLight ? "bg-purple-50 text-purple-700 border-purple-200" : "bg-purple-500/10 text-purple-400 border-purple-500/20")}>
+                Customer Display
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-xs font-semibold mt-0.5 truncate max-w-xl">
+              {(billSettings?.restaurantAddress || billSettings?.address) && (
+                <span className={cn("truncate", isLight ? "text-slate-600" : "text-slate-400")}>
+                  📍 {billSettings?.restaurantAddress || billSettings?.address}
+                </span>
+              )}
+              {(billSettings?.restaurantPhone || billSettings?.phone) && (
+                <span className={cn("shrink-0 font-bold", isLight ? "text-purple-700" : "text-purple-400")}>
+                  📞 {billSettings?.restaurantPhone || billSettings?.phone}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -307,20 +373,20 @@ export default function CustomerDisplay() {
       </div>
 
       {/* QR Code Payment Overlay */}
-      {upiData && (() => {
+      {upiData && (upiData.upiUri || Number(upiData.amount) > 0) && (() => {
         const displayedVpa = upiData.merchantVpa || (upiData.upiUri?.match(/pa=([^&]+)/)?.[1] ? decodeURIComponent(upiData.upiUri.match(/pa=([^&]+)/)[1]) : '');
         return (
           <div className="fixed inset-0 z-[100] bg-slate-950/98 backdrop-blur-2xl flex flex-col items-center justify-center p-8 animate-in fade-in zoom-in-95 duration-300" onClick={closeQR}>
             <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl shadow-purple-500/30 mb-8 transform scale-105 relative">
               <img 
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(upiData.upiUri || `upi://pay?pa=merchant@upi&pn=Restaurant&am=${upiData.amount}&cu=INR`)}`} 
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(upiData.upiUri || `upi://pay?pa=${encodeURIComponent(displayedVpa || '')}&pn=${encodeURIComponent(upiData.merchantName || 'Restaurant')}&am=${encodeURIComponent(String(upiData.amount))}&cu=INR`)}`} 
                 alt="Payment QR"
                 className="w-72 h-72 rounded-xl"
               />
             </div>
             <h2 className="text-4xl font-black text-white mb-2 tracking-tight">Scan QR to Pay</h2>
             <p className="text-5xl font-black text-emerald-400 mb-3 tracking-tight">{formatCurrency(upiData.amount)}</p>
-            <p className="text-base text-slate-400 font-bold tracking-widest uppercase">GPay / PhonePe / Paytm / Any UPI App</p>
+            <p className="text-base text-slate-400 font-bold tracking-widest uppercase">{upiData.method ? `${String(upiData.method).toUpperCase()} / Any UPI App` : 'Paytm / GPay / PhonePe / Any UPI App'}</p>
             {displayedVpa && (
               <p className="text-sm font-mono text-purple-300 bg-purple-500/10 px-4 py-1.5 rounded-full border border-purple-500/20 mt-4 font-bold tracking-wide">
                 UPI VPA: {displayedVpa}

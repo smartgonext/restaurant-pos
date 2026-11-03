@@ -26,11 +26,12 @@ export async function mainposAuth(request, reply) {
     }
     try {
         await request.jwtVerify();
-        if (request.user?.type !== 'mainpos') {
+        const user = request.user;
+        if (user?.type !== 'mainpos' && user?.role !== 'admin' && user?.role !== 'branch_head') {
             return reply.status(403).send({ success: false, error: 'Not a Main POS terminal' });
         }
-        request.restaurantId = request.user.restaurantId;
-        request.branchId = request.user.branchId;
+        request.restaurantId = user.restaurantId;
+        request.branchId = user.branchId;
     }
     catch {
         return reply.status(401).send({ success: false, error: 'Unauthorized' });

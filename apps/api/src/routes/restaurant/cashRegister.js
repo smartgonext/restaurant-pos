@@ -1,53 +1,128 @@
 import { prisma } from '../../app.js';
 import { authenticate } from '../../middleware/authenticate.js';
 import { tenantScope } from '../../middleware/tenantScope.js';
+import { emitToRestaurant } from '../../plugins/socket.js';
 
 // Helper to safely aggregate total cash received during an active session
-async function calculateSessionCashReceived(restaurantId, openedAt) {
+async function calculateSessionCashReceived(restaurantId, sessionOrOpenedAt, registerId) {
+    const session = (sessionOrOpenedAt && typeof sessionOrOpenedAt === 'object' && !(sessionOrOpenedAt instanceof Date))
+        ? sessionOrOpenedAt
+        : null;
+    const openedAt = session
+        ? new Date(session.openedAt)
+        : (sessionOrOpenedAt instanceof Date ? sessionOrOpenedAt : new Date(sessionOrOpenedAt));
+    const sessionId = session?.id || null;
+    const regId = registerId || session?.registerId || null;
+
+    // Determine the effective start time:
+    // If the shift was opened today, we include cash payments from today that were received
+    // before or during this shift (unless they belonged to an earlier closed shift today).
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    let effectiveStart = openedAt;
+
+    if (regId) {
+        const lastClosedToday = await prisma.cashRegisterSession.findFirst({
+            where: {
+                registerId: regId,
+                status: 'closed',
+                closedAt: { gte: todayStart, lte: openedAt }
+            },
+            orderBy: { closedAt: 'desc' }
+        }).catch(() => null);
+
+        if (lastClosedToday && lastClosedToday.closedAt) {
+            effectiveStart = new Date(Math.max(new Date(lastClosedToday.closedAt).getTime(), todayStart.getTime()));
+        } else {
+            effectiveStart = new Date(Math.min(todayStart.getTime(), openedAt.getTime()));
+        }
+    } else {
+        effectiveStart = new Date(Math.min(todayStart.getTime(), openedAt.getTime()));
+    }
+
     let orderPaymentsSum = 0;
     let tokenPaymentsSum = 0;
 
+    // 1. Direct and Table Orders
     try {
-        const cashOrderPayments = await prisma.orderPayment.aggregate({
-            where: {
-                order: { restaurantId },
-                method: { equals: 'cash' },
-                createdAt: { gte: openedAt }
-            },
-            _sum: { amount: true }
-        }).catch(() => null);
-
-        const directCashOrders = await prisma.order.aggregate({
+        const cashOrders = await prisma.order.findMany({
             where: {
                 restaurantId,
                 status: 'paid',
-                paymentMethod: { equals: 'cash' },
-                createdAt: { gte: openedAt }
+                bakeryToken: { is: null },
+                createdAt: { gte: effectiveStart }
             },
-            _sum: { total: true }
-        }).catch(() => null);
+            include: { payments: true }
+        }).catch(() => []);
 
-        orderPaymentsSum = Number(cashOrderPayments?._sum?.amount || 0) || Number(directCashOrders?._sum?.total || 0) || 0;
+        for (const o of cashOrders) {
+            if (o.payments && o.payments.length > 0) {
+                for (const p of o.payments) {
+                    if (String(p.method || '').toLowerCase() === 'cash') {
+                        orderPaymentsSum += Number(p.amount || 0);
+                    }
+                }
+            } else {
+                orderPaymentsSum += Number(o.total || 0);
+            }
+        }
     } catch (e) {
         console.error('Error computing order cash payments:', e);
     }
 
+    // 2. Bakery & POS Tokens
     try {
-        const cashTokenPayments = await prisma.bakeryTokenPayment.aggregate({
+        const cashTokens = await prisma.bakeryToken.findMany({
             where: {
-                token: { restaurantId },
-                method: { equals: 'cash' },
-                paidAt: { gte: openedAt }
+                restaurantId,
+                status: 'paid',
+                createdAt: { gte: effectiveStart }
             },
-            _sum: { amount: true }
-        }).catch(() => null);
+            include: { payments: true }
+        }).catch(() => []);
 
-        tokenPaymentsSum = Number(cashTokenPayments?._sum?.amount || 0);
+        for (const t of cashTokens) {
+            if (t.payments && t.payments.length > 0) {
+                for (const p of t.payments) {
+                    if (String(p.method || '').toLowerCase() === 'cash') {
+                        tokenPaymentsSum += Number(p.amount || 0);
+                    }
+                }
+            } else {
+                tokenPaymentsSum += Number(t.total || 0);
+            }
+        }
     } catch (e) {
         console.error('Error computing token cash payments:', e);
     }
 
-    return orderPaymentsSum + tokenPaymentsSum;
+    // 3. Cash In / Cash Out adjustments (petty cash, additional float)
+    let netCashInOut = 0;
+    if (sessionId) {
+        try {
+            const cashTransactions = await prisma.cashTransaction.findMany({
+                where: { sessionId }
+            }).catch(() => []);
+
+            for (const tx of cashTransactions) {
+                const amt = Number(tx.amount || 0);
+                if (tx.type === 'cash_in') netCashInOut += amt;
+                else if (tx.type === 'cash_out') netCashInOut -= amt;
+            }
+        } catch (e) {
+            console.error('Error computing cash transactions:', e);
+        }
+    }
+
+    const totalCashSales = orderPaymentsSum + tokenPaymentsSum;
+
+    return {
+        totalCashSales,
+        totalCashReceived: totalCashSales, // Keep field for backwards compatibility
+        netCashInOut,
+        effectiveStart
+    };
 }
 
 async function autoCloseExpiredSessions(restaurantId) {
@@ -82,8 +157,8 @@ async function autoCloseExpiredSessions(restaurantId) {
         }
 
         if (isDifferentDay || isOld || hasPassedAutoCloseTime) {
-            const totalCashReceived = await calculateSessionCashReceived(restaurantId, openSession.openedAt);
-            const autoClosingBalance = Number(openSession.openingBalance || 0) + totalCashReceived;
+            const { totalCashSales, netCashInOut } = await calculateSessionCashReceived(restaurantId, openSession, register.id);
+            const autoClosingBalance = Number(openSession.openingBalance || 0) + totalCashSales + netCashInOut;
 
             await prisma.cashRegisterSession.update({
                 where: { id: openSession.id },
@@ -155,14 +230,16 @@ export async function cashRegisterRoutes(app) {
             if (!session) return { success: true, data: null };
 
             // Calculate live cash received during session
-            const totalCashReceived = await calculateSessionCashReceived(restaurantId, session.openedAt);
-            const expectedCash = Number(session.openingBalance || 0) + totalCashReceived;
+            const { totalCashSales, netCashInOut } = await calculateSessionCashReceived(restaurantId, session, register.id);
+            const expectedCash = Number(session.openingBalance || 0) + totalCashSales + netCashInOut;
 
             return {
                 success: true,
                 data: {
                     ...session,
-                    totalCashReceived,
+                    totalCashReceived: totalCashSales,
+                    totalCashSales,
+                    netCashInOut,
                     expectedCash
                 }
             };
@@ -210,6 +287,9 @@ export async function cashRegisterRoutes(app) {
                     status: 'open'
                 }
             });
+
+            emitToRestaurant(restaurantId, 'cash_register_updated', { status: 'open', sessionId: session.id });
+
             return { success: true, data: session };
         } catch (err) {
             console.error('Error in /cash-register/open endpoint:', err);
@@ -233,8 +313,8 @@ export async function cashRegisterRoutes(app) {
             });
             if (!session) return reply.status(400).send({ success: false, error: 'No open session found' });
 
-            const totalCashReceived = await calculateSessionCashReceived(restaurantId, session.openedAt);
-            const expectedCash = Number(session.openingBalance || 0) + totalCashReceived;
+            const { totalCashSales, netCashInOut } = await calculateSessionCashReceived(restaurantId, session, register.id);
+            const expectedCash = Number(session.openingBalance || 0) + totalCashSales + netCashInOut;
             const countedCash = closingBalance !== undefined && closingBalance !== null && closingBalance !== '' 
                 ? Number(closingBalance) 
                 : expectedCash;
@@ -252,6 +332,9 @@ export async function cashRegisterRoutes(app) {
                     status: 'closed'
                 }
             });
+
+            emitToRestaurant(restaurantId, 'cash_register_updated', { status: 'closed', sessionId: session.id });
+
             return { success: true, data: updated };
         } catch (err) {
             console.error('Error in /cash-register/close endpoint:', err);
@@ -308,14 +391,28 @@ export async function cashRegisterRoutes(app) {
             });
             if (!session) return reply.status(400).send({ success: false, error: 'No open register session found' });
 
-            const entry = await prisma.cashRegisterSession.update({
+            const tx = await prisma.cashTransaction.create({
+                data: {
+                    sessionId: session.id,
+                    type,
+                    amount: Number(amount),
+                    reason: reason || null
+                }
+            }).catch(err => {
+                console.error('Error creating cash transaction:', err);
+                return null;
+            });
+
+            const updatedSession = await prisma.cashRegisterSession.update({
                 where: { id: session.id },
                 data: {
                     note: `${session.note || ''}\n[${type.toUpperCase()}] ₹${amount} - ${reason || 'Manual entry'}`
                 }
             });
 
-            return { success: true, data: { sessionId: session.id, type, amount: Number(amount), reason, session: entry } };
+            emitToRestaurant(restaurantId, 'cash_register_updated', { status: 'cash_in_out', sessionId: session.id });
+
+            return { success: true, data: { sessionId: session.id, type, amount: Number(amount), reason, session: updatedSession, transaction: tx } };
         } catch (err) {
             console.error('Error in /cash-register/cash-in-out endpoint:', err);
             return reply.status(500).send({ success: false, error: err.message || String(err) });

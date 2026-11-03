@@ -280,7 +280,7 @@ export async function buildApp() {
       secret: JWT_SECRET,
       sign: {
         algorithm: JWT_ALGORITHM,
-        expiresIn: '15m', // Staff tokens expire after 15 minutes
+        expiresIn: process.env.JWT_EXPIRES_IN || '365d',
       },
     });
   } catch (jwtErr) {
@@ -289,10 +289,33 @@ export async function buildApp() {
   }
 
   await app.register(rateLimit, {
-    max: process.env.NODE_ENV === 'production' ? 1000 : 10000,
+    max: process.env.NODE_ENV === 'production' ? 50000 : 100000,
     timeWindow: '1 minute',
     cache: 10000,
-    skipOnError: false,
+    skipOnError: true,
+    allowList: (req) => {
+      // Whitelist local desktop / loopback / LAN
+      const ip = (req.headers['x-forwarded-for'] || req.ip || req.raw?.socket?.remoteAddress || '').toString();
+      if (ip.includes('127.0.0.1') || ip.includes('::1') || ip.includes('localhost') || ip.includes('::ffff:127.0.0.1')) {
+        return true;
+      }
+      // Whitelist static asset paths and images
+      const url = req.url || '';
+      if (
+        url.startsWith('/uploads') ||
+        url.startsWith('/static') ||
+        url.startsWith('/fallback-food') ||
+        url.endsWith('.png') ||
+        url.endsWith('.jpg') ||
+        url.endsWith('.jpeg') ||
+        url.endsWith('.svg') ||
+        url.endsWith('.webp') ||
+        url.endsWith('.ico')
+      ) {
+        return true;
+      }
+      return false;
+    },
     keyGenerator: (request) => {
       // Rate limit per IP, not globally
       return request.headers['x-forwarded-for'] || request.ip || 'unknown';
@@ -308,7 +331,7 @@ export async function buildApp() {
   await app.register(formbody);
 
   await app.register(multipart, {
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB (allows full system database + images backup upload)
   });
 
   // ── Static uploads ────────────────────────────────────────────────────────
@@ -328,6 +351,17 @@ export async function buildApp() {
     decorateReply: false,
   });
 
+  // Safe fallback endpoint for missing food images
+  app.get('/fallback-food.png', async (req, reply) => {
+    const fallbackPath = path.join(uploadsDir, 'fallback-food.png');
+    if (fs.existsSync(fallbackPath)) {
+      return reply.type('image/png').send(fs.readFileSync(fallbackPath));
+    }
+    const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+    return reply.type('image/png').send(tinyPng);
+  });
+
+
   // ── Decorators ────────────────────────────────────────────────────────────
   app.decorate('prisma', prisma);
 
@@ -335,10 +369,10 @@ export async function buildApp() {
   app.addHook('onSend', (request, reply, payload, done) => {
     const isProduction = process.env.NODE_ENV === 'production';
     
-    // Content Security Policy - prevent XSS attacks
+    // Content Security Policy - allow Google Fonts, LAN connections, WebSockets, and unsafe-inline styles/scripts
     reply.header(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https: http: ws: wss:; frame-ancestors 'none';"
     );
     
     // Prevent clickjacking
@@ -431,6 +465,36 @@ export async function buildApp() {
         if (request.url.startsWith('/api/')) {
           return reply.code(404).send({ success: false, error: 'Not Found' });
         }
+
+        const cleanUrl = request.url.split('?')[0].split('#')[0];
+
+        // 1. Resolve nested SPA asset requests (e.g. /admin/assets/index-DSk0XDfg.css -> assets/index-DSk0XDfg.css)
+        const assetMatch = cleanUrl.match(/.*(\/assets\/.+)$/);
+        if (assetMatch) {
+          const relAsset = assetMatch[1].replace(/^\//, '');
+          const fullPath = path.join(webDist, relAsset);
+          if (fs.existsSync(fullPath) && typeof reply.sendFile === 'function') {
+            return reply.sendFile(relAsset);
+          }
+        }
+
+        // 2. Resolve nested root static files (e.g. /admin/vite.svg -> vite.svg)
+        const rootStaticMatch = cleanUrl.match(/.*(\/(?:vite\.svg|favicon\.ico|manifest\.json))$/);
+        if (rootStaticMatch) {
+          const relFile = rootStaticMatch[1].replace(/^\//, '');
+          const fullPath = path.join(webDist, relFile);
+          if (fs.existsSync(fullPath) && typeof reply.sendFile === 'function') {
+            return reply.sendFile(relFile);
+          }
+        }
+
+        // 3. Reject any missing static asset with 404 (NEVER return HTML for scripts/styles/images)
+        const isStaticAsset = /\.(js|css|map|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|webp|json)$/i.test(cleanUrl);
+        if (isStaticAsset) {
+          return reply.code(404).send({ success: false, error: 'Asset Not Found' });
+        }
+
+        // 4. SPA fallback: serve index.html for application routes (/admin/customers, /pos, etc.)
         reply.header('Cache-Control', 'no-cache, no-store, must-revalidate');
         if (typeof reply.sendFile === 'function') {
           return reply.sendFile('index.html');

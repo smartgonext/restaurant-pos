@@ -3,8 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import {
   Search, Grid, List, Download, Upload, Plus, Edit2, PlusCircle, DollarSign,
-  History, Trash2, Eye, EyeOff, LayoutGrid, AlertTriangle, ArrowUpDown
+  History, Trash2, Eye, EyeOff, LayoutGrid, AlertTriangle, ArrowUpDown, Package
 } from 'lucide-react';
+import { resolveImageUrl } from '@/lib/utils';
 import ItemFormModal from '@/components/inventory/ItemFormModal';
 import AddStockModal from '@/components/inventory/AddStockModal';
 import ImportModal from '@/components/inventory/ImportModal';
@@ -68,9 +69,10 @@ export default function RawMaterialsPage({ quickAction, onClearQuickAction }: Pr
   });
 
   const getStatusBadge = (stock: number, threshold: number) => {
-    if (stock === 0) return { label: 'Out of Stock', bg: 'rgba(239,68,68,0.12)', color: '#ef4444', border: 'rgba(239,68,68,0.3)' };
-    if (stock <= threshold) return { label: 'Low Stock', bg: 'rgba(245,158,11,0.12)', color: '#f59e0b', border: 'rgba(245,158,11,0.3)' };
-    return { label: 'In Stock', bg: 'rgba(16,185,129,0.12)', color: '#10b981', border: 'rgba(16,185,129,0.3)' };
+    if (stock < 0) return { label: 'Alert (Negative)', bg: 'rgba(239,68,68,0.22)', color: '#f87171', border: 'rgba(239,68,68,0.5)' };
+    if (stock === 0) return { label: 'Out of Stock', bg: 'rgba(239,68,68,0.2)', color: '#f87171', border: 'rgba(239,68,68,0.4)' };
+    if (stock <= threshold) return { label: 'Low Stock', bg: 'rgba(245,158,11,0.22)', color: '#fbbf24', border: 'rgba(245,158,11,0.5)' };
+    return { label: 'In Stock', bg: 'rgba(16,185,129,0.2)', color: '#34d399', border: 'rgba(16,185,129,0.5)' };
   };
 
   const filteredItems = items.filter((it: any) => {
@@ -147,58 +149,59 @@ export default function RawMaterialsPage({ quickAction, onClearQuickAction }: Pr
       {/* Page Title Row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 style={{ fontSize: 18, fontWeight: 900, color: 'var(--text)', margin: 0 }}>Raw Materials Directory</h1>
-          <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>Manage ingredients, stock alerts, barcodes and supplier costs</p>
+          <h1 style={{ fontSize: 20, fontWeight: 900, color: '#ffffff', margin: 0, letterSpacing: '-0.02em' }}>Raw Materials Directory</h1>
+          <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0' }}>Manage ingredients, stock alerts, barcodes and supplier costs</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={() => setImportOpen(true)}
             style={{
-              height: 34, padding: '0 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
-              borderRadius: 8, color: 'var(--text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              height: 36, padding: '0 14px', background: '#1e2337', border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: 8, color: '#cbd5e1', fontSize: 12, fontWeight: 600, cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: 6
             }}>
             <Upload size={14} /> Import File
           </button>
           <button onClick={() => { setEditItem(null); setFormOpen(true); }}
             style={{
-              height: 34, padding: '0 14px', background: '#7c3aed', border: 'none',
-              borderRadius: 8, color: 'var(--text)', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: 6
+              height: 36, padding: '0 16px', background: '#7c3aed', border: 'none',
+              borderRadius: 8, color: '#ffffff', fontSize: 12, fontWeight: 800, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 10px rgba(124,58,237,0.3)'
             }}>
-            <Plus size={14} /> Add Item
+            <Plus size={15} /> Add Item
           </button>
         </div>
       </div>
 
       {/* FILTER TOOLBAR */}
       <div style={{
-        background: 'rgba(var(--bg-secondary-rgb), 0.5)', border: '1px solid var(--border)', borderRadius: 10,
-        padding: '10px 14px', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center'
+        background: '#151928', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10,
+        padding: '12px 16px', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
       }}>
         {/* Search */}
         <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
-          <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+          <Search size={15} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, SKU, barcode..."
-            style={{ width: '100%', height: 32, paddingLeft: 30, paddingRight: 10, background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 11, outline: 'none' }} />
+            style={{ width: '100%', height: 34, paddingLeft: 32, paddingRight: 10, background: '#1e2337', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, color: '#ffffff', fontSize: 12, outline: 'none' }} />
         </div>
 
         {/* Category Filter */}
         <select value={selectedCategory} onChange={e => setSelectedCategory(e.target.value)}
-          style={{ height: 32, background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 8, padding: '0 10px', color: 'var(--text)', fontSize: 11, outline: 'none' }}>
+          style={{ height: 34, background: '#1e2337', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, padding: '0 10px', color: '#f8fafc', fontSize: 12, outline: 'none' }}>
           <option value="All">All Categories</option>
           {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
 
         {/* Unit Filter */}
         <select value={selectedUnit} onChange={e => setSelectedUnit(e.target.value)}
-          style={{ height: 32, background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 8, padding: '0 10px', color: 'var(--text)', fontSize: 11, outline: 'none' }}>
+          style={{ height: 34, background: '#1e2337', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, padding: '0 10px', color: '#f8fafc', fontSize: 12, outline: 'none' }}>
           <option value="All">All Units</option>
           {units.map((u: any) => <option key={u.id} value={u.id}>{u.name} ({u.symbol})</option>)}
         </select>
 
         {/* Status Filter */}
         <select value={selectedStatus} onChange={e => setSelectedStatus(e.target.value)}
-          style={{ height: 32, background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 8, padding: '0 10px', color: 'var(--text)', fontSize: 11, outline: 'none' }}>
+          style={{ height: 34, background: '#1e2337', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, padding: '0 10px', color: '#f8fafc', fontSize: 12, outline: 'none' }}>
           <option value="All">All Statuses</option>
           <option value="Low Stock">Needs Reorder (Low)</option>
           <option value="Out of Stock">Out of Stock</option>
@@ -207,12 +210,12 @@ export default function RawMaterialsPage({ quickAction, onClearQuickAction }: Pr
         </select>
 
         {/* View Toggle */}
-        <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-          <button onClick={() => setViewMode('table')} style={{ height: 30, width: 34, background: viewMode === 'table' ? '#7c3aed' : 'rgba(0,0,0,0.2)', border: 'none', color: 'var(--text)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <List size={14} />
+        <div style={{ display: 'flex', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, overflow: 'hidden' }}>
+          <button onClick={() => setViewMode('table')} style={{ height: 34, width: 36, background: viewMode === 'table' ? '#7c3aed' : '#1e2337', border: 'none', color: '#ffffff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <List size={15} />
           </button>
-          <button onClick={() => setViewMode('grid')} style={{ height: 30, width: 34, background: viewMode === 'grid' ? '#7c3aed' : 'rgba(0,0,0,0.2)', border: 'none', color: 'var(--text)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Grid size={14} />
+          <button onClick={() => setViewMode('grid')} style={{ height: 34, width: 36, background: viewMode === 'grid' ? '#7c3aed' : '#1e2337', border: 'none', color: '#ffffff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Grid size={15} />
           </button>
         </div>
       </div>
@@ -220,20 +223,20 @@ export default function RawMaterialsPage({ quickAction, onClearQuickAction }: Pr
       {/* BULK ACTIONS BANNER (Displays when items are checked) */}
       {selectedIds.length > 0 && (
         <div style={{
-          background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.4)', borderRadius: 8,
-          padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.5)', borderRadius: 8,
+          padding: '12px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           animation: 'fadeIn 200ms ease'
         }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#a78bfa' }}>
+          <span style={{ fontSize: 12, fontWeight: 800, color: '#c4b5fd' }}>
             {selectedIds.length} items selected in current page
           </span>
           <div style={{ display: 'flex', gap: 10 }}>
             <button onClick={handleExportSelected}
-              style={{ height: 28, padding: '0 12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
+              style={{ height: 30, padding: '0 14px', background: '#1e2337', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: '#ffffff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
               Export Selected (.csv)
             </button>
             <button onClick={handleBulkDeactivate}
-              style={{ height: 28, padding: '0 12px', background: '#ef4444', border: 'none', borderRadius: 6, color: 'var(--text)', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
+              style={{ height: 30, padding: '0 14px', background: '#ef4444', border: 'none', borderRadius: 6, color: '#ffffff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
               Deactivate Selected
             </button>
           </div>
@@ -242,77 +245,109 @@ export default function RawMaterialsPage({ quickAction, onClearQuickAction }: Pr
 
       {/* DATA LAYOUT VIEW */}
       {isLoading ? (
-        <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+        <div style={{ padding: 48, textAlign: 'center', color: '#94a3b8', fontSize: 13, background: '#151928', borderRadius: 10 }}>
           Loading raw materials list...
         </div>
       ) : filteredItems.length === 0 ? (
-        <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, border: '1px dashed var(--border)', borderRadius: 10 }}>
+        <div style={{ padding: 48, textAlign: 'center', color: '#94a3b8', fontSize: 13, background: '#151928', border: '1px dashed rgba(255,255,255,0.15)', borderRadius: 10 }}>
           No inventory items matched your filter query.
         </div>
       ) : viewMode === 'table' ? (
         /* TABLE VIEW */
         <div style={{
-          background: 'rgba(var(--bg-secondary-rgb), 0.3)', border: '1px solid var(--border)', borderRadius: 10, overflowX: 'auto', maxHeight: 'calc(100vh - 280px)', overflowY: 'auto'
+          background: '#151928', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, overflowX: 'auto', maxHeight: 'calc(100vh - 280px)', overflowY: 'auto',
+          boxShadow: '0 6px 24px rgba(0,0,0,0.3)'
         }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
-                <tr style={{ background: 'rgba(0,0,0,0.25)', borderBottom: '1px solid var(--border)' }}>
-                  <th style={{ padding: '10px 14px', width: 30 }}>
-                    <input type="checkbox" checked={paginatedItems.length > 0 && selectedIds.length === paginatedItems.length} onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
+                <tr style={{ background: '#1e2337', borderBottom: '2px solid rgba(255,255,255,0.12)' }}>
+                  <th style={{ padding: '12px 14px', width: 34 }}>
+                    <input type="checkbox" checked={paginatedItems.length > 0 && selectedIds.length === paginatedItems.length} onChange={toggleSelectAll} style={{ cursor: 'pointer', accentColor: '#7c3aed' }} />
                   </th>
                   {['Image', 'Item Details', 'Category', 'Unit', 'On Hand', 'Threshold', 'Cost/Unit', 'Status', 'Actions'].map(h => (
-                    <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600, color: 'var(--text-muted)', fontSize: 10 }}>{h}</th>
+                    <th key={h} style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 800, color: '#e2e8f0', fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {paginatedItems.map((it: any) => {
-                  const badge = getStatusBadge(Number(it.currentStock), Number(it.thresholdQty));
+                  const stock = Number(it.currentStock);
+                  const threshold = Number(it.thresholdQty);
+                  const badge = getStatusBadge(stock, threshold);
+                  const isOutOfStock = stock <= 0;
+                  const isLow = stock > 0 && stock <= threshold;
                   return (
                     <tr key={it.id} style={{
-                      borderBottom: '1px solid rgba(42,45,62,0.5)', background: !it.isActive ? 'rgba(0,0,0,0.1)' : 'transparent',
-                      opacity: !it.isActive ? 0.6 : 1, transition: 'background 200ms'
-                    }} className="table-row">
-                      <td style={{ padding: '10px 14px' }}>
-                        <input type="checkbox" checked={selectedIds.includes(it.id)} onChange={() => toggleSelectItem(it.id)} style={{ cursor: 'pointer' }} />
+                      borderBottom: '1px solid rgba(255,255,255,0.06)', background: !it.isActive ? 'rgba(0,0,0,0.25)' : 'transparent',
+                      opacity: !it.isActive ? 0.6 : 1, transition: 'background 150ms'
+                    }} className="hover:bg-white/[0.04]">
+                      <td style={{ padding: '12px 14px' }}>
+                        <input type="checkbox" checked={selectedIds.includes(it.id)} onChange={() => toggleSelectItem(it.id)} style={{ cursor: 'pointer', accentColor: '#7c3aed' }} />
                       </td>
-                      <td style={{ padding: '10px 14px', width: 44 }}>
-                        <img src={it.image || `https://loremflickr.com/100/100/food?lock=${it.id}`}
-                          style={{ width: 34, height: 34, borderRadius: 6, objectFit: 'cover', background: 'rgba(0,0,0,0.1)' }} />
-                      </td>
-                      <td style={{ padding: '10px 14px' }}>
-                        <div style={{ fontWeight: 700, color: 'var(--text)', fontSize: 11 }}>{it.name}</div>
-                        <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2, display: 'flex', gap: 6 }}>
-                          {it.sku && <span>SKU: {it.sku}</span>}
-                          {it.barcode && <span>Barcode: {it.barcode}</span>}
+                      <td style={{ padding: '12px 14px', width: 44 }}>
+                        {it.image ? (
+                          <img
+                            src={resolveImageUrl(it.image)}
+                            alt={it.name}
+                            onError={(e) => {
+                              (e.currentTarget as HTMLElement).style.display = 'none';
+                              const fallback = (e.currentTarget.parentElement?.querySelector('.img-fallback') as HTMLElement);
+                              if (fallback) fallback.style.display = 'flex';
+                            }}
+                            style={{ width: 36, height: 36, borderRadius: 8, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.1)' }}
+                          />
+                        ) : null}
+                        <div
+                          className="img-fallback"
+                          style={{
+                            width: 36, height: 36, borderRadius: 8,
+                            display: it.image ? 'none' : 'flex',
+                            alignItems: 'center', justifyContent: 'center',
+                            background: 'linear-gradient(135deg, rgba(124,58,237,0.25) 0%, rgba(59,130,246,0.25) 100%)',
+                            border: '1px solid rgba(255,255,255,0.15)',
+                            color: '#a78bfa'
+                          }}
+                        >
+                          <Package size={18} />
                         </div>
                       </td>
-                      <td style={{ padding: '10px 14px', color: 'var(--text-secondary)' }}>{it.category?.name || '—'}</td>
-                      <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{it.unit?.name || '—'} ({it.unit?.symbol || ''})</td>
-                      <td style={{ padding: '10px 14px', fontWeight: 700, color: Number(it.currentStock) === 0 ? '#ef4444' : '#fff', fontFamily: 'monospace' }}>
-                        {Number(it.currentStock).toFixed(2)}
+                      <td style={{ padding: '12px 14px' }}>
+                        <div style={{ fontWeight: 800, color: '#ffffff', fontSize: 13 }}>{it.name}</div>
+                        <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3, display: 'flex', gap: 8, fontFamily: 'monospace' }}>
+                          {it.sku && <span>SKU: <strong style={{ color: '#cbd5e1' }}>{it.sku}</strong></span>}
+                          {it.barcode && <span>Barcode: <strong style={{ color: '#cbd5e1' }}>{it.barcode}</strong></span>}
+                        </div>
                       </td>
-                      <td style={{ padding: '10px 14px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{Number(it.thresholdQty).toFixed(2)}</td>
-                      <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>₹{Number(it.costPerUnit || 0).toFixed(2)}</td>
-                      <td style={{ padding: '10px 14px' }}>
+                      <td style={{ padding: '12px 14px', color: '#60a5fa', fontWeight: 600 }}>{it.category?.name || '—'}</td>
+                      <td style={{ padding: '12px 14px', color: '#cbd5e1', fontWeight: 600 }}>{it.unit?.name || '—'} {it.unit?.symbol ? `(${it.unit.symbol})` : ''}</td>
+                      <td style={{
+                        padding: '12px 14px', fontWeight: 800, fontSize: 13,
+                        color: isOutOfStock ? '#f87171' : isLow ? '#fbbf24' : '#34d399',
+                        fontFamily: 'monospace'
+                      }}>
+                        {stock.toFixed(2)}
+                      </td>
+                      <td style={{ padding: '12px 14px', color: '#cbd5e1', fontWeight: 600, fontFamily: 'monospace' }}>{threshold.toFixed(2)}</td>
+                      <td style={{ padding: '12px 14px', color: '#f8fafc', fontWeight: 700, fontFamily: 'monospace' }}>₹{Number(it.costPerUnit || 0).toFixed(2)}</td>
+                      <td style={{ padding: '12px 14px' }}>
                         <span style={{
-                          display: 'inline-flex', padding: '2px 8px', borderRadius: 20, fontSize: 9, fontWeight: 700,
+                          display: 'inline-flex', padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 800,
                           background: badge.bg, color: badge.color, border: `1px solid ${badge.border}`
                         }}>{badge.label}</span>
                       </td>
-                      <td style={{ padding: '10px 14px', width: 140 }}>
-                        <div style={{ display: 'flex', gap: 6 }}>
+                      <td style={{ padding: '12px 14px', width: 140 }}>
+                        <div style={{ display: 'flex', gap: 8 }}>
                           <button onClick={() => { setEditItem(it); setFormOpen(true); }}
-                            style={{ height: 24, width: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', color: '#3b82f6' }} title="Edit">
-                            <Edit2 size={11} />
+                            style={{ height: 28, width: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, cursor: 'pointer', color: '#60a5fa' }} title="Edit">
+                            <Edit2 size={12} />
                           </button>
                           <button onClick={() => { setStockItem(it); setStockOpen(true); }}
-                            style={{ height: 24, width: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 6, cursor: 'pointer', color: '#10b981' }} title="Add Stock">
-                            <PlusCircle size={11} />
+                            style={{ height: 28, width: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 6, cursor: 'pointer', color: '#34d399' }} title="Add Stock">
+                            <PlusCircle size={12} />
                           </button>
                           <button onClick={() => toggleMutation.mutate({ id: it.id, isActive: !it.isActive })}
-                            style={{ height: 24, width: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', background: it.isActive ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)', border: it.isActive ? '1px solid rgba(239,68,68,0.2)' : '1px solid rgba(16,185,129,0.2)', borderRadius: 6, cursor: 'pointer', color: it.isActive ? '#ef4444' : '#10b981' }} title={it.isActive ? 'Deactivate' : 'Activate'}>
-                            {it.isActive ? <EyeOff size={11} /> : <Eye size={11} />}
+                            style={{ height: 28, width: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: it.isActive ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)', border: it.isActive ? '1px solid rgba(239,68,68,0.3)' : '1px solid rgba(16,185,129,0.3)', borderRadius: 6, cursor: 'pointer', color: it.isActive ? '#f87171' : '#34d399' }} title={it.isActive ? 'Deactivate' : 'Activate'}>
+                            {it.isActive ? <EyeOff size={12} /> : <Eye size={12} />}
                           </button>
                         </div>
                       </td>
@@ -326,48 +361,75 @@ export default function RawMaterialsPage({ quickAction, onClearQuickAction }: Pr
         /* CARD GRID VIEW */
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14 }}>
           {paginatedItems.map((it: any) => {
-            const badge = getStatusBadge(Number(it.currentStock), Number(it.thresholdQty));
+            const stock = Number(it.currentStock);
+            const threshold = Number(it.thresholdQty);
+            const badge = getStatusBadge(stock, threshold);
+            const isOutOfStock = stock <= 0;
+            const isLow = stock > 0 && stock <= threshold;
             return (
               <div key={it.id} style={{
-                background: 'rgba(var(--bg-secondary-rgb), 0.8)', backdropFilter: 'blur(12px)',
-                border: '1px solid var(--border)', borderRadius: 12, padding: 12,
+                background: '#151928',
+                border: '1px solid rgba(255,255,255,0.12)', borderRadius: 12, padding: 14,
                 display: 'flex', flexDirection: 'column', gap: 10,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
                 opacity: !it.isActive ? 0.6 : 1
               }}>
-                <div style={{ position: 'relative', width: '100%', height: 110, borderRadius: 8, overflow: 'hidden', background: 'rgba(0,0,0,0.2)' }}>
-                  <img src={it.image || `https://loremflickr.com/200/200/food?lock=${it.id}`}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div style={{ position: 'relative', width: '100%', height: 110, borderRadius: 8, overflow: 'hidden', background: '#1e2337', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {it.image ? (
+                    <img
+                      src={resolveImageUrl(it.image)}
+                      alt={it.name}
+                      onError={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = 'none';
+                        const fallback = (e.currentTarget.parentElement?.querySelector('.grid-img-fallback') as HTMLElement);
+                        if (fallback) fallback.style.display = 'flex';
+                      }}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  ) : null}
+                  <div
+                    className="grid-img-fallback"
+                    style={{
+                      width: '100%', height: '100%',
+                      display: it.image ? 'none' : 'flex',
+                      alignItems: 'center', justifyContent: 'center',
+                      background: 'linear-gradient(135deg, rgba(124,58,237,0.25) 0%, rgba(59,130,246,0.25) 100%)',
+                      color: '#a78bfa'
+                    }}
+                  >
+                    <Package size={32} />
+                  </div>
                   <span style={{
-                    position: 'absolute', top: 8, right: 8, padding: '2px 8px', borderRadius: 20, fontSize: 8, fontWeight: 800,
-                    background: badge.bg, color: badge.color, border: `1px solid ${badge.border}`, backdropFilter: 'blur(4px)'
+                    position: 'absolute', top: 8, right: 8, padding: '3px 10px', borderRadius: 20, fontSize: 9, fontWeight: 800,
+                    background: badge.bg, color: badge.color, border: `1px solid ${badge.border}`, backdropFilter: 'blur(6px)'
                   }}>{badge.label}</span>
                 </div>
 
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text)' }}>{it.name}</div>
-                  <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>{it.category?.name || 'Category'}</div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: '#ffffff' }}>{it.name}</div>
+                  <div style={{ fontSize: 10, color: '#60a5fa', fontWeight: 600, marginTop: 2 }}>{it.category?.name || 'Category'}</div>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 4 }}>
                   <div>
-                    <span style={{ fontSize: 16, fontWeight: 900, color: Number(it.currentStock) === 0 ? '#ef4444' : '#fff', fontFamily: 'monospace' }}>
-                      {Number(it.currentStock).toFixed(1)}
+                    <span style={{ fontSize: 16, fontWeight: 900, color: isOutOfStock ? '#f87171' : isLow ? '#fbbf24' : '#34d399', fontFamily: 'monospace' }}>
+                      {stock.toFixed(1)}
                     </span>
-                    <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 3 }}>{it.unit?.symbol}</span>
+                    <span style={{ fontSize: 10, color: '#cbd5e1', marginLeft: 4, fontWeight: 600 }}>{it.unit?.symbol || ''}</span>
                   </div>
-                  <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                  <div style={{ fontSize: 11, color: '#f8fafc', fontWeight: 700, fontFamily: 'monospace' }}>
                     Cost: ₹{Number(it.costPerUnit || 0).toFixed(0)}
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', gap: 6, borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: 10, marginTop: 4 }}>
+                <div style={{ display: 'flex', gap: 6, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 10, marginTop: 4 }}>
                   <button onClick={() => { setEditItem(it); setFormOpen(true); }}
-                    style={{ flex: 1, height: 28, background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 10, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                    <Edit2 size={10} /> Edit
+                    style={{ flex: 1, height: 30, background: '#1e2337', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: '#ffffff', fontSize: 11, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                    <Edit2 size={11} /> Edit
                   </button>
                   <button onClick={() => { setStockItem(it); setStockOpen(true); }}
-                    style={{ flex: 1, height: 28, background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 6, color: '#10b981', fontSize: 10, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                    <PlusCircle size={10} /> + Stock
+                    style={{ flex: 1, height: 30, background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 6, color: '#34d399', fontSize: 11, fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                    <PlusCircle size={11} /> + Stock
                   </button>
                 </div>
               </div>

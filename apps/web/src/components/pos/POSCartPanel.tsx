@@ -297,8 +297,8 @@ export const POSCartPanel = memo(function POSCartPanel({
                                   item.inventoryItemMRPId === m.id && "bg-purple-500/10"
                                 )}
                               >
-                                <div className="text-[10px] font-bold text-text-primary">{formatCurrency(Number(m.sellingPrice ?? m.mrp))}</div>
-                                <div className="text-[9px] text-text-muted">Buy: {formatCurrency(Number(m.purchaseRate ?? 0))}</div>
+                                <div className="text-[10px] font-bold text-text-primary">Rate: {formatCurrency(Number(m.sellingPrice ?? m.mrp))}</div>
+                                <div className="text-[9px] text-text-muted">MRP: {formatCurrency(Number(m.mrp ?? m.sellingPrice))}</div>
                               </button>
                             ))
                           ) : (

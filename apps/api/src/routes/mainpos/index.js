@@ -44,13 +44,20 @@ export async function mainposRoutes(app) {
             orderBy: { createdAt: 'desc' },
         });
     };
-    // helper: compute sellingPrice from purchaseRate + profitPercent
-    const computeSellingPrice = (m) => {
+    // helper: compute sellingPrice from purchaseRate + profitPercent with MRP fallback
+    const computeSellingPrice = (m, fallbackPrice = 0) => {
         if (!m)
             return m;
         const purchase = Number(m.purchaseRate ?? 0);
         const profit = Number(m.profitPercent ?? 0);
-        const selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+        let selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+        if (selling <= 0) {
+            if (Number(m.mrp ?? 0) > 0) {
+                selling = Number(m.mrp);
+            } else if (Number(fallbackPrice ?? 0) > 0) {
+                selling = Number(fallbackPrice);
+            }
+        }
         return { ...m, sellingPrice: selling };
     };
     // keep all active MRPs (newest first) so POS can show full MRP dropdown
@@ -92,7 +99,7 @@ export async function mainposRoutes(app) {
                 branchId: terminal.branchId,
                 type: 'mainpos',
                 username: terminal.name,
-            }, { expiresIn: '12h' });
+            }, { expiresIn: process.env.JWT_EXPIRES_IN || '365d' });
             return {
                 success: true,
                 data: {
@@ -222,6 +229,14 @@ export async function mainposRoutes(app) {
                 },
             });
         }
+        let printerConfig = {};
+        try {
+            if (settings?.kotItemsDisplay) {
+                const parsed = JSON.parse(settings.kotItemsDisplay);
+                if (typeof parsed === 'object') printerConfig = parsed;
+            }
+        } catch (e) {}
+
         return {
             success: true,
             data: {
@@ -231,6 +246,10 @@ export async function mainposRoutes(app) {
                 restaurantAddress: settings.restaurantAddress || restaurant?.address || '',
                 restaurantPhone: settings.restaurantPhone || restaurant?.phone || '',
                 logoUrl: settings.logoUrl || restaurant?.logo || '',
+                kotPrinterName: printerConfig.kotPrinterName || '',
+                billPrinterName: printerConfig.billPrinterName || '',
+                autoPrintKot: printerConfig.autoPrintKot ?? true,
+                autoPrintBill: printerConfig.autoPrintBill ?? true,
             }
         };
     });
@@ -309,7 +328,7 @@ export async function mainposRoutes(app) {
             inventoryItem: it.inventoryItem
                 ? {
                     ...it.inventoryItem,
-                    inventoryMRPs: activeMrps(it.inventoryItem.inventoryMRPs || []).map(computeSellingPrice),
+                    inventoryMRPs: activeMrps(it.inventoryItem.inventoryMRPs || []).map((m) => computeSellingPrice(m, it.price)),
                 }
                 : it.inventoryItem,
             itemModifiers: (it.itemModifiers || []).map((im) => {
@@ -338,7 +357,7 @@ export async function mainposRoutes(app) {
         const { search } = request.query;
         const rawSearch = String(search ?? '').trim();
         const numericSearch = normalizePhone(rawSearch);
-        if ((!rawSearch || rawSearch.length < 3) && numericSearch.length < 3)
+        if ((!rawSearch || rawSearch.length < 2) && numericSearch.length < 2)
             return { success: true, data: [] };
         const phoneCandidates = getPhoneVariants(rawSearch);
         const customers = await prisma.customer.findMany({
@@ -387,7 +406,7 @@ export async function mainposRoutes(app) {
                 where.tokenNumber = body.tokenNumber;
                 where.createdAt = { gte: todayStart };
             }
-            const token = await prisma.bakeryToken.findFirst({
+            let token = await prisma.bakeryToken.findFirst({
                 where,
                 include: {
                     items: { include: { menuItem: true } },
@@ -397,6 +416,19 @@ export async function mainposRoutes(app) {
                 },
                 orderBy: { createdAt: 'desc' },
             });
+            if (!token && body.tokenNumber) {
+                // Fallback without todayStart restriction
+                token = await prisma.bakeryToken.findFirst({
+                    where: { restaurantId, tokenNumber: body.tokenNumber },
+                    include: {
+                        items: { include: { menuItem: true } },
+                        payments: true,
+                        edits: true,
+                        customer: true,
+                    },
+                    orderBy: { createdAt: 'desc' },
+                });
+            }
             if (!token)
                 return reply.status(404).send({ success: false, error: 'Token not found' });
             return { success: true, data: token };
@@ -477,13 +509,34 @@ export async function mainposRoutes(app) {
                 if (existing) {
                     customerId = existing.id;
                     resolvedCustomerName = existing.name;
+                    if (body.customerName && body.customerName.trim() && (existing.name === 'Walk-in' || !existing.name)) {
+                        await prisma.customer.update({ where: { id: existing.id }, data: { name: body.customerName.trim() } });
+                        resolvedCustomerName = body.customerName.trim();
+                    }
                 }
                 else {
                     const newCustomer = await prisma.customer.create({
-                        data: { restaurantId, name: body.customerName || 'Walk-in', phone: canonicalPhone },
+                        data: { restaurantId, name: body.customerName?.trim() || 'Walk-in', phone: canonicalPhone },
                     });
                     customerId = newCustomer.id;
                     resolvedCustomerName = newCustomer.name;
+                    emitToRestaurant(restaurantId, 'customers_updated', { action: 'created', customer: newCustomer });
+                }
+            } else if (body.customerName && body.customerName.trim()) {
+                const trimmedName = body.customerName.trim();
+                const existing = await prisma.customer.findFirst({
+                    where: { restaurantId, name: trimmedName }
+                });
+                if (existing) {
+                    customerId = existing.id;
+                    resolvedCustomerName = existing.name;
+                } else {
+                    const newCustomer = await prisma.customer.create({
+                        data: { restaurantId, name: trimmedName },
+                    });
+                    customerId = newCustomer.id;
+                    resolvedCustomerName = newCustomer.name;
+                    emitToRestaurant(restaurantId, 'customers_updated', { action: 'created', customer: newCustomer });
                 }
             }
             const kotItems = menuItems.filter(mi => !mi.category || mi.category.isKOTEnabled);
@@ -523,15 +576,16 @@ export async function mainposRoutes(app) {
                             data: { tableId: Number(body.tableId) }
                         });
                     }
-                } else if (kotItems.length > 0) {
+                } else if (kotItems.length > 0 || body.tableId) {
                     const settings = await tx.restaurantSettings.findUnique({ where: { restaurantId } });
-                    const subtotal = kotItems.reduce((s, i) => s + (Number(i.price) * normalizeKotQty(Number(i.requestedQty))), 0);
+                    const itemsForSubtotal = kotItems.length > 0 ? kotItems : menuItems;
+                    const subtotal = itemsForSubtotal.reduce((s, i) => s + (Number(i.price) * normalizeKotQty(Number(i.requestedQty))), 0);
                     const order = await tx.order.create({
                         data: {
                             restaurantId,
                             branchId,
                             orderNumber: `${settings?.orderPrefix || 'ORD'}-TEMP`,
-                            type: 'token',
+                            type: body.tableId ? 'dine_in' : 'token',
                             tableId: body.tableId ? Number(body.tableId) : null,
                             subtotal,
                             total: subtotal,
@@ -542,36 +596,49 @@ export async function mainposRoutes(app) {
                     linkedOrderId = order.id;
                     const finalOrderNumber = `${settings?.orderPrefix || 'ORD'}-${String(order.id).padStart(5, '0')}`;
                     await tx.order.update({ where: { id: order.id }, data: { orderNumber: finalOrderNumber } });
-                    const kot = await tx.kOT.create({
-                        data: {
-                            orderId: order.id,
-                            restaurantId,
-                            kotNumber: `${settings?.kotPrefix || 'KOT'}-TEMP`,
-                            createdByTerminalId: request.user?.terminalId ?? null,
-                            createdByTerminalName: terminalName ?? request.user?.username ?? null,
-                            createdByTerminalType: 'mainpos',
-                            items: {
-                                create: kotItems.map(ki => ({
-                                    menuItemId: ki.id,
-                                    quantity: normalizeKotQty(Number(ki.requestedQty)),
-                                    price: ki.price,
-                                }))
+
+                    if (body.tableId) {
+                        await tx.table.update({
+                            where: { id: Number(body.tableId) },
+                            data: { status: 'occupied' }
+                        });
+                        emitToRestaurant(restaurantId, 'table_updated', { id: Number(body.tableId), status: 'occupied' });
+                    }
+
+                    if (kotItems.length > 0) {
+                        const kot = await tx.kOT.create({
+                            data: {
+                                orderId: order.id,
+                                restaurantId,
+                                kotNumber: `${settings?.kotPrefix || 'KOT'}-TEMP`,
+                                createdByTerminalId: request.user?.terminalId ?? null,
+                                createdByTerminalName: terminalName ?? request.user?.username ?? null,
+                                createdByTerminalType: 'mainpos',
+                                items: {
+                                    create: kotItems.map(ki => ({
+                                        menuItemId: ki.id,
+                                        quantity: normalizeKotQty(Number(ki.requestedQty)),
+                                        price: ki.price,
+                                    }))
+                                }
                             }
-                        }
-                    });
-                    const finalKotNumber = `${settings?.kotPrefix || 'KOT'}-${String(kot.id).padStart(5, '0')}`;
-                    await tx.kOT.update({ where: { id: kot.id }, data: { kotNumber: finalKotNumber } });
+                        });
+                        const finalKotNumber = `${settings?.kotPrefix || 'KOT'}-${String(kot.id).padStart(5, '0')}`;
+                        await tx.kOT.update({ where: { id: kot.id }, data: { kotNumber: finalKotNumber } });
+                        const refreshedKot = await tx.kOT.findUnique({ where: { id: kot.id }, include: { items: { include: { menuItem: true } } } });
+                        if (refreshedKot)
+                            createdKots.push(refreshedKot.id);
+                        emitToRestaurant(restaurantId, 'new_kot', {
+                            ...order,
+                            kots: [refreshedKot],
+                            createdByTerminalId: request.user?.terminalId,
+                            createdByTerminalName: terminalName,
+                            createdByTerminalType: 'mainpos',
+                        });
+                    }
+
                     await tx.bakeryToken.update({ where: { id: tok.id }, data: { orderId: order.id } });
-                    const refreshedKot = await tx.kOT.findUnique({ where: { id: kot.id }, include: { items: { include: { menuItem: true } } } });
-                    if (refreshedKot)
-                        createdKots.push(refreshedKot.id);
-                    emitToRestaurant(restaurantId, 'new_kot', {
-                        ...order,
-                        kots: [refreshedKot],
-                        createdByTerminalId: request.user?.terminalId,
-                        createdByTerminalName: terminalName,
-                        createdByTerminalType: 'mainpos',
-                    });
+                    tok.orderId = order.id;
                 }
                 return tok;
             });
@@ -909,31 +976,56 @@ export async function mainposRoutes(app) {
         const { qr } = request.params;
         const schema = z.object({
             customerName: z.string().optional(),
-            customerPhone: z.string().min(1),
+            customerPhone: z.string().optional(),
         });
         try {
             const body = schema.parse(request.body);
-            const normalizedPhone = normalizePhone(body.customerPhone);
-            if (normalizedPhone.length < 7 || normalizedPhone.length > 15) {
-                return reply.status(400).send({ success: false, error: 'Invalid customer phone number' });
+            let normalizedPhone;
+            if (body.customerPhone && body.customerPhone.trim()) {
+                normalizedPhone = normalizePhone(body.customerPhone);
+                if (normalizedPhone.length < 7 || normalizedPhone.length > 15) {
+                    return reply.status(400).send({ success: false, error: 'Invalid customer phone number' });
+                }
             }
             const token = await prisma.bakeryToken.findFirst({ where: { qrCode: qr, restaurantId } });
             if (!token)
                 return reply.status(404).send({ success: false, error: 'Token not found' });
             const previouslyHadCustomer = Boolean(token.customerId);
             let customerId = token.customerId ?? undefined;
-            let resolvedCustomerName = body.customerName;
-            const existing = await findCustomerByPhone(restaurantId, body.customerPhone);
-            if (existing) {
-                customerId = existing.id;
-                resolvedCustomerName = existing.name;
-            }
-            else {
-                const newC = await prisma.customer.create({
-                    data: { restaurantId, name: body.customerName || 'Walk-in', phone: normalizedPhone },
+            let resolvedCustomerName = body.customerName?.trim();
+
+            if (normalizedPhone) {
+                const existing = await findCustomerByPhone(restaurantId, normalizedPhone);
+                if (existing) {
+                    customerId = existing.id;
+                    resolvedCustomerName = existing.name;
+                    if (body.customerName && body.customerName.trim() && (existing.name === 'Walk-in' || !existing.name)) {
+                        await prisma.customer.update({ where: { id: existing.id }, data: { name: body.customerName.trim() } });
+                        resolvedCustomerName = body.customerName.trim();
+                    }
+                } else {
+                    const newC = await prisma.customer.create({
+                        data: { restaurantId, name: body.customerName?.trim() || 'Walk-in', phone: normalizedPhone },
+                    });
+                    customerId = newC.id;
+                    resolvedCustomerName = newC.name;
+                    emitToRestaurant(restaurantId, 'customers_updated', { action: 'created', customer: newC });
+                }
+            } else if (resolvedCustomerName) {
+                const existing = await prisma.customer.findFirst({
+                    where: { restaurantId, name: resolvedCustomerName }
                 });
-                customerId = newC.id;
-                resolvedCustomerName = newC.name;
+                if (existing) {
+                    customerId = existing.id;
+                    resolvedCustomerName = existing.name;
+                } else {
+                    const newC = await prisma.customer.create({
+                        data: { restaurantId, name: resolvedCustomerName },
+                    });
+                    customerId = newC.id;
+                    resolvedCustomerName = newC.name;
+                    emitToRestaurant(restaurantId, 'customers_updated', { action: 'created', customer: newC });
+                }
             }
             // Attach customer to token
             let updated = await prisma.bakeryToken.update({
@@ -1333,7 +1425,22 @@ export async function mainposRoutes(app) {
             });
             const updated = await prisma.bakeryToken.findUnique({
                 where: { id: token.id },
-                include: { items: true, payments: true, customer: true },
+                include: {
+                    items: {
+                        where: { isRemoved: false },
+                        include: {
+                            menuItem: {
+                                include: {
+                                    category: true,
+                                    inventoryItem: { include: { unit: true } }
+                                }
+                            },
+                            inventoryItemMRP: true
+                        }
+                    },
+                    payments: true,
+                    customer: true
+                },
             });
             return { success: true, data: { token: updated, totalPaid, pointsEarned } };
         }
@@ -1368,13 +1475,14 @@ export async function mainposRoutes(app) {
             include: {
                 items: {
                     where: { isRemoved: false },
-                    select: {
-                        id: true,
-                        menuItemName: true,
-                        price: true,
-                        quantity: true,
-                        total: true,
-                        isRemoved: true,
+                    include: {
+                        menuItem: {
+                            include: {
+                                category: true,
+                                inventoryItem: { include: { unit: true } }
+                            }
+                        },
+                        inventoryItemMRP: true
                     },
                 },
                 payments: {

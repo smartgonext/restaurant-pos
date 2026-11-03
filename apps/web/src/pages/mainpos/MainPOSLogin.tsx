@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMainposStore } from '@/stores/mainposStore';
 import toast from 'react-hot-toast';
-import { CreditCard, Zap } from 'lucide-react';
+import { CreditCard, Zap, Eye, EyeOff } from 'lucide-react';
 import api from '@/lib/api';
 
 export default function MainPOSLogin() {
@@ -10,6 +10,7 @@ export default function MainPOSLogin() {
   const login = useMainposStore((s) => s.login);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -56,15 +57,25 @@ export default function MainPOSLogin() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-indigo-200 mb-2">Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400 transition"
-                placeholder="••••••••"
-                required
-              />
+              <label className="block text-sm font-medium text-indigo-200 mb-2">Password / PIN</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full pl-4 pr-12 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400 transition"
+                  placeholder="••••••••"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-indigo-300 hover:text-white transition-colors p-1"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
             <button
               type="submit"

@@ -13,16 +13,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on(channel, (event, ...args) => func(...args));
     }
   },
-  silentPrint: (html, callback) => {
-    ipcRenderer.send('silent-print', html);
+  silentPrint: (data, callback) => {
+    ipcRenderer.send('silent-print', data);
     ipcRenderer.once('print-result', (_, err) => callback(err));
   },
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
   openCashDrawer: (config) => ipcRenderer.send('open-cash-drawer', config),
   openCustomerDisplay: (url) => ipcRenderer.send('open-customer-display', url),
+  getDisplayInfo: () => ipcRenderer.invoke('get-display-info'),
 });
 
 contextBridge.exposeInMainWorld('electron', {
-  printBill: (html) => ipcRenderer.invoke('print-bill', html),
+  printBill: (html, options) => ipcRenderer.invoke('print-bill', typeof html === 'string' ? { html, ...(options || {}) } : html),
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
+  getDisplayInfo: () => ipcRenderer.invoke('get-display-info'),
   saveBillTxt: (filename, content) => ipcRenderer.invoke('save-bill-txt', { filename, content }),
   openCustomerDisplay: (url) => ipcRenderer.send('open-customer-display', url),
   onPrintStatus: (callback) => {
@@ -32,6 +36,8 @@ contextBridge.exposeInMainWorld('electron', {
   },
   // ── Auto-Updater APIs ──────────────────────────────────────────────────
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  getAutostartStatus: () => ipcRenderer.invoke('get-autostart-status'),
+  setAutostart: (enable) => ipcRenderer.invoke('set-autostart', enable),
   checkForUpdates: () => ipcRenderer.invoke('updater-check'),
   downloadUpdate: () => ipcRenderer.invoke('updater-download'),
   installUpdate: () => ipcRenderer.invoke('updater-install'),

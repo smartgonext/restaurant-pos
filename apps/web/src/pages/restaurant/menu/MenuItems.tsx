@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { Card } from '@/components/ui/Card';
@@ -8,13 +8,15 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { Plus, Search, Circle, Edit, Trash2, Eye, EyeOff, Clock, Upload, X, QrCode, Sparkles, Layers, Info } from 'lucide-react';
+import { Plus, Search, Circle, Edit, Trash2, Eye, EyeOff, Clock, Upload, X, QrCode, Sparkles, Layers, Info, RefreshCw, Filter } from 'lucide-react';
 import { formatCurrency, cn, resolveImageUrl } from '@/lib/utils';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import ImageLibraryModal from '@/components/ImageLibraryModal';
 import BulkImageAIModal from '@/components/BulkImageAIModal';
 import { SERVER_BASE_URL } from '@/lib/config';
+import { queryClient } from '@/lib/queryClient';
+import { CategorySearchSelect } from '@/components/ui/CategorySearchSelect';
 
 const SERVER_URL = SERVER_BASE_URL;
 
@@ -56,6 +58,7 @@ export default function MenuItems() {
   const [editingItem, setEditingItem] = useState<any>(null);
   const [search, setSearch] = useState('');
   const [kotFilter, setKotFilter] = useState<'all'|'kot'|'non'>('all');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [formData, setFormData] = useState({
     name: '', description: '', price: '', menuId: 0, categoryId: 0,
     isVeg: true, isAvailable: true, preparationTime: '', image: '',
@@ -124,12 +127,13 @@ export default function MenuItems() {
   }, [searchParams, location.state]);
 
   const { data: items = [], isLoading, refetch } = useQuery<any[]>({
-    queryKey: ['menu-items', search, kotFilter],
+    queryKey: ['menu-items', search, kotFilter, selectedCategory],
     queryFn: () => {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
       if (kotFilter === 'kot') params.set('isKOT', 'true');
       else if (kotFilter === 'non') params.set('isKOT', 'false');
+      if (selectedCategory && selectedCategory !== 'all') params.set('categoryId', selectedCategory);
       const qs = params.toString();
       return api.get(`/restaurant/menu-items${qs ? `?${qs}` : ''}`).then((r) => r.data.data);
     },
@@ -147,11 +151,12 @@ export default function MenuItems() {
 
   // Inventory resources for non-food products
   const { data: invUnits = [] } = useQuery({ queryKey: ['inventory-units'], queryFn: () => api.get('/restaurant/inventory/units').then(r => r.data.data) });
-  const { data: invItems = [] } = useQuery({ queryKey: ['inventory-items'], queryFn: () => api.get('/restaurant/inventory/items').then(r => r.data.data) });
+  const { data: invItems = [], refetch: refetchInv } = useQuery({ queryKey: ['inventory-items'], queryFn: () => api.get('/restaurant/inventory/items').then(r => r.data.data) });
   const [invUnitId, setInvUnitId] = useState<number | null>(null);
   const [mrp, setMrp] = useState<string>('');
   const [purchaseRate, setPurchaseRate] = useState<string>('');
   const [profitPercent, setProfitPercent] = useState<string>('');
+  const [openingStock, setOpeningStock] = useState<string>('');
 
   const isKgUnitText = (unitText: string) => {
     const t = String(unitText || '').toLowerCase();
@@ -175,8 +180,25 @@ export default function MenuItems() {
     };
   };
 
-  const generateProductQR = () => {
-    return `PRD-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000000).toString(36)}`;
+  const generateProductQR = (currentList?: any[]) => {
+    const listToUse = (currentList && currentList.length > 0) ? currentList : (items || []);
+    let max = 0;
+    for (const it of listToUse) {
+      const qr = String(it?.productQR || '').trim();
+      if (/^\d+$/.test(qr)) {
+        const num = parseInt(qr, 10);
+        if (num > max && num < 100000000) max = num;
+      }
+    }
+    for (const it of (invItems || [])) {
+      const qr = String(it?.barcode || '').trim();
+      if (/^\d+$/.test(qr)) {
+        const num = parseInt(qr, 10);
+        if (num > max && num < 100000000) max = num;
+      }
+    }
+    const nextNum = max + 1;
+    return String(nextNum).padStart(5, '0');
   };
 
   const isCategoryKOTEnabled = (category: any) => {
@@ -186,6 +208,22 @@ export default function MenuItems() {
     }
     return Boolean(category.isKOTEnabled);
   };
+
+  const filteredCategories = useMemo(() => {
+    if (!categories || !Array.isArray(categories)) return [];
+    if (kotFilter === 'kot') return categories.filter((c: any) => isCategoryKOTEnabled(c));
+    if (kotFilter === 'non') return categories.filter((c: any) => !isCategoryKOTEnabled(c));
+    return categories;
+  }, [categories, kotFilter]);
+
+  useEffect(() => {
+    if (selectedCategory !== 'all') {
+      const exists = filteredCategories.some((c: any) => String(c.id) === String(selectedCategory));
+      if (!exists) {
+        setSelectedCategory('all');
+      }
+    }
+  }, [kotFilter, filteredCategories, selectedCategory]);
 
   const addPackVariantFromMain = () => {
     setPackOptions((prev) => {
@@ -241,7 +279,7 @@ export default function MenuItems() {
         isAvailable: item.isAvailable,
         preparationTime: item.preparationTime?.toString() || '',
         image: item.image || '',
-        productQR: item.productQR || '',
+        productQR: item.productQR || generateProductQR(items),
         isAutoImage: item.isAutoImage ?? true,
         imageSource: 'manual' as 'manual' | 'ai' | 'library',
         salesUnit: item.salesUnit || 'piece',
@@ -256,15 +294,17 @@ export default function MenuItems() {
       setMrp(!isFoodCategory && latestMrp ? String(Number(latestMrp.mrp ?? 0)) : '');
       setPurchaseRate(!isFoodCategory && latestMrp ? String(Number(latestMrp.purchaseRate ?? 0)) : '');
       setProfitPercent(!isFoodCategory && latestMrp ? String(Number(latestMrp.profitPercent ?? 0)) : '');
+      setOpeningStock(!isFoodCategory && matchedInv?.currentStock != null ? String(Number(matchedInv.currentStock)) : '');
       setSelectedModifier('');
     } else {
+      const autoQR = generateProductQR(items);
       setEditingItem(null);
       setFormData({
         name: '', description: '', price: '',
         menuId: defaultOverrides.menuId ?? 0,
         categoryId: defaultOverrides.categoryId ?? 0,
         isVeg: true, isAvailable: true, preparationTime: '', image: '',
-        productQR: '', isAutoImage: true,
+        productQR: autoQR, isAutoImage: true,
         imageSource: 'manual' as 'manual' | 'ai' | 'library',
         salesUnit: 'piece',
         taxType: 'external',
@@ -278,7 +318,18 @@ export default function MenuItems() {
       setMrp('');
       setPurchaseRate('');
       setProfitPercent('');
+      setOpeningStock('');
       setSelectedModifier('');
+
+      // Query server for next guaranteed sequential barcode
+      api.get('/restaurant/menu-items/next-barcode').then(res => {
+        if (res.data?.success && res.data?.barcode) {
+          setFormData(prev => ({
+            ...prev,
+            productQR: (prev.productQR === autoQR || !prev.productQR) ? res.data.barcode : prev.productQR
+          }));
+        }
+      }).catch(() => {});
     }
     setShowModal(true);
   };
@@ -703,6 +754,19 @@ export default function MenuItems() {
           if (existingInv) {
               // attach existing inventory item
               payload.inventoryItemId = existingInv.id;
+              // keep inventory item barcode, unit, cost, and stock in sync
+              try {
+                const invUpdateData: any = {
+                  barcode: payload.productQR || undefined,
+                  unitId: unitIdToUse ? Number(unitIdToUse) : undefined,
+                  costPerUnit: purchaseRate ? Number(purchaseRate) : undefined,
+                };
+                if (openingStock !== '' && !isNaN(Number(openingStock))) {
+                  invUpdateData.currentStock = Number(openingStock);
+                }
+                await api.put(`/restaurant/inventory/items/${existingInv.id}`, invUpdateData);
+              } catch (e) { /* non-blocking sync */ }
+
               // create a new MRP for this supplier/item if purchaseRate/mrp/profit provided
               const prNum = purchaseRate ? Number(purchaseRate) : undefined;
               const profitPctNum = profitPercent ? Number(profitPercent) : undefined;
@@ -717,12 +781,18 @@ export default function MenuItems() {
               }
 
               if (prNum !== undefined && computedMrpVal !== undefined) {
-                await api.post('/restaurant/inventory/mrps', {
-                  inventoryItemId: existingInv.id,
-                  mrp: computedMrpVal,
-                  purchaseRate: prNum,
-                  profitPercent: !isNaN(Number(profitPctNum)) ? profitPctNum : undefined
-                });
+                const alreadyHasMrp = (existingInv.inventoryMRPs || []).some((m: any) =>
+                  Number(m.mrp) === Number(computedMrpVal) &&
+                  Number(m.purchaseRate) === Number(prNum)
+                );
+                if (!alreadyHasMrp) {
+                  await api.post('/restaurant/inventory/mrps', {
+                    inventoryItemId: existingInv.id,
+                    mrp: computedMrpVal,
+                    purchaseRate: prNum,
+                    profitPercent: !isNaN(Number(profitPctNum)) ? profitPctNum : undefined
+                  });
+                }
               }
             } else {
             // Client-side validation: the inventory API requires a categoryId and unitId
@@ -741,8 +811,11 @@ export default function MenuItems() {
               name: formData.name,
               categoryId: invCatToUse ?? undefined,
               unitId: unitIdToUse ? Number(unitIdToUse) : undefined,
-              thresholdQty: 0,
-              costPerUnit: purchaseRate ? Number(purchaseRate) : 0
+              barcode: payload.productQR || undefined,
+              thresholdQty: formData.stockWarningThreshold ? Number(formData.stockWarningThreshold) : 0,
+              costPerUnit: purchaseRate ? Number(purchaseRate) : 0,
+              currentStock: (openingStock !== '' && !isNaN(Number(openingStock))) ? Number(openingStock) : 0,
+              skipMenuSync: true
             });
             const createdInv = invRes.data?.data;
               if (createdInv) {
@@ -796,6 +869,11 @@ export default function MenuItems() {
       setShowModal(false);
       // refetch will pick up current kotFilter from queryKey
       refetch();
+      refetchInv();
+      queryClient.invalidateQueries({ queryKey: ['menu-items'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-items-all'] });
+      queryClient.invalidateQueries({ queryKey: ['pos-menu'] });
+      queryClient.invalidateQueries({ queryKey: ['item-categories'] });
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed');
     }
@@ -841,20 +919,21 @@ export default function MenuItems() {
   const handlePurchaseRateChange = (v: string) => {
     setPurchaseRate(v);
     const pr = parseFloat(v || '');
-    const pct = parseFloat(profitPercent || '');
     const sp = parseFloat(formData.price || '');
+    const pct = parseFloat(profitPercent || '');
 
-    // Dual-direction computation:
-    // 1. If profit percent is set, compute Selling Price = PurchaseRate + (PurchaseRate * Profit% / 100)
-    // 2. Else if Selling Price is set, compute Profit% = ((SellingPrice - PurchaseRate) / PurchaseRate) * 100
-    if (!isNaN(pr) && pr > 0 && !isNaN(pct) && pct !== 0) {
-      const computedPrice = Math.round(pr * (1 + pct / 100) * 100) / 100;
-      setFormData(prev => ({ ...prev, price: String(computedPrice) }));
-    } else if (!isNaN(pr) && pr > 0 && !isNaN(sp) && sp > 0) {
-      const pctComputed = ((sp - pr) / pr) * 100;
-      setProfitPercent(String(Math.round(pctComputed * 100) / 100));
-    } else if (!v) {
-      setFormData(prev => ({ ...prev, price: '' }));
+    if (!isNaN(pr) && pr > 0) {
+      if (!isNaN(sp) && sp > 0) {
+        // If Selling Price was already entered (first or previously), preserve Selling Price and recalculate Profit %
+        const pctComputed = ((sp - pr) / pr) * 100;
+        setProfitPercent(String(Math.round(pctComputed * 100) / 100));
+      } else if (!isNaN(pct) && pct !== 0) {
+        // Only if Selling Price is empty and Profit % was explicitly provided, derive Selling Price
+        const computedPrice = Math.round(pr * (1 + pct / 100) * 100) / 100;
+        setFormData(prev => ({ ...prev, price: String(computedPrice) }));
+      }
+    } else {
+      setProfitPercent('');
     }
   };
 
@@ -925,7 +1004,7 @@ export default function MenuItems() {
 
   const computeMRPSellingPrice = (m: any) => {
     if (!m) return 0;
-    if (m.sellingPrice !== undefined && m.sellingPrice !== null) return Number(m.sellingPrice);
+    if (m.sellingPrice !== undefined && m.sellingPrice !== null && Number(m.sellingPrice) > 0) return Number(m.sellingPrice);
     const pr = Number(m.purchaseRate ?? 0);
     const pp = Number(m.profitPercent ?? 0);
     if (pr > 0) return Number((pr * (1 + pp / 100)).toFixed(2));
@@ -976,16 +1055,48 @@ export default function MenuItems() {
       </div>
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-3">
-          <div className="relative w-80">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative w-72">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
             <input className="glass-input w-full pl-10 text-sm h-11" placeholder="Search menu items..." value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          <select value={kotFilter} onChange={(e) => setKotFilter(e.target.value as any)} className="glass-input h-11 text-sm w-36">
-            <option value="all">All</option>
-            <option value="kot">KOT</option>
-            <option value="non">Stock</option>
+          <select value={kotFilter} onChange={(e) => setKotFilter(e.target.value as any)} className="glass-input h-11 text-sm w-36 font-semibold">
+            <option value="all">All Items</option>
+            <option value="kot">KOT Only</option>
+            <option value="non">Stock Only</option>
           </select>
+
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-text-muted shrink-0" />
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="glass-input h-11 text-sm min-w-[200px] max-w-[300px] font-semibold"
+            >
+              <option value="all">All Categories ({filteredCategories.length})</option>
+              {filteredCategories.map((c: any) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} {c._count?.menuItems !== undefined ? `(${c._count.menuItems})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {(search || kotFilter !== 'all' || selectedCategory !== 'all') && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSearch('');
+                setKotFilter('all');
+                setSelectedCategory('all');
+              }}
+              className="h-11 px-3 text-xs text-text-muted hover:text-white"
+            >
+              <X className="w-3.5 h-3.5 mr-1" />
+              Reset Filters
+            </Button>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -1031,6 +1142,7 @@ export default function MenuItems() {
                   />
                 </th>
                 <th className="text-left py-4 px-6">Dish Details</th>
+                <th className="py-4 px-6 text-center">Barcode</th>
                 <th className="py-4 px-6 text-center">Group</th>
                 <th className="py-4 px-6 text-center">Price</th>
                 <th className="py-4 px-6 text-center">Type</th>
@@ -1042,11 +1154,11 @@ export default function MenuItems() {
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="hover:bg-bg-tertiary/20 transition-colors">
-                    {Array.from({ length: 7 }).map((_, j) => <td key={j} className="py-4 px-6"><Skeleton className="h-4 w-20" /></td>)}
+                    {Array.from({ length: 8 }).map((_, j) => <td key={j} className="py-4 px-6"><Skeleton className="h-4 w-20" /></td>)}
                   </tr>
                 ))
               ) : items?.length === 0 ? (
-                <tr><td colSpan={7} className="py-20 text-center text-text-muted uppercase text-xs font-black italic">No items found. Create your signature dish now!</td></tr>
+                <tr><td colSpan={8} className="py-20 text-center text-text-muted uppercase text-xs font-black italic">No items found. Create your signature dish now!</td></tr>
               ) : (
                 items?.map((item: any) => (
                   <tr key={item.id} className={cn("hover:bg-bg-tertiary/20 transition-colors group", selectedIds.includes(item.id) && "bg-red-500/5")}>
@@ -1060,7 +1172,7 @@ export default function MenuItems() {
                     </td>
                     <td className="py-4 px-6">
                       <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-bg-tertiary border border-border/50 flex items-center justify-center overflow-hidden shadow-inner shrink-0 relative">
+                        <div className="w-12 h-12 rounded-xl bg-bg-tertiary border border-border/50 flex items-center justify-center overflow-hidden shadow-inner shrink-0">
                           {item.image ? (
                             <img
                               src={resolveImageUrl(item.image)}
@@ -1068,75 +1180,53 @@ export default function MenuItems() {
                               className="w-full h-full object-cover group-hover:scale-110 transition-transform"
                               onError={(e: any) => {
                                 e.currentTarget.onerror = null;
-                                e.currentTarget.style.display = 'none';
-                                const parent = e.currentTarget.parentElement;
-                                if (parent && !parent.querySelector('.img-fallback-emoji')) {
-                                  const span = document.createElement('span');
-                                  span.className = 'text-xl select-none img-fallback-emoji';
-                                  span.textContent = '🍕';
-                                  parent.appendChild(span);
-                                }
+                                e.currentTarget.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="%23666" stroke-width="1.5"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>';
                               }}
                             />
                           ) : (
                             <span className="text-xl">🍕</span>
                           )}
                         </div>
-                        <div className="flex flex-col">
-                          <div className="flex items-center gap-2">
-                             <p className="font-black text-text-primary uppercase tracking-tighter text-sm">{item.name}</p>
-                             {item.productQR && <QrCode size={10} className="text-blue-500" />}
-                          </div>
+                        <div className="flex flex-col gap-0.5">
+                          <p className="font-black text-text-primary uppercase tracking-tighter text-sm">{item.name}</p>
                           <span className="text-[10px] text-blue-400 font-bold uppercase">{item.category?.name || 'Uncategorized'}</span>
                         </div>
                       </div>
+                    </td>
+                    <td className="py-4 px-6 text-center">
+                      {item.productQR ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-bold bg-blue-500/10 text-blue-400 border border-blue-500/30 tracking-wider shadow-sm">
+                          <QrCode size={13} className="text-blue-400" />
+                          {item.productQR}
+                        </span>
+                      ) : (
+                        <span className="text-text-muted text-xs italic font-medium">—</span>
+                      )}
                     </td>
                     <td className="py-4 px-6 text-center">
                       <Badge variant={isCategoryKOTEnabled(item.category) ? 'kot' : 'primary'} className="uppercase font-bold tracking-wider">
                         {item.category?.group?.name || 'General'}
                       </Badge>
                     </td>
-                    <td className="py-4 px-6 text-center">
-                      <div className="font-black text-white text-md">
-                        {(() => {
-                          const direct = Number(item.price);
-                          if (Number.isFinite(direct) && direct > 0) return formatCurrency(direct);
-
-                          if (Array.isArray(item.packOptions) && item.packOptions.length > 0) {
-                            const p0 = item.packOptions[0];
-                            const pv = Number(p0.sellingPrice ?? p0.price ?? 0);
-                            if (Number.isFinite(pv) && pv > 0) return formatCurrency(pv);
-                          }
-
-                          const mrps = item.inventoryItem?.inventoryMRPs ?? [];
-                          const active = (mrps || []).find((m: any) => m.isActive !== false) ?? mrps[0];
-                          if (active) {
-                            const sp = computeMRPSellingPrice(active);
-                            if (Number.isFinite(sp) && sp > 0) return formatCurrency(sp);
-                          }
-
-                          return formatCurrency(0);
-                        })()}
-                      </div>
+                    <td className="py-4 px-6 text-center font-black text-white text-md">
                       {(() => {
+                        const direct = Number(item.price);
+                        if (Number.isFinite(direct) && direct > 0) return formatCurrency(direct);
+
+                        if (Array.isArray(item.packOptions) && item.packOptions.length > 0) {
+                          const p0 = item.packOptions[0];
+                          const pv = Number(p0.sellingPrice ?? p0.price ?? 0);
+                          if (Number.isFinite(pv) && pv > 0) return formatCurrency(pv);
+                        }
+
                         const mrps = item.inventoryItem?.inventoryMRPs ?? [];
                         const active = (mrps || []).find((m: any) => m.isActive !== false) ?? mrps[0];
-                        if (active && (Number(active.mrp || 0) > 0 || Number(active.purchaseRate || 0) > 0)) {
-                          return (
-                            <div className="text-[10px] text-text-muted flex items-center justify-center gap-1.5 mt-0.5">
-                              {Number(active.mrp || 0) > 0 && (
-                                <span className="text-amber-400 font-semibold">MRP {formatCurrency(active.mrp)}</span>
-                              )}
-                              {Number(active.mrp || 0) > 0 && Number(active.purchaseRate || 0) > 0 && (
-                                <span className="text-gray-500">•</span>
-                              )}
-                              {Number(active.purchaseRate || 0) > 0 && (
-                                <span className="text-emerald-400 font-semibold">Cost {formatCurrency(active.purchaseRate)}</span>
-                              )}
-                            </div>
-                          );
+                        if (active) {
+                          const sp = computeMRPSellingPrice(active);
+                          if (Number.isFinite(sp) && sp > 0) return formatCurrency(sp);
                         }
-                        return null;
+
+                        return formatCurrency(0);
                       })()}
                     </td>
                     <td className="py-4 px-6 text-center">
@@ -1144,16 +1234,45 @@ export default function MenuItems() {
                         const isKOTItem = isCategoryKOTEnabled(item.category);
                         if (isKOTItem) {
                           return (
-                            <div className="flex items-center justify-center gap-1.5">
-                              <div className={cn("w-2 h-2 rounded-full", item.isVeg ? 'bg-success shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-danger shadow-[0_0_8px_rgba(239,68,68,0.4)]')} />
-                              <span className="text-[10px] font-bold uppercase text-text-secondary">{item.isVeg ? 'Veg' : 'Non-Veg'}</span>
+                            <div className="flex flex-col items-center justify-center gap-1">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <div className={cn("w-2 h-2 rounded-full", item.isVeg ? 'bg-success shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-danger shadow-[0_0_8px_rgba(239,68,68,0.4)]')} />
+                                <span className="text-[10px] font-bold uppercase text-text-secondary">{item.isVeg ? 'Veg' : 'Non-Veg'}</span>
+                              </div>
                             </div>
                           );
                         } else {
+                          const linkedInv = item.inventoryItem || (Array.isArray(invItems) ? invItems.find((it: any) => it.id === item.inventoryItemId || (it.name && item.name && it.name.trim().toLowerCase() === item.name.trim().toLowerCase())) : null);
+                          const rawStock = linkedInv?.currentStock;
+                          const stockNum = rawStock != null && rawStock !== '' && !isNaN(Number(rawStock)) ? Number(rawStock) : null;
+                          const threshold = Number(linkedInv?.thresholdQty ?? 5);
+                          const unitSymbol = linkedInv?.unit?.symbol || linkedInv?.unit?.name || item.salesUnit || 'pcs';
+                          const isNegative = stockNum !== null && stockNum < 0;
+                          const isZero = stockNum !== null && stockNum === 0;
+                          const isLowStock = stockNum !== null && stockNum > 0 && stockNum <= threshold;
+
                           return (
-                            <div className="flex items-center justify-center gap-1.5">
-                              <div className="w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.4)]" />
-                              <span className="text-[10px] font-bold uppercase text-text-secondary">Stock</span>
+                            <div className="flex flex-col items-center justify-center gap-1">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.4)]" />
+                                <span className="text-[10px] font-bold uppercase text-text-secondary">Stock</span>
+                              </div>
+                              {stockNum !== null ? (
+                                <span className={cn(
+                                  "text-[10px] font-black px-2.5 py-0.5 rounded-full border tracking-wide whitespace-nowrap shadow-sm",
+                                  isNegative
+                                    ? "bg-rose-500/20 text-rose-300 border-rose-500/50 font-black"
+                                    : isZero
+                                      ? "bg-red-500/15 text-red-400 border-red-500/30"
+                                      : isLowStock
+                                        ? "bg-amber-500/20 text-amber-300 border-amber-500/40 font-extrabold"
+                                        : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold"
+                                )}>
+                                  {`${stockNum} ${unitSymbol}`}
+                                </span>
+                              ) : (
+                                <span className="text-[9px] text-text-muted font-mono italic">No stock linked</span>
+                              )}
                             </div>
                           );
                         }
@@ -1241,7 +1360,6 @@ export default function MenuItems() {
                     label={showFoodFields ? "Signature Name" : "Product Name"} 
                     value={formData.name} 
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })} 
-                    onBlur={() => { if (!formData.image && formData.name.length > 3) handleAIGenerateImage(); }}
                     placeholder={showFoodFields ? "e.g. Avocado Toast" : "e.g. Cola Can"} 
                   />
                   <Input label="Selling Price" type="number" value={formData.price} onChange={(e) => handleSellingPriceChange(e.target.value)} placeholder="0.00" />
@@ -1252,6 +1370,9 @@ export default function MenuItems() {
                    </div>
                    <div className="flex gap-2 items-end pb-0.5 h-full">
                       <Button 
+                        type="button"
+                        tabIndex={-1}
+                        data-enter-ignore="true"
                         variant="secondary" 
                         size="sm" 
                         className="h-10 flex-1 uppercase font-black text-[9px] bg-gradient-to-r from-purple-600/20 to-blue-600/20 border-purple-500/30 hover:border-purple-500 flex items-center justify-center gap-1.5"
@@ -1262,6 +1383,9 @@ export default function MenuItems() {
                          AI Photo
                       </Button>
                       <Button
+                        type="button"
+                        tabIndex={-1}
+                        data-enter-ignore="true"
                         variant="secondary"
                         size="sm"
                         className="h-10 flex-1 uppercase font-black text-[9px] flex items-center justify-center gap-1.5"
@@ -1281,48 +1405,63 @@ export default function MenuItems() {
             </div>
           )}
 
-          <div className="grid grid-cols-4 gap-4">
-            {showFoodFields ? (
-              <>
-                <div className="flex flex-col gap-1.5 col-span-1">
-                  <label className="text-[10px] font-black uppercase text-text-muted ml-1">Assigned Menu</label>
-                  <select className="glass-input h-10 text-xs font-bold" value={formData.menuId} onChange={(e) => setFormData({ ...formData, menuId: Number(e.target.value) })}>
-                    <option value={0}>General Menu</option>
-                    {menus?.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </select>
-                </div>
-                <div className="flex flex-col gap-1.5 col-span-2">
-                  <label className="text-[10px] font-black uppercase text-text-muted ml-1">Category</label>
-                  <select className="glass-input h-10 text-xs font-bold" value={formData.categoryId} onChange={(e) => setFormData({ ...formData, categoryId: Number(e.target.value) })}>
-                    <option value={0}>Main Course</option>
-                    {categories?.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                </div>
-                <div className="col-span-1">
-                  <Input label="Kitchen Prep (min)" type="number" value={formData.preparationTime} onChange={(e) => setFormData({ ...formData, preparationTime: e.target.value })} placeholder="15" />
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex flex-col gap-1.5 col-span-2">
-                  <label className="text-[10px] font-black uppercase text-text-muted ml-1">Category</label>
-                  <select className="glass-input h-10 text-xs font-bold" value={formData.categoryId} onChange={(e) => setFormData({ ...formData, categoryId: Number(e.target.value) })}>
-                    <option value={0}>Main Course</option>
-                    {categories?.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                </div>
-                <div className="col-span-2">
-                  <Input
-                    label="Product QR / Barcode"
-                    value={formData.productQR}
-                    onChange={(e) => setFormData({ ...formData, productQR: e.target.value })}
-                    placeholder="Scan or type..."
-                    icon={<QrCode size={14} />}
-                    className="h-10 text-sm w-full"
-                  />
-                </div>
-              </>
+          <div className="grid grid-cols-12 gap-4">
+            {showFoodFields && (
+              <div className="flex flex-col gap-1.5 col-span-3">
+                <label className="text-[10px] font-black uppercase text-text-muted ml-1">Assigned Menu</label>
+                <select className="glass-input h-10 text-xs font-bold" value={formData.menuId} onChange={(e) => setFormData({ ...formData, menuId: Number(e.target.value) })}>
+                  <option value={0}>General Menu</option>
+                  {menus?.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </div>
             )}
+            <div className={cn("flex flex-col gap-1.5", showFoodFields ? "col-span-4" : "col-span-6")}>
+              <label className="text-[10px] font-black uppercase text-text-muted ml-1">Category</label>
+              <CategorySearchSelect
+                categories={categories || []}
+                value={formData.categoryId}
+                onChange={(catId) => setFormData({ ...formData, categoryId: catId })}
+                isKOTEnabled={isCategoryKOTEnabled}
+                placeholder="Search or select category..."
+              />
+            </div>
+            {showFoodFields && (
+              <div className="col-span-2">
+                <Input label="Kitchen Prep (min)" type="number" value={formData.preparationTime} onChange={(e) => setFormData({ ...formData, preparationTime: e.target.value })} placeholder="15" />
+              </div>
+            )}
+            <div className={cn(showFoodFields ? "col-span-3" : "col-span-6")}>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-black uppercase text-text-muted ml-1">{showFoodFields ? "Barcode / QR" : "Product Barcode / QR"}</label>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    data-enter-ignore="true"
+                    onClick={() => {
+                      const localGen = generateProductQR(items);
+                      setFormData(prev => ({ ...prev, productQR: localGen }));
+                      api.get('/restaurant/menu-items/next-barcode').then(res => {
+                        if (res.data?.success && res.data?.barcode) {
+                          setFormData(prev => ({ ...prev, productQR: res.data.barcode }));
+                        }
+                      }).catch(() => {});
+                    }}
+                    className="text-[9px] font-bold text-blue-400 hover:text-blue-300 flex items-center gap-1 uppercase tracking-wider transition-colors cursor-pointer"
+                    title="Auto Generate Next Barcode"
+                  >
+                    <RefreshCw size={10} /> Auto
+                  </button>
+                </div>
+                <Input
+                  value={formData.productQR}
+                  onChange={(e) => setFormData({ ...formData, productQR: e.target.value })}
+                  placeholder="Scan or type barcode..."
+                  icon={<QrCode size={14} className="text-blue-400" />}
+                  className="h-10 text-sm font-mono tracking-wider w-full"
+                />
+              </div>
+            </div>
           </div>
 
           {/* Inventory / MRP block for non-food categories */}
@@ -1342,17 +1481,32 @@ export default function MenuItems() {
                   </select>
                 </div>
 
-                <div className="col-span-9">
-                  <div className="grid grid-cols-4 gap-4 items-end">
-                    <Input label="MRP" type="number" value={mrp || ''} onChange={(e) => handleMrpChange(e.target.value)} placeholder="0.00" className="h-10 text-sm" />
-                    <Input label="Purchase Rate" type="number" value={purchaseRate} onChange={(e) => handlePurchaseRateChange(e.target.value)} placeholder="0.00" className="h-10 text-sm" />
-                    <Input label="Profit %" type="number" value={profitPercent} onChange={(e) => handleProfitPercentChange(e.target.value)} placeholder="%" className="h-10 text-sm" />
-                    <Input label="Stock Warn (servings)" type="number" value={formData.stockWarningThreshold} onChange={(e) => setFormData(prev => ({ ...prev, stockWarningThreshold: e.target.value }))} placeholder="e.g. 4" className="h-10 text-sm" />
-                  </div>
+                <div className="col-span-3">
+                  <Input 
+                    label="Opening Stock" 
+                    type="number" 
+                    value={openingStock} 
+                    onChange={(e) => setOpeningStock(e.target.value)} 
+                    placeholder="e.g. 50" 
+                    className="h-10 text-sm font-bold text-emerald-400" 
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <Input label="MRP" type="number" value={mrp || ''} onChange={(e) => handleMrpChange(e.target.value)} placeholder="0.00" className="h-10 text-sm" />
+                </div>
+                <div className="col-span-2">
+                  <Input label="Purchase Rate" type="number" value={purchaseRate} onChange={(e) => handlePurchaseRateChange(e.target.value)} placeholder="0.00" className="h-10 text-sm" />
+                </div>
+                <div className="col-span-2">
+                  <Input label="Profit %" type="number" value={profitPercent} onChange={(e) => handleProfitPercentChange(e.target.value)} placeholder="%" className="h-10 text-sm" />
                 </div>
 
                 <div className="col-span-12">
                   <div className="grid grid-cols-2 gap-4 items-end mb-4">
+                    <div>
+                      <Input label="Stock Warning Threshold" type="number" value={formData.stockWarningThreshold} onChange={(e) => setFormData(prev => ({ ...prev, stockWarningThreshold: e.target.value }))} placeholder="e.g. 4" className="h-10 text-sm" />
+                    </div>
                     <div>
                       <label className="text-[10px] font-black uppercase text-text-muted ml-1 block mb-2">Expiry Date (Optional)</label>
                       <input 
@@ -1634,8 +1788,8 @@ export default function MenuItems() {
             </div>
           )}
           <div className="flex justify-end gap-3 pt-4 border-t border-border/50">
-            <Button variant="ghost" className="uppercase font-black text-[10px]" onClick={() => setShowModal(false)}>Discard</Button>
-            <Button disabled={uploading} className="bg-blue-600 px-8 uppercase font-black text-[10px]" onClick={handleSubmit}>
+            <Button type="button" tabIndex={-1} data-enter-ignore="true" variant="ghost" className="uppercase font-black text-[10px]" onClick={() => setShowModal(false)}>Discard</Button>
+            <Button data-submit-btn="true" type="submit" disabled={uploading} className="bg-blue-600 px-8 uppercase font-black text-[10px]" onClick={handleSubmit}>
                {editingItem ? 'Update Vibe' : 'Craft Dish'}
             </Button>
           </div>

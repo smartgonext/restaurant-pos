@@ -1,0 +1,26 @@
+{
+  "common": {
+    "dashboard": "Tableau de bord",
+    "menu": "Menu",
+    "orders": "Commandes",
+    "reports": "Rapports",
+    "settings": "Paramètres",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "loading": "Chargement...",
+    "search": "Rechercher..."
+  },
+  "nav": {
+    "pos": "Caisse POS",
+    "waiter_requests": "Appels serveur",
+    "reservations": "Réservations",
+    "customers": "Clients",
+    "staff": "Personnel",
+    "delivery": "Livraisons",
+    "expenses": "Dépenses",
+    "payments": "Paiements",
+    "cash_register": "Caisse",
+    "inventory": "Inventaire",
+    "ai_insights": "Analyses IA"
+  }
+}

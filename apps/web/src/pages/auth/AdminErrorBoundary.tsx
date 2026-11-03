@@ -1,16 +1,13 @@
 import { isRouteErrorResponse, useRouteError, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Home, RefreshCcw } from 'lucide-react';
-import { useEffect } from 'react';
-import { useAuthStore } from '@/stores/authStore';
+import { AlertTriangle, RefreshCcw, ArrowLeft, LayoutDashboard, Terminal } from 'lucide-react';
 
 export default function AdminErrorBoundary() {
   const error = useRouteError();
   const navigate = useNavigate();
-  const { logout } = useAuthStore();
 
   let status = 500;
   let title = 'Something went wrong';
-  let message = 'An unexpected error occurred. Our team has been notified.';
+  let message = 'An error occurred during this operation. Your session has been preserved.';
 
   if (isRouteErrorResponse(error)) {
     status = error.status;
@@ -19,70 +16,100 @@ export default function AdminErrorBoundary() {
       message = "The page you're looking for doesn't exist or has been moved.";
     } else if (error.status === 403) {
       title = 'Access Denied';
-      message = "You don't have permission to view this page.";
+      message = "You don't have permission to perform this action.";
+    } else if (error.status === 401) {
+      title = 'Session Issue';
+      message = "Your credentials might need to be refreshed.";
+    } else if (error.status === 500) {
+      title = 'Server Error';
+      message = (error.data as any)?.error || error.statusText || 'The server encountered an error processing your request.';
     }
+  } else if (error instanceof Error) {
+    message = error.message;
   }
 
-  // Auto-redirect to login on auth errors or server errors
-  const shouldAutoRedirect = status === 401 || status === 403 || status === 500;
-
-  useEffect(() => {
-    if (shouldAutoRedirect) {
-      logout();
-      navigate('/login', { replace: true });
-    }
-  }, [shouldAutoRedirect, logout, navigate]);
-
-  if (shouldAutoRedirect) {
-    return null;
-  }
+  const errorMessage = error instanceof Error ? error.message : (error as any)?.data?.error || (error as any)?.statusText || JSON.stringify(error);
+  const errorStack = error instanceof Error ? error.stack : null;
 
   return (
-    <div className="min-h-screen bg-bg-primary flex items-center justify-center p-6">
-      <div className="max-w-md w-full text-center animate-in fade-in zoom-in duration-500">
+    <div className="min-h-screen bg-[#0f1014] text-white flex items-center justify-center p-6">
+      <div className="max-w-lg w-full text-center animate-in fade-in zoom-in duration-300">
         {/* Icon */}
-        <div className="relative inline-flex mb-8">
-          <div className="absolute inset-0 bg-orange-500/20 blur-3xl rounded-full" />
-          <div className="relative w-28 h-28 rounded-3xl bg-bg-secondary border border-orange-500/30 flex items-center justify-center shadow-2xl">
-            <AlertTriangle className="w-14 h-14 text-orange-400" />
+        <div className="relative inline-flex mb-6">
+          <div className="absolute inset-0 bg-amber-500/20 blur-3xl rounded-full" />
+          <div className="relative w-24 h-24 rounded-3xl bg-[#161822] border border-amber-500/40 flex items-center justify-center shadow-2xl">
+            <AlertTriangle className="w-12 h-12 text-amber-400" />
           </div>
         </div>
 
         {/* Status code */}
-        <div className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-orange-400 to-red-500 mb-4">
+        <div className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-red-400 mb-2">
           {status}
         </div>
 
-        <h1 className="text-2xl font-bold text-white mb-3">{title}</h1>
-        <p className="text-text-secondary text-sm leading-relaxed mb-10 max-w-sm mx-auto">{message}</p>
+        <h1 className="text-xl font-black uppercase tracking-wider text-white mb-2">{title}</h1>
+        <p className="text-gray-400 text-sm leading-relaxed mb-6 max-w-md mx-auto">{message}</p>
 
-        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+        {/* Error Reason Banner */}
+        <div className="mb-6 p-3 bg-red-950/40 border border-red-500/40 rounded-xl text-left">
+          <div className="text-[10px] font-black uppercase text-red-400 tracking-wider mb-1">Reason:</div>
+          <div className="text-xs font-mono text-red-200 break-words">{errorMessage}</div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex flex-wrap gap-2.5 justify-center mb-6">
           <button
             onClick={() => window.location.reload()}
-            className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-bg-secondary border border-border text-text-secondary hover:text-white hover:border-orange-500/50 transition-all font-medium text-sm"
+            className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-purple-600/30 transition-all active:scale-95"
           >
             <RefreshCcw className="w-4 h-4" />
-            Try Again
+            Reload Page
           </button>
           <button
-            onClick={() => navigate('/login')}
-            className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-blue-600 text-white hover:bg-blue-500 transition-all font-bold text-sm shadow-lg shadow-blue-500/20"
+            onClick={() => {
+              if (window.history.length > 1) {
+                window.history.back();
+              } else {
+                navigate('/mainpos/terminal');
+              }
+            }}
+            className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 font-bold text-xs uppercase tracking-wider transition-all active:scale-95"
           >
-            <Home className="w-4 h-4" />
-            Go to Login
+            <ArrowLeft className="w-4 h-4" />
+            Go Back
+          </button>
+          <button
+            onClick={() => navigate('/mainpos/terminal')}
+            className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider transition-all active:scale-95"
+          >
+            <Terminal className="w-4 h-4" />
+            Main POS
+          </button>
+          <button
+            onClick={() => navigate('/subpos/terminal')}
+            className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase tracking-wider transition-all active:scale-95"
+          >
+            <Terminal className="w-4 h-4" />
+            Sub POS
+          </button>
+          <button
+            onClick={() => navigate('/admin')}
+            className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 font-bold text-xs uppercase tracking-wider transition-all active:scale-95"
+          >
+            <LayoutDashboard className="w-4 h-4" />
+            Dashboard
           </button>
         </div>
 
-        {/* Error details for developers */}
-        {error instanceof Error && (
-          <details className="mt-10 text-left">
-            <summary className="text-xs text-text-muted cursor-pointer hover:text-text-secondary transition-colors">
-              Developer Details
+        {/* Technical details toggle */}
+        {errorStack && (
+          <details className="text-left bg-[#14161f] border border-gray-800 rounded-xl p-3">
+            <summary className="text-[11px] font-bold text-gray-400 cursor-pointer hover:text-gray-200 transition-colors uppercase tracking-wider">
+              Technical Details / Stack Trace
             </summary>
-            <div className="mt-3 p-4 bg-bg-secondary/50 rounded-xl border border-border/50 font-mono text-xs text-text-muted overflow-auto max-h-40">
-              {error.message}
-              {error.stack && <pre className="mt-2 whitespace-pre-wrap opacity-60">{error.stack}</pre>}
-            </div>
+            <pre className="mt-2 text-[10px] font-mono text-gray-400 overflow-x-auto whitespace-pre-wrap max-h-48">
+              {errorStack}
+            </pre>
           </details>
         )}
       </div>

@@ -15,6 +15,7 @@ import toast from 'react-hot-toast';
 import { cn, formatCurrency, resolveImageUrl } from '@/lib/utils';
 import ImageLibraryModal from '@/components/ImageLibraryModal';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { queryClient } from '@/lib/queryClient';
 
 export default function ItemCategories() {
   const navigate = useNavigate();
@@ -154,6 +155,12 @@ export default function ItemCategories() {
       }
       setShowCategoryModal(false);
       refetchCategories();
+      queryClient.invalidateQueries({ queryKey: ['item-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['item-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-items-all'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-items'] });
+      queryClient.invalidateQueries({ queryKey: ['pos-menu'] });
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to save category');
     }
@@ -168,6 +175,12 @@ export default function ItemCategories() {
         setActiveCategory(null);
       }
       refetchCategories();
+      queryClient.invalidateQueries({ queryKey: ['item-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['item-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-items-all'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-items'] });
+      queryClient.invalidateQueries({ queryKey: ['pos-menu'] });
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to delete category');
     }

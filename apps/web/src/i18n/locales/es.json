@@ -1,0 +1,26 @@
+{
+  "common": {
+    "dashboard": "Panel principal",
+    "menu": "Menú",
+    "orders": "Pedidos",
+    "reports": "Informes",
+    "settings": "Configuración",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "loading": "Cargando...",
+    "search": "Buscar..."
+  },
+  "nav": {
+    "pos": "TPV POS",
+    "waiter_requests": "Llamadas de camarero",
+    "reservations": "Reservas",
+    "customers": "Clientes",
+    "staff": "Personal",
+    "delivery": "Envíos",
+    "expenses": "Gastos",
+    "payments": "Pagos",
+    "cash_register": "Caja registradora",
+    "inventory": "Inventario",
+    "ai_insights": "Análisis IA"
+  }
+}

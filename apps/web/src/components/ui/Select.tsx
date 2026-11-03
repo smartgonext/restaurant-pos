@@ -22,6 +22,28 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
               error && "border-danger focus:ring-danger/50",
               className
             )}
+            onFocus={(e) => {
+              props.onFocus?.(e);
+              try {
+                (e.target as any).showPicker?.();
+              } catch (_) {}
+            }}
+            onKeyDown={(e) => {
+              props.onKeyDown?.(e);
+              if (e.key === 'PageDown' || e.key === 'PageUp') {
+                const sel = e.currentTarget;
+                if (sel.options.length > 0) {
+                  e.preventDefault();
+                  const step = e.key === 'PageDown' ? 1 : -1;
+                  const nextIndex = Math.max(0, Math.min(sel.options.length - 1, sel.selectedIndex + step));
+                  if (nextIndex !== sel.selectedIndex) {
+                    sel.selectedIndex = nextIndex;
+                    sel.dispatchEvent(new Event('input', { bubbles: true }));
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                  }
+                }
+              }
+            }}
             {...props}
           >
             {children}

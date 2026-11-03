@@ -21,13 +21,20 @@ export async function subposRoutes(app) {
             return [];
         }
     };
-    // helper: compute sellingPrice from purchaseRate + profitPercent
-    const computeSellingPrice = (m) => {
+    // helper: compute sellingPrice from purchaseRate + profitPercent with MRP fallback
+    const computeSellingPrice = (m, fallbackPrice = 0) => {
         if (!m)
             return m;
         const purchase = Number(m.purchaseRate ?? 0);
         const profit = Number(m.profitPercent ?? 0);
-        const selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+        let selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+        if (selling <= 0) {
+            if (Number(m.mrp ?? 0) > 0) {
+                selling = Number(m.mrp);
+            } else if (Number(fallbackPrice ?? 0) > 0) {
+                selling = Number(fallbackPrice);
+            }
+        }
         return { ...m, sellingPrice: selling };
     };
     // keep all active MRPs (newest first) so POS can show full MRP dropdown
@@ -70,7 +77,7 @@ export async function subposRoutes(app) {
                 type: 'subpos',
                 groupIds: terminal.groupIds ? JSON.parse(terminal.groupIds).map(Number) : [],
                 username: terminal.name,
-            }, { expiresIn: '12h' });
+            }, { expiresIn: process.env.JWT_EXPIRES_IN || '365d' });
             return {
                 success: true,
                 data: {
@@ -114,7 +121,7 @@ export async function subposRoutes(app) {
             inventoryItem: it.inventoryItem
                 ? {
                     ...it.inventoryItem,
-                    inventoryMRPs: activeMrps(it.inventoryItem.inventoryMRPs || []).map(computeSellingPrice),
+                    inventoryMRPs: activeMrps(it.inventoryItem.inventoryMRPs || []).map((m) => computeSellingPrice(m, it.price)),
                 }
                 : it.inventoryItem,
             itemModifiers: (it.itemModifiers || []).map((im) => {
@@ -488,7 +495,7 @@ export async function subposRoutes(app) {
                 where.tokenNumber = body.tokenNumber;
                 where.createdAt = { gte: todayStart };
             }
-            const token = await prisma.bakeryToken.findFirst({
+            let token = await prisma.bakeryToken.findFirst({
                 where,
                 include: {
                     items: { include: { menuItem: true } },
@@ -498,6 +505,19 @@ export async function subposRoutes(app) {
                 },
                 orderBy: { createdAt: 'desc' },
             });
+            if (!token && body.tokenNumber) {
+                // Fallback without todayStart restriction
+                token = await prisma.bakeryToken.findFirst({
+                    where: { restaurantId, tokenNumber: body.tokenNumber },
+                    include: {
+                        items: { include: { menuItem: true } },
+                        payments: true,
+                        edits: true,
+                        customer: true,
+                    },
+                    orderBy: { createdAt: 'desc' },
+                });
+            }
             if (!token)
                 return reply.status(404).send({ success: false, error: 'Token not found' });
             return { success: true, data: token };

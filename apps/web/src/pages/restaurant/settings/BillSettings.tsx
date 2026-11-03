@@ -5,15 +5,41 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { 
   Save, Receipt, MessageSquare, Eye, EyeOff, 
-  Maximize2, Settings, Info, UploadCloud
+  Maximize2, Settings, Info, UploadCloud, Printer, RefreshCw
 } from 'lucide-react';
 import { cn, resolveImageUrl } from '@/lib/utils';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
+import { 
+  getAvailablePrinters, 
+  PrinterInfo, 
+  getPrinterSettings, 
+  savePrinterSettings, 
+  printKOTTicket, 
+  printHtmlOrFallback 
+} from '@/lib/electronPrint';
 
 export default function BillSettings() {
   const [formData, setFormData] = useState<any>({});
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [printers, setPrinters] = useState<PrinterInfo[]>([]);
+  const [loadingPrinters, setLoadingPrinters] = useState(false);
+
+  const fetchPrinters = async () => {
+    setLoadingPrinters(true);
+    try {
+      const list = await getAvailablePrinters();
+      setPrinters(list);
+    } catch (e) {
+      console.warn('Failed to load printers:', e);
+    } finally {
+      setLoadingPrinters(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPrinters();
+  }, []);
 
   const handleLogoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -34,7 +60,10 @@ export default function BillSettings() {
       });
       const logoUrl = res.data.url;
       setFormData((prev: any) => ({ ...prev, logoUrl }));
-      toast.success('Logo uploaded successfully!', { id: toastId });
+      await api.put('/restaurant/settings/general', { restaurantLogo: logoUrl }).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: ['restaurant-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['bill-settings'] });
+      toast.success('Logo uploaded and synced to General Settings & Bill Display!', { id: toastId });
     } catch (err: any) {
       toast.error(err?.response?.data?.error || 'Failed to upload logo image', { id: toastId });
     } finally {
@@ -49,9 +78,17 @@ export default function BillSettings() {
 
   const queryClient = useQueryClient();
   const mutation = useMutation({
-    mutationFn: (data) => api.put('/restaurant/bill-settings', data),
+    mutationFn: async (data: any) => {
+      const res = await api.put('/restaurant/bill-settings', data);
+      await api.put('/restaurant/settings/general', {
+        restaurantAddress: data.restaurantAddress,
+        restaurantPhone: data.restaurantPhone,
+        restaurantLogo: data.logoUrl,
+      }).catch(() => {});
+      return res;
+    },
     onSuccess: () => {
-      toast.success('Bill settings saved!');
+      toast.success('Bill settings saved and synced with General Settings!');
       queryClient.invalidateQueries({ queryKey: ['bill-settings'] });
       queryClient.invalidateQueries({ queryKey: ['restaurant-settings'] });
       refetch();
@@ -62,26 +99,30 @@ export default function BillSettings() {
   });
 
   useEffect(() => {
-    if (billSettings && Object.keys(formData).length === 0) {
-      setFormData({
-        showGST: billSettings.showGST ?? false,
-        showUnitForKOT: billSettings.showUnitForKOT ?? false,
-        showUnitForNonKOT: billSettings.showUnitForNonKOT ?? true,
-        loyaltyDiscountFormat: billSettings.loyaltyDiscountFormat ?? 'small_line',
-        billHeaderText: billSettings.billHeaderText || '',
-        thankYouMessage: billSettings.thankYouMessage || 'Thank you for your business!',
-        showTokenNumber: billSettings.showTokenNumber ?? true,
-        showRestaurantInfo: billSettings.showRestaurantInfo ?? true,
-        showPhoneNumber: billSettings.showPhoneNumber ?? true,
-        showLogo: billSettings.showLogo ?? true,
-        logoUrl: billSettings.logoUrl || '',
-        restaurantAddress: billSettings.restaurantAddress || '',
-        restaurantPhone: billSettings.restaurantPhone || '',
-        itemTaxDisplay: billSettings.itemTaxDisplay ?? 'none',
-        upiVpa: billSettings.upiVpa || billSettings.upiId || '',
-        registerAutoCloseTime: billSettings.registerAutoCloseTime || '23:59',
-      });
-    }
+    if (!billSettings) return;
+    setFormData((prev: any) => ({
+      ...prev,
+      showGST: prev.showGST ?? billSettings.showGST ?? false,
+      showUnitForKOT: prev.showUnitForKOT ?? billSettings.showUnitForKOT ?? false,
+      showUnitForNonKOT: prev.showUnitForNonKOT ?? billSettings.showUnitForNonKOT ?? true,
+      loyaltyDiscountFormat: prev.loyaltyDiscountFormat ?? billSettings.loyaltyDiscountFormat ?? 'small_line',
+      billHeaderText: prev.billHeaderText ?? billSettings.billHeaderText ?? '',
+      thankYouMessage: prev.thankYouMessage ?? billSettings.thankYouMessage ?? 'Thank you for your business!',
+      showTokenNumber: prev.showTokenNumber ?? billSettings.showTokenNumber ?? true,
+      showRestaurantInfo: prev.showRestaurantInfo ?? billSettings.showRestaurantInfo ?? true,
+      showPhoneNumber: prev.showPhoneNumber ?? billSettings.showPhoneNumber ?? true,
+      showLogo: prev.showLogo ?? billSettings.showLogo ?? true,
+      logoUrl: billSettings.logoUrl !== undefined ? billSettings.logoUrl : (prev.logoUrl || ''),
+      restaurantAddress: billSettings.restaurantAddress !== undefined ? billSettings.restaurantAddress : (prev.restaurantAddress || ''),
+      restaurantPhone: billSettings.restaurantPhone !== undefined ? billSettings.restaurantPhone : (prev.restaurantPhone || ''),
+      itemTaxDisplay: prev.itemTaxDisplay ?? billSettings.itemTaxDisplay ?? 'none',
+      upiVpa: prev.upiVpa ?? (billSettings.upiVpa || billSettings.upiId || ''),
+      registerAutoCloseTime: prev.registerAutoCloseTime ?? billSettings.registerAutoCloseTime ?? '23:59',
+      kotPrinterName: prev.kotPrinterName ?? billSettings.kotPrinterName ?? (localStorage.getItem('kot_printer_name') || ''),
+      billPrinterName: prev.billPrinterName ?? billSettings.billPrinterName ?? (localStorage.getItem('bill_printer_name') || ''),
+      autoPrintKot: prev.autoPrintKot ?? billSettings.autoPrintKot ?? (localStorage.getItem('auto_print_kot') !== 'false'),
+      autoPrintBill: prev.autoPrintBill ?? billSettings.autoPrintBill ?? (localStorage.getItem('auto_print_bill') !== 'false'),
+    }));
   }, [billSettings]);
 
   const isUpiVpaValid = (vpa?: string) => {
@@ -96,7 +137,57 @@ export default function BillSettings() {
       toast.error('Invalid UPI / GPay VPA format! Example: yourstore@oksbi or 9876543210@paytm');
       return;
     }
+    savePrinterSettings({
+      kotPrinterName: formData.kotPrinterName,
+      billPrinterName: formData.billPrinterName,
+      autoPrintKot: formData.autoPrintKot,
+      autoPrintBill: formData.autoPrintBill,
+    });
     mutation.mutate(formData);
+  };
+
+  const handleTestPrintKot = async () => {
+    try {
+      toast.loading('Sending test ticket to KOT printer...', { id: 'test-kot' });
+      await printKOTTicket({
+        tokenNumber: 'KOT-99',
+        orderType: 'Test Kitchen Order',
+        tableName: 'Table 1',
+        time: new Date(),
+        items: [
+          { name: 'Special Chocolate Truffle Cake', quantity: 2, unit: 'pcs', notes: 'Extra chocolate syrup' },
+          { name: 'Caramel Macchiato', quantity: 1, unit: 'cup', notes: 'Hot, extra foam' },
+        ]
+      }, formData.restaurantName || 'SmartGoNext Bakery', { kotPrinterName: formData.kotPrinterName });
+      toast.success(`Test KOT sent to: ${formData.kotPrinterName || 'Default printer'}`, { id: 'test-kot' });
+    } catch (e: any) {
+      toast.error('Test KOT print failed: ' + (e?.message || String(e)), { id: 'test-kot' });
+    }
+  };
+
+  const handleTestPrintBill = async () => {
+    try {
+      toast.loading('Sending test receipt to Bill printer...', { id: 'test-bill' });
+      const testHtml = `
+        <!DOCTYPE html><html><body style="font-family:'Courier New',monospace;width:80mm;padding:8px;text-align:center;">
+          <h3 style="font-weight:900;">${formData.restaurantName || 'SmartGoNext Bakery'}</h3>
+          <div style="border-top:1px dashed #000;margin:6px 0;"></div>
+          <div style="font-weight:700;">TEST BILL RECEIPT</div>
+          <div style="font-size:9pt;color:#555;margin:4px 0;">${new Date().toLocaleString('en-IN')}</div>
+          <div style="border-top:1px dashed #000;margin:6px 0;"></div>
+          <div style="display:flex;justify-content:space-between;font-size:10pt;padding:2px 0;">
+            <span>Sample Item</span><span>₹100.00</span>
+          </div>
+          <div style="border-top:1px dashed #000;margin:6px 0;"></div>
+          <div style="font-weight:900;font-size:12pt;margin-top:4px;">TOTAL: ₹100.00</div>
+          <div style="margin-top:10px;font-size:8pt;color:#666;">Powered by SmartGoNext</div>
+        </body></html>
+      `;
+      await printHtmlOrFallback(testHtml, { deviceName: formData.billPrinterName || undefined });
+      toast.success(`Test Bill sent to: ${formData.billPrinterName || 'Default printer'}`, { id: 'test-bill' });
+    } catch (e: any) {
+      toast.error('Test Bill print failed: ' + (e?.message || String(e)), { id: 'test-bill' });
+    }
   };
 
   if (isLoading) return <div className="p-8 text-center text-text-muted">Loading bill settings...</div>;
@@ -406,6 +497,139 @@ export default function BillSettings() {
               maxLength={80}
             />
             <p className="text-[10px] text-text-muted mt-1">Shown at bottom of bill ({formData.thankYouMessage?.length || 0}/80 chars)</p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Printer & KOT Hardware Configuration */}
+      <Card className="border-purple-500/30 bg-purple-500/5">
+        <div className="border-b border-border/50 pb-4 mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-text-primary flex items-center gap-2">
+              <Printer className="w-5 h-5 text-purple-400" />
+              Printer & Dedicated KOT Setup
+            </h3>
+            <p className="text-xs text-text-muted mt-1">
+              Configure dedicated separate printers for Customer Bills and Kitchen Order Tickets (KOT).
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={fetchPrinters}
+            disabled={loadingPrinters}
+            className="text-xs flex items-center gap-1.5"
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", loadingPrinters && "animate-spin")} />
+            {loadingPrinters ? 'Detecting...' : 'Refresh Printers'}
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Customer Bill Printer */}
+          <div className="bg-bg-secondary/40 border border-border/50 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-text-primary uppercase flex items-center gap-1.5">
+                <Receipt className="w-4 h-4 text-blue-400" />
+                Customer Bill / Receipt Printer
+              </label>
+              <span className="text-[10px] text-text-muted">Final receipt / tokens</span>
+            </div>
+
+            <select
+              value={formData.billPrinterName || ''}
+              onChange={(e) => setFormData({ ...formData, billPrinterName: e.target.value })}
+              className="glass-input h-10 text-xs w-full font-bold"
+            >
+              <option value="">System Default Printer</option>
+              {printers.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.displayName || p.name} {p.isDefault ? '(Default)' : ''}
+                </option>
+              ))}
+            </select>
+
+            <div className="pt-1">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={formData.autoPrintBill ?? true}
+                  onChange={(e) => setFormData({ ...formData, autoPrintBill: e.target.checked })}
+                  className="w-4 h-4 rounded border-border text-blue-500"
+                />
+                <span className="text-xs font-bold text-text-primary">Auto-Print Bill Receipt on Payment</span>
+              </label>
+              <p className="text-[10px] text-text-muted ml-6">Prints full customer bill automatically upon successful payment.</p>
+            </div>
+
+            <div className="pt-2 border-t border-border/30">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleTestPrintBill}
+                className="w-full text-xs font-bold"
+              >
+                Test Bill Printer
+              </Button>
+            </div>
+          </div>
+
+          {/* Dedicated KOT Printer */}
+          <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-purple-300 uppercase flex items-center gap-1.5">
+                <Printer className="w-4 h-4 text-purple-400" />
+                Dedicated KOT (Kitchen) Printer
+              </label>
+              <span className="text-[10px] font-bold text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded">KOT Items Only</span>
+            </div>
+
+            <select
+              value={formData.kotPrinterName || ''}
+              onChange={(e) => setFormData({ ...formData, kotPrinterName: e.target.value })}
+              className="glass-input h-10 text-xs w-full font-bold border-purple-500/40"
+            >
+              <option value="">None / Disabled (or same as default)</option>
+              {printers.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.displayName || p.name} {p.isDefault ? '(Default)' : ''}
+                </option>
+              ))}
+            </select>
+
+            <div className="pt-1">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={formData.autoPrintKot ?? true}
+                  onChange={(e) => setFormData({ ...formData, autoPrintKot: e.target.checked })}
+                  className="w-4 h-4 rounded border-purple-500 text-purple-600"
+                />
+                <span className="text-xs font-bold text-text-primary">Auto-Print KOT on Order Placement</span>
+              </label>
+              <p className="text-[10px] text-text-muted ml-6">
+                When an order contains food/KOT items, automatically sends the ticket to this printer.
+              </p>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-bg-secondary/60 border border-border/40 text-[11px] text-text-muted leading-relaxed">
+              <p className="font-bold text-emerald-400">Kitchen-Only Guarantee:</p>
+              This printer will <strong>ONLY</strong> print KOT dishes with their quantities and chef notes. Non-KOT / retail goods and financial pricing details are completely excluded.
+            </div>
+
+            <div className="pt-2 border-t border-purple-500/30">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleTestPrintKot}
+                className="w-full text-xs font-bold bg-purple-600/20 hover:bg-purple-600/30 border-purple-500/40 text-purple-200"
+              >
+                Test KOT Printer
+              </Button>
+            </div>
           </div>
         </div>
       </Card>

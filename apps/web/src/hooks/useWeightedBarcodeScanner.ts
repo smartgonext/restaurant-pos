@@ -24,14 +24,7 @@ interface ScannerState {
 }
 
 /**
- * Enhanced barcode scanner hook for weight-based items
- * 
- * Features:
- * - Handles weight-based barcodes (last 5 digits = weight in grams)
- * - Auto-extracts quantity from barcode weight
- * - Supports rapid consecutive scans
- * - Debounces to handle scanning speed
- * - Toast feedback for scan status
+ * Universal barcode scanner hook for 1D product barcodes, 2D token QRs, and scale items.
  */
 export function useWeightedBarcodeScanner(
   onScan: (result: WeightedScanResult) => void,
@@ -48,65 +41,59 @@ export function useWeightedBarcodeScanner(
   const timeoutRef = useRef<NodeJS.Timeout>();
   const debounceRef = useRef<NodeJS.Timeout>();
 
-  // Validate barcode format
+  // Validate barcode format (supports 1D barcodes, 2D QR codes, UUIDs, scale codes)
   const isValidBarcode = useCallback((barcode: string): { valid: boolean; reason?: string } => {
-    if (!barcode || barcode.length < 6) {
-      return { valid: false, reason: 'Too short - min 6 digits' };
+    if (!barcode || barcode.trim().length === 0) {
+      return { valid: false, reason: 'Empty barcode' };
     }
-    if (barcode.length > 20) {
-      return { valid: false, reason: 'Too long - max 20 chars' };
-    }
-    // Only numeric allowed for weight-based barcodes
-    if (!/^\d+$/.test(barcode)) {
-      return { valid: false, reason: 'Non-numeric barcode' };
+    if (barcode.length > 256) {
+      return { valid: false, reason: 'Too long - max 256 chars' };
     }
     return { valid: true };
   }, []);
 
-  // Process barcode with weight extraction
+  // Process barcode with weight extraction or general 1D/2D QR code
   const processScan = useCallback((barcode: string) => {
-    const validation = isValidBarcode(barcode);
+    const clean = barcode.trim();
+    const validation = isValidBarcode(clean);
     
     if (!validation.valid) {
-      toast.error(`❌ Invalid barcode: ${validation.reason}`);
-      console.warn('[WeightedScanner] Invalid format:', barcode, validation.reason);
+      console.warn('[WeightedScanner] Invalid format:', clean, validation.reason);
       return;
     }
 
-    console.log('[WeightedScanner] Processing barcode:', barcode);
+    console.log('[WeightedScanner] Processing barcode/QR:', clean);
 
-    // Try to extract weight
-    const weightResult = parseWeightFromBarcode(barcode);
+    // Try to extract weight if numeric and likely weight-based
+    const weightResult = isLikelyWeightBased(clean) ? parseWeightFromBarcode(clean) : null;
     
-    if (weightResult) {
-      // Weight-based barcode
+    if (weightResult && weightResult.isWeightBased) {
       const result: WeightedScanResult = {
         productQR: weightResult.productQR,
-        rawBarcode: barcode,
+        rawBarcode: clean,
         isWeightBased: true,
         quantity: weightResult.weightKg,
         weightGrams: weightResult.weightGrams,
         timestamp: Date.now(),
       };
 
-      setLastScannedBarcode(barcode);
+      setLastScannedBarcode(clean);
       toast.success(
         `✓ Scanned: ${formatWeight(weightResult.weightGrams)}`,
         { duration: 800, icon: '📦' }
       );
       onScan(result);
     } else {
-      // Standard barcode (no weight extraction)
-      const extracted = extractProductQR(barcode);
+      // Standard 1D Barcode, 2D Product QR, or Token QR code
+      const extracted = extractProductQR(clean);
       const result: WeightedScanResult = {
-        productQR: extracted.productQR,
-        rawBarcode: barcode,
+        productQR: extracted.productQR || clean,
+        rawBarcode: clean,
         isWeightBased: false,
         timestamp: Date.now(),
       };
 
-      setLastScannedBarcode(barcode);
-      toast.success('✓ Barcode scanned', { duration: 800, icon: '🏷️' });
+      setLastScannedBarcode(clean);
       onScan(result);
     }
   }, [isValidBarcode, onScan]);
@@ -116,7 +103,7 @@ export function useWeightedBarcodeScanner(
     if (!enabled) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if focus is on input field (user typing)
+      // Ignore if focus is on an input or textarea field (that field handles it directly)
       const target = e.target as HTMLElement;
       if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') {
         return;
@@ -125,7 +112,7 @@ export function useWeightedBarcodeScanner(
       const state = scannerState.current;
       const now = Date.now();
 
-      // Reset buffer if timeout exceeded (scanner sends all at once, but timeout handles slow scanners)
+      // Reset buffer if timeout exceeded between keystrokes
       if (now - state.lastKeyTime > BARCODE_SCAN_TIMEOUT) {
         state.buffer = '';
       }
@@ -134,11 +121,10 @@ export function useWeightedBarcodeScanner(
 
       // Handle Enter key - finalize scan
       if (e.key === 'Enter') {
-        e.preventDefault();
         if (state.buffer.length > 0) {
+          e.preventDefault();
           setIsScanActive(false);
           
-          // Clear pending debounce
           if (debounceRef.current) {
             clearTimeout(debounceRef.current);
           }
@@ -149,19 +135,18 @@ export function useWeightedBarcodeScanner(
         return;
       }
 
-      // Collect numeric characters
-      if (/^\d$/.test(e.key)) {
+      // Collect all printable characters (digits, letters a-z, symbols -, :, / etc.)
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
         setIsScanActive(true);
         state.buffer += e.key;
 
-        // Debounce processing for rapid consecutive scans
         if (debounceRef.current) {
           clearTimeout(debounceRef.current);
         }
 
-        // Auto-complete scan if we detect a complete barcode (no more input for 150ms)
+        // Auto-complete scan if no more input arrives for 150ms
         debounceRef.current = setTimeout(() => {
-          if (state.buffer.length > 5) {
+          if (state.buffer.length > 1) {
             setIsScanActive(false);
             processScan(state.buffer);
             state.buffer = '';

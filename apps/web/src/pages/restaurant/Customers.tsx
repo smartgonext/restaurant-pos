@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -7,16 +8,31 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { Plus, Search, Users2, ShoppingBag, Star, Edit, Trash2, Settings } from 'lucide-react';
+import { Plus, Search, Users2, ShoppingBag, Star, Edit, Trash2, Settings, FileSpreadsheet, FileText } from 'lucide-react';
 import { formatDate, getInitials } from '@/lib/utils';
+import { exportToExcel, exportToPDF } from '@/lib/exportData';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 
 export default function Customers() {
+  const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [showAdd, setShowAdd] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<any>(null);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(
+    searchParams.get('openLoyalty') === 'true' || searchParams.get('loyalty') === 'true'
+  );
+
+  useEffect(() => {
+    if (searchParams.get('openLoyalty') === 'true' || searchParams.get('loyalty') === 'true') {
+      setShowSettings(true);
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('openLoyalty');
+      nextParams.delete('loyalty');
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
   const [search, setSearch] = useState('');
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', address: '' });
 
@@ -51,6 +67,10 @@ export default function Customers() {
   const saveSettings = async () => {
     try {
       await api.put('/restaurant/loyalty/config', loyaltyConfig);
+      await api.put('/restaurant/settings/general', { loyaltyEnabled: loyaltyConfig.isActive }).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: ['loyalty-config'] });
+      queryClient.invalidateQueries({ queryKey: ['restaurant-loyalty-config'] });
+      queryClient.invalidateQueries({ queryKey: ['restaurant-settings'] });
       toast.success('Loyalty settings saved!');
       setShowSettings(false);
     } catch (e: any) {
@@ -95,6 +115,30 @@ export default function Customers() {
 
   const [customerToDelete, setCustomerToDelete] = useState<any>(null);
 
+  const handleExport = (format: 'excel' | 'pdf') => {
+    if (!customers || customers.length === 0) {
+      toast.error('No customer data available to export');
+      return;
+    }
+    const exportRows = customers.map((c: any) => ({
+      'Customer Name': c.name || '—',
+      'Phone': c.phone || '—',
+      'Email': c.email || '—',
+      'Address': c.address || '—',
+      'Total Orders': Number(c.totalOrders || 0),
+      'Loyalty Points': Number(c.loyaltyPoints || 0),
+      'Joined Date': c.createdAt ? formatDate(c.createdAt) : '—'
+    }));
+
+    if (format === 'excel') {
+      exportToExcel(exportRows, { filename: 'customers', title: 'Customers List' });
+      toast.success('Exported to Excel');
+    } else {
+      exportToPDF(exportRows, { filename: 'customers', title: 'Customers List' });
+      toast.success('Exported to PDF');
+    }
+  };
+
   const customers = data?.data || [];
 
   return (
@@ -104,7 +148,13 @@ export default function Customers() {
           <h1 className="text-2xl font-bold text-text-primary">Customers</h1>
           <p className="text-sm text-text-muted mt-1">{data?.pagination?.total || 0} customers</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" icon={<FileSpreadsheet className="w-4 h-4 text-emerald-400" />} onClick={() => handleExport('excel')}>
+            Excel
+          </Button>
+          <Button variant="secondary" icon={<FileText className="w-4 h-4 text-rose-400" />} onClick={() => handleExport('pdf')}>
+            PDF
+          </Button>
           <Button variant="secondary" icon={<Settings className="w-4 h-4" />} onClick={() => setShowSettings(true)}>
             Loyalty Settings
           </Button>

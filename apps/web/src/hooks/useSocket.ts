@@ -6,6 +6,7 @@ import { useSubposStore } from '@/stores/subposStore';
 import { useThemeStore } from '@/stores/themeStore';
 import { processQueue } from '@/lib/offlineQueue';
 import { SOCKET_BASE_URL } from '@/lib/config';
+import { queryClient } from '@/lib/queryClient';
 
 let socketInstance: Socket | null = null;
 
@@ -95,22 +96,75 @@ export const useSocket = () => {
         }
       });
 
-      ['tables_updated', 'areas_updated', 'categories_updated', 'menu_updated', 'inventory_updated'].forEach((evt) => {
-        socketInstance?.on(evt, (payload: any) => {
+      const invalidateAndDispatch = (evt: string, payload: any) => {
+        try {
           window.dispatchEvent(new CustomEvent(evt, { detail: payload }));
+        } catch { /* ignore */ }
+
+        if (evt === 'categories_updated' || evt === 'groups_updated') {
+          queryClient.invalidateQueries({ queryKey: ['item-categories'] });
+          queryClient.invalidateQueries({ queryKey: ['item-groups'] });
+          queryClient.invalidateQueries({ queryKey: ['menu-categories'] });
+          queryClient.invalidateQueries({ queryKey: ['menu-items-all'] });
+          queryClient.invalidateQueries({ queryKey: ['menu-items'] });
+          queryClient.invalidateQueries({ queryKey: ['pos-menu'] });
+          queryClient.invalidateQueries({ queryKey: ['categories'] });
+          queryClient.invalidateQueries({ queryKey: ['restaurant-categories'] });
+        } else if (evt === 'menu_items_updated' || evt === 'menu_updated') {
+          queryClient.invalidateQueries({ queryKey: ['menu-items'] });
+          queryClient.invalidateQueries({ queryKey: ['menu-items-all'] });
+          queryClient.invalidateQueries({ queryKey: ['pos-menu'] });
+          queryClient.invalidateQueries({ queryKey: ['menus'] });
+          queryClient.invalidateQueries({ queryKey: ['item-categories'] });
+        } else if (evt === 'tables_updated' || evt === 'areas_updated' || evt === 'table_updated' || evt === 'table_closed') {
+          queryClient.invalidateQueries({ queryKey: ['tables'] });
+          queryClient.invalidateQueries({ queryKey: ['areas'] });
+          queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+          queryClient.invalidateQueries({ queryKey: ['pos-tables'] });
+        } else if (evt === 'customers_updated') {
+          queryClient.invalidateQueries({ queryKey: ['customers'] });
+          queryClient.invalidateQueries({ queryKey: ['customer-list'] });
+          queryClient.invalidateQueries({ queryKey: ['mainpos-customers'] });
+        } else if (evt === 'inventory_updated') {
+          queryClient.invalidateQueries({ queryKey: ['inventory'] });
+          queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+          queryClient.invalidateQueries({ queryKey: ['inventory-stock'] });
+        } else if (evt === 'loyalty_updated') {
+          queryClient.invalidateQueries({ queryKey: ['loyalty-config'] });
+          queryClient.invalidateQueries({ queryKey: ['loyalty'] });
+          queryClient.invalidateQueries({ queryKey: ['customers'] });
+        } else if (evt === 'cash_register_updated' || evt === 'token_updated' || evt === 'payment_success') {
+          queryClient.invalidateQueries({ queryKey: ['cash-register-session'] });
+          queryClient.invalidateQueries({ queryKey: ['reports'] });
+        }
+      };
+
+      [
+        'tables_updated', 'areas_updated', 'table_updated', 'table_closed',
+        'categories_updated', 'groups_updated', 'menu_updated', 'menu_items_updated',
+        'customers_updated', 'inventory_updated', 'loyalty_updated',
+        'cash_register_updated', 'token_updated', 'payment_success'
+      ].forEach((evt) => {
+        socketInstance?.on(evt, (payload: any) => {
+          invalidateAndDispatch(evt, payload);
         });
       });
 
       socketInstance.on('settings_updated', (payload: any) => {
         const settings = payload?.settings;
-        if (!settings) return;
         try {
-          (globalThis as any).__RESTAURANT_SETTINGS__ = settings;
-          const mode = settings?.theme?.mode;
-          if (mode === 'light' || mode === 'dark') {
-            useThemeStore.getState().setTheme(mode);
+          if (settings) {
+            (globalThis as any).__RESTAURANT_SETTINGS__ = settings;
+            const mode = settings?.theme?.mode;
+            if (mode === 'light' || mode === 'dark') {
+              useThemeStore.getState().setTheme(mode);
+            }
           }
-          window.dispatchEvent(new CustomEvent('settings_updated', { detail: settings }));
+          queryClient.invalidateQueries({ queryKey: ['restaurant-settings'] });
+          queryClient.invalidateQueries({ queryKey: ['bill-settings'] });
+          queryClient.invalidateQueries({ queryKey: ['app-settings'] });
+          queryClient.invalidateQueries({ queryKey: ['general-settings'] });
+          window.dispatchEvent(new CustomEvent('settings_updated', { detail: payload }));
         } catch {
           // no-op
         }

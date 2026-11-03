@@ -102,21 +102,11 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    // 401 handling
+    // 401 handling - do not immediately kick user to login
     if (status === 401 && originalRequest && !originalRequest._retry) {
       originalRequest._retry = true;
 
-      if (reqUrl.includes('/mainpos/')) {
-        redirectToLogin('mainpos');
-        return Promise.reject(error);
-      }
-
-      if (reqUrl.includes('/subpos/')) {
-        redirectToLogin('subpos');
-        return Promise.reject(error);
-      }
-
-      // Standalone POS pages should not attempt admin token refreshes or redirect to /login
+      // Standalone POS pages should not be automatically logged out on single request errors
       if (isStandalonePage()) {
         return Promise.reject(error);
       }
@@ -128,9 +118,9 @@ api.interceptors.response.use(
         originalRequest.headers.Authorization = `Bearer ${data.data.token}`;
         return api(originalRequest);
       } catch {
-        redirectToLogin('admin');
+        // Keep session intact; let UI / toast handle the error rather than suddenly logging out
+        return Promise.reject(error);
       }
-      return Promise.reject(error);
     }
 
     return Promise.reject(error);

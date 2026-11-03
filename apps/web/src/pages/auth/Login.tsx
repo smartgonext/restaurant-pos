@@ -9,6 +9,7 @@ import api from '@/lib/api';
 import toast from 'react-hot-toast';
 
 import { useEnterKeyNavigation } from '@/hooks/useEnterKeyNavigation';
+import amoraLogo from '@/assets/amora-logo.png';
 
 function getRedirectByRole(role: string, loginType: string): string {
   // Management/Admin login
@@ -100,12 +101,21 @@ export default function Login() {
       <div className="absolute bottom-0 left-0 w-[600px] h-[600px] bg-cyan-600/10 rounded-full blur-[120px] translate-y-1/3 -translate-x-1/3" />
 
       <div className="relative z-10 w-full max-w-lg px-6">
-        <div className="text-center mb-12">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-blue-600 to-indigo-700 shadow-glow mb-6">
-            <UtensilsCrossed className="w-10 h-10 text-white" />
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center p-3 rounded-3xl bg-[#161929]/80 border border-[#2a2d3e] shadow-2xl mb-4">
+            <img
+              src={amoraLogo}
+              alt="Amora Bakes & Cafe"
+              className="h-16 w-auto object-contain rounded-2xl"
+              onError={(e) => {
+                if (e.currentTarget.src !== './amora-logo.png') {
+                  e.currentTarget.src = './amora-logo.png';
+                }
+              }}
+            />
           </div>
-          <h1 className="text-4xl font-black text-white uppercase tracking-tighter italic">SMART<span className="text-blue-500">GONEXT</span></h1>
-          <p className="text-slate-400 font-medium mt-2">Professional SaaS Restaurant Engine</p>
+          <h1 className="text-4xl font-black text-white uppercase tracking-wider">AMORA</h1>
+          <p className="text-slate-400 font-semibold text-xs mt-1 uppercase tracking-widest">Bakes & Cafe · Smart Touch POS</p>
         </div>
 
         {/* Modular Login Type Selector */}
@@ -143,7 +153,7 @@ export default function Login() {
             <Input
               label={loginType === 'worker' ? 'Worker Email' : 'Admin Email'}
               type="text"
-              placeholder={loginType === 'worker' ? "worker@SMARTGONEXT.com" : "admin@SMARTGONEXT.com"}
+              placeholder={loginType === 'worker' ? "cashier@amora.com" : "admin@amora.com"}
               icon={<Mail className="w-4 h-4 text-blue-400" />}
               className="bg-[#0d0f1c] border-[#2a2d3e] text-white"
               error={errors.email?.message}
@@ -199,6 +209,12 @@ export default function Login() {
             </p>
           </div>
         </form>
+
+        <div className="mt-6 text-center">
+          <p className="text-xs font-semibold text-slate-500 tracking-wider">
+            Powered by <span className="font-extrabold text-slate-400">SMARTGONEXT</span>
+          </p>
+        </div>
       </div>
     </div>
   );

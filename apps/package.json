@@ -1,6 +1,6 @@
 {
   "name": "restaurant-saas-electron",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Restaurant SaaS POS Application",
   "author": "Restaurant SaaS POS",
   "main": "main.js",
@@ -46,20 +46,8 @@
     "files": [
       "main.js",
       "preload.js",
-      "**/*",
-      "!web/src/**",
-      "!web/public/**",
-      "!web/node_modules/**",
-      "!api/**",
-      "!data",
-      "!data/**",
-      "!backups/**",
-      "!.history/**",
-      "!{.gitignore,.env,*.log}",
-      "!*.zip",
-      "!online-deploy/**",
-      "!online-deploy-temp/**",
-      "!release/**"
+      "Logo.png",
+      "package.json"
     ],
     "extraResources": [
       {
@@ -69,12 +57,23 @@
           "**/*",
           "!node_modules/**",
           "!prisma/migrations/**",
-          "!src/**/*.ts"
+          "!src/**/*.ts",
+          "!tests/**",
+          "!tmp/**",
+          "!scratch/**",
+          "!*.txt"
         ]
       },
       {
         "from": "api/node_modules",
-        "to": "api/node_modules"
+        "to": "api/node_modules",
+        "filter": [
+          "**/*",
+          "!**/*.tmp*",
+          "!**/*.map",
+          "!**/test/**",
+          "!**/tests/**"
+        ]
       },
       {
         "from": "web/dist",

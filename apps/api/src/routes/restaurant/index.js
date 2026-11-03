@@ -28,7 +28,7 @@ import { normalizeStringArray, toDbArrayField } from '../../utils/prisma.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const routeDir = path.dirname(__filename);
-const resolveUploadsDir = () => process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.join(routeDir, '..', '..', '..', 'uploads');
+const resolveUploadsDir = () => path.join(routeDir, '..', '..', '..', 'uploads');
 const toDbPackOptions = (packOptions, enablePackOptions) => {
     if (!enablePackOptions)
         return null;
@@ -45,10 +45,11 @@ const toDbPackOptions = (packOptions, enablePackOptions) => {
 };
 
 // Parses a persisted group-occupancy tag stored in an order's note, e.g.
-// "[Seats:1,2]". Used so a combined group's item-less chairs still show as
-// occupied (per-chair occupancy is otherwise derived from KOT items).
+// "[Seats:1,2]" or "[Seat: 1]". Used so a combined group's or chair's items
+// still show as occupied (per-chair occupancy is otherwise derived from KOT items).
 function parseGroupSeats(note) {
-    const m = String(note || '').match(/\[Seats:([^\]]+)\]/);
+    const s = String(note || '');
+    const m = s.match(/\[Seats?:([^\]]+)\]/i);
     if (!m || !m[1]) return [];
     return m[1].split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0);
 }
@@ -66,7 +67,7 @@ function parseGroupId(note) {
 // re-appear as occupied from a stale tag.
 function removeGroupSeats(note, releasedSeats = []) {
     const s = String(note || '');
-    const match = s.match(/\[Seats:([^\]]+)\]/);
+    const match = s.match(/\[Seats?:([^\]]+)\]/i);
     if (!match) return s;
     const rel = new Set((releasedSeats || []).map(Number).filter((n) => Number.isInteger(n) && n > 0));
     if (rel.size === 0) return s;
@@ -75,7 +76,7 @@ function removeGroupSeats(note, releasedSeats = []) {
         .map((x) => Number(x.trim()))
         .filter((n) => Number.isInteger(n) && n > 0)
         .filter((c) => !rel.has(c));
-    const withoutTag = s.replace(/\[Seats:[^\]]*\]/g, '').replace(/\[Gid:[A-Za-z0-9_-]+\]/g, '').trim();
+    const withoutTag = s.replace(/\[Seats?:[^\]]*\]/gi, '').replace(/\[Gid:[A-Za-z0-9_-]+\]/gi, '').trim();
     if (remaining.length === 0) return withoutTag;
     return (withoutTag === '' ? '' : withoutTag + ' ') + `[Seats:${remaining.sort((a, b) => a - b).join(',')}]`;
 }
@@ -449,6 +450,54 @@ export async function restaurantRoutes(app) {
         }
         return Boolean(category.isKOTEnabled);
     };
+    const getNextSequentialBarcode = async (restaurantId) => {
+        try {
+            const items = await prisma.menuItem.findMany({
+                where: { restaurantId, productQR: { not: null } },
+                select: { productQR: true }
+            });
+            let max = 0;
+            for (const it of items) {
+                const qr = String(it.productQR || '').trim();
+                if (/^\d+$/.test(qr)) {
+                    const num = parseInt(qr, 10);
+                    if (num > max && num < 100000000) max = num;
+                }
+            }
+            const invItems = await prisma.inventoryItem.findMany({
+                where: { restaurantId, barcode: { not: null } },
+                select: { barcode: true }
+            });
+            for (const it of invItems) {
+                const qr = String(it.barcode || '').trim();
+                if (/^\d+$/.test(qr)) {
+                    const num = parseInt(qr, 10);
+                    if (num > max && num < 100000000) max = num;
+                }
+            }
+            let candidateNum = max + 1;
+            while (true) {
+                const candidate = String(candidateNum).padStart(5, '0');
+                const exists = await prisma.menuItem.findFirst({ where: { productQR: candidate }, select: { id: true } });
+                const existsInv = await prisma.inventoryItem.findFirst({ where: { barcode: candidate }, select: { id: true } });
+                if (!exists && !existsInv) {
+                    return candidate;
+                }
+                candidateNum++;
+            }
+        } catch (e) {
+            return String(Date.now()).slice(-6);
+        }
+    };
+    app.get('/menu-items/next-barcode', async (request, reply) => {
+        try {
+            const restaurantId = request.restaurantId;
+            const barcode = await getNextSequentialBarcode(restaurantId);
+            return { success: true, barcode };
+        } catch (err) {
+            return reply.status(500).send({ success: false, error: err?.message || String(err) });
+        }
+    });
     // ── Activate or Create ItemModifier for Menu Item and Modifier Group ──
     app.post('/item-modifiers/activate', async (request, reply) => {
         const restaurantId = request.restaurantId;
@@ -1323,6 +1372,26 @@ export async function restaurantRoutes(app) {
         const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000);
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const startOfPreviousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+        // Date filter handling: supports dateFrom & dateTo (e.g. today, yesterday, custom range)
+        let startOfPeriod = startOfToday;
+        let endOfPeriod = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000 - 1);
+        let isCustomRange = false;
+
+        if (request.query?.dateFrom && request.query?.dateTo) {
+            const parsedStart = new Date(request.query.dateFrom);
+            const parsedEnd = new Date(request.query.dateTo);
+            if (!isNaN(parsedStart.getTime()) && !isNaN(parsedEnd.getTime())) {
+                startOfPeriod = parsedStart;
+                endOfPeriod = parsedEnd;
+                isCustomRange = true;
+            }
+        }
+
+        const durationMs = Math.max(endOfPeriod.getTime() - startOfPeriod.getTime(), 24 * 60 * 60 * 1000);
+        const startOfPrevPeriod = new Date(startOfPeriod.getTime() - durationMs);
+        const endOfPrevPeriod = new Date(startOfPeriod.getTime() - 1);
+
         // Chart range (days) can be requested via ?days=7|14|30 (default: 7)
         const days = Math.min(Math.max(Number(request.query?.days) || 7, 7), 30);
         const labels = [];
@@ -1341,28 +1410,56 @@ export async function restaurantRoutes(app) {
                 where: { restaurantId, createdAt: { gte: date, lt: nextDate }, status: 'paid' }
             }));
         }
-        const [todayOrdersCount, yesterdayOrdersCount, monthOrdersCount, previousMonthOrdersCount, todayTokensCount, yesterdayTokensCount, monthTokensCount, previousMonthTokensCount, todayRevenueAgg, yesterdayRevenueAgg, monthRevenueAgg, previousMonthRevenueAgg, todayTokenRevenueAgg, yesterdayTokenRevenueAgg, monthTokenRevenueAgg, previousMonthTokenRevenueAgg, totalCustomers, recentOrders, orderPayments, tokenPayments, 
-        // newly added aggregates
-        todayExpenseAgg, monthExpenseAgg, inventoryItems, chartOrderDataResults, chartTokenDataResults, tokensToday, tokensPaid] = await Promise.all([
-            prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfToday }, status: { not: 'cancelled' } } }),
-            prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfYesterday, lt: startOfToday }, status: { not: 'cancelled' } } }),
+
+        const [
+            periodOrdersCount,
+            prevPeriodOrdersCount,
+            monthOrdersCount,
+            previousMonthOrdersCount,
+            periodTokensCount,
+            prevPeriodTokensCount,
+            monthTokensCount,
+            previousMonthTokensCount,
+            periodRevenueAgg,
+            prevPeriodRevenueAgg,
+            monthRevenueAgg,
+            previousMonthRevenueAgg,
+            periodTokenRevenueAgg,
+            prevPeriodTokenRevenueAgg,
+            monthTokenRevenueAgg,
+            previousMonthTokenRevenueAgg,
+            totalCustomers,
+            recentOrders,
+            orderPayments,
+            tokenPayments,
+            periodExpenseAgg,
+            monthExpenseAgg,
+            inventoryItems,
+            chartOrderDataResults,
+            chartTokenDataResults,
+            tokensInPeriod,
+            tokensPaidInPeriod,
+            tokenItemsInPeriod
+        ] = await Promise.all([
+            prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
+            prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: { not: 'cancelled' } } }),
             prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfMonth }, status: { not: 'cancelled' } } }),
             prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: { not: 'cancelled' } } }),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfToday }, status: { not: 'cancelled' } } }),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfYesterday, lt: startOfToday }, status: { not: 'cancelled' } } }),
+            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
+            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: { not: 'cancelled' } } }),
             prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfMonth }, status: { not: 'cancelled' } } }),
             prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: { not: 'cancelled' } } }),
-            prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfToday }, status: 'paid' } }),
-            prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfYesterday, lt: startOfToday }, status: 'paid' } }),
+            prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: 'paid' } }),
+            prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: 'paid' } }),
             prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfMonth }, status: 'paid' } }),
             prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: 'paid' } }),
-            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfToday }, status: 'paid' } }),
-            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfYesterday, lt: startOfToday }, status: 'paid' } }),
+            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: 'paid' } }),
+            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: 'paid' } }),
             prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfMonth }, status: 'paid' } }),
             prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: 'paid' } }),
             prisma.customer.count({ where: { restaurantId } }),
             prisma.order.findMany({
-                where: { restaurantId, type: { not: 'token' } },
+                where: { restaurantId, type: { not: 'token' }, ...(isCustomRange ? { createdAt: { gte: startOfPeriod, lte: endOfPeriod } } : {}) },
                 include: {
                     table: true,
                     customer: true,
@@ -1379,34 +1476,39 @@ export async function restaurantRoutes(app) {
                 take: 10,
             }),
             prisma.orderPayment.findMany({
-                where: { order: { restaurantId, type: { not: 'token' } }, paidAt: { gte: startOfToday } },
+                where: { order: { restaurantId, type: { not: 'token' } }, paidAt: { gte: startOfPeriod, lte: endOfPeriod } },
                 select: { amount: true, method: true }
             }),
             prisma.bakeryTokenPayment.findMany({
-                where: { token: { restaurantId }, paidAt: { gte: startOfToday } },
+                where: { token: { restaurantId }, paidAt: { gte: startOfPeriod, lte: endOfPeriod } },
                 select: { amount: true, method: true }
             }),
-            // expenses aggregates
-            prisma.expense.aggregate({ _sum: { amount: true }, where: { restaurantId, expenseDate: { gte: startOfToday } } }),
+            prisma.expense.aggregate({ _sum: { amount: true }, where: { restaurantId, expenseDate: { gte: startOfPeriod, lte: endOfPeriod } } }),
             prisma.expense.aggregate({ _sum: { amount: true }, where: { restaurantId, expenseDate: { gte: startOfMonth } } }),
-            // inventory list for stock value and low-stock alerts
             prisma.inventoryItem.findMany({ where: { restaurantId }, select: { id: true, name: true, currentStock: true, costPerUnit: true, thresholdQty: true, unit: { select: { symbol: true } } } }),
             Promise.all(chartOrderQueries),
             Promise.all(chartTokenQueries),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfToday } } }),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfToday }, status: 'paid' } })
+            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod } } }),
+            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: 'paid' } }),
+            prisma.bakeryTokenItem.findMany({
+                where: { token: { restaurantId }, addedAt: { gte: startOfPeriod, lte: endOfPeriod }, isRemoved: false },
+                select: { menuItemName: true, quantity: true }
+            })
         ]);
-        const todayRevenue = Number(todayRevenueAgg._sum.total || 0) + Number(todayTokenRevenueAgg._sum.total || 0);
-        const yesterdayRevenue = Number(yesterdayRevenueAgg._sum.total || 0) + Number(yesterdayTokenRevenueAgg._sum.total || 0);
+
+        const periodOrders = periodOrdersCount + periodTokensCount;
+        const prevPeriodOrders = prevPeriodOrdersCount + prevPeriodTokensCount;
+        const periodRevenue = Number(periodRevenueAgg._sum.total || 0) + Number(periodTokenRevenueAgg._sum.total || 0);
+        const prevPeriodRevenue = Number(prevPeriodRevenueAgg._sum.total || 0) + Number(prevPeriodTokenRevenueAgg._sum.total || 0);
+        const periodExpense = Number(periodExpenseAgg?._sum?.amount || 0);
+        const periodProfit = periodRevenue - periodExpense;
+
         const monthRevenue = Number(monthRevenueAgg._sum.total || 0) + Number(monthTokenRevenueAgg._sum.total || 0);
         const previousMonthRevenue = Number(previousMonthRevenueAgg._sum.total || 0) + Number(previousMonthTokenRevenueAgg._sum.total || 0);
-        const todayOrders = todayOrdersCount + todayTokensCount;
-        const yesterdayOrders = yesterdayOrdersCount + yesterdayTokensCount;
         const monthOrders = monthOrdersCount + monthTokensCount;
         const previousMonthOrders = previousMonthOrdersCount + previousMonthTokensCount;
-        // expenses (today / month)
-        const todayExpense = Number(todayExpenseAgg?._sum?.amount || 0);
         const monthExpense = Number(monthExpenseAgg?._sum?.amount || 0);
+
         // compute total stock value and low-stock alerts from inventory items
         const totalStockValue = (inventoryItems || []).reduce((acc, it) => {
             const qty = Number(it.currentStock || 0);
@@ -1422,15 +1524,19 @@ export async function restaurantRoutes(app) {
             costPerUnit: Number(it.costPerUnit || 0),
             totalValue: Number(it.currentStock || 0) * Number(it.costPerUnit || 0)
         }));
+
         const profitLossOverview = {
-            today: { revenue: todayRevenue, expenses: todayExpense, profit: todayRevenue - todayExpense },
+            today: { revenue: periodRevenue, expenses: periodExpense, profit: periodProfit },
+            period: { revenue: periodRevenue, expenses: periodExpense, profit: periodProfit },
             month: { revenue: monthRevenue, expenses: monthExpense, profit: monthRevenue - monthExpense }
         };
+
         const calculateChange = (current, previous) => {
             if (previous === 0)
                 return current > 0 ? 100 : 0;
             return ((current - previous) / previous) * 100;
         };
+
         const paymentMethodsMap = {};
         for (const p of [...orderPayments, ...tokenPayments]) {
             if (!paymentMethodsMap[p.method])
@@ -1441,17 +1547,34 @@ export async function restaurantRoutes(app) {
             name: method.charAt(0).toUpperCase() + method.slice(1),
             value: paymentMethodsMap[method]
         }));
+
+        // Compute top items for the period
+        const itemCounts = {};
+        for (const item of (tokenItemsInPeriod || [])) {
+            const name = item.menuItemName || 'Item';
+            itemCounts[name] = (itemCounts[name] || 0) + Number(item.quantity || 1);
+        }
+        const topItems = Object.entries(itemCounts)
+            .map(([name, count]) => ({ name, count: Math.round(count) }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 5);
+
         const chartData = chartOrderDataResults.map((res, i) => ({
             label: labels[i],
             value: Number(res._sum.total || 0) + Number(chartTokenDataResults[i]?._sum?.total || 0)
         }));
+
         return {
             success: true,
             data: {
-                todayOrders,
-                ordersChange: calculateChange(todayOrders, yesterdayOrders),
-                todayRevenue,
-                revenueChange: calculateChange(todayRevenue, yesterdayRevenue),
+                todayOrders: periodOrders,
+                periodOrders,
+                ordersChange: calculateChange(periodOrders, prevPeriodOrders),
+                todayRevenue: periodRevenue,
+                periodRevenue,
+                revenueChange: calculateChange(periodRevenue, prevPeriodRevenue),
+                expenses: { today: periodExpense, period: periodExpense, month: monthExpense },
+                profitLossOverview,
                 monthRevenue,
                 monthRevenueChange: calculateChange(monthRevenue, previousMonthRevenue),
                 salesThisMonth: monthRevenue,
@@ -1475,10 +1598,13 @@ export async function restaurantRoutes(app) {
                 paymentMethods,
                 chartData,
                 bakery: {
-                    tokensToday,
-                    tokensPaid,
-                    tokensPending: Math.max(0, tokensToday - tokensPaid),
+                    tokensToday: tokensInPeriod,
+                    tokensPaid: tokensPaidInPeriod,
+                    tokensPending: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
+                    topItems,
                 },
+                totalStockValue,
+                lowStockAlerts,
             },
         };
     });
@@ -1576,10 +1702,6 @@ export async function restaurantRoutes(app) {
                     packOptions: true,
                     menuId: true,
                     categoryId: true,
-                    inventoryItemId: true,
-                    productQR: true,
-                    stockWarningThreshold: true,
-                    expiryDate: true,
                     isVeg: true,
                     isAvailable: true,
                     showOnCustomerSite: true,
@@ -1587,26 +1709,24 @@ export async function restaurantRoutes(app) {
                     sortOrder: true,
                     createdAt: true,
                     updatedAt: true,
-                    category: { select: { id: true, name: true, image: true, isKOTEnabled: true, groupId: true, group: { select: { id: true, name: true, isKOTEnabled: true } } } },
+                    inventoryItemId: true,
+                    productQR: true,
                     inventoryItem: {
-                        select: {
-                            id: true,
-                            name: true,
-                            unitId: true,
-                            unit: { select: { id: true, name: true, symbol: true } },
-                            inventoryMRPs: {
+                        include: {
+                            unit: {
                                 select: {
                                     id: true,
-                                    mrp: true,
-                                    purchaseRate: true,
-                                    profitPercent: true,
-                                    isActive: true,
-                                    createdAt: true
-                                },
-                                orderBy: { createdAt: 'desc' }
+                                    name: true,
+                                    symbol: true
+                                }
+                            },
+                            inventoryMRPs: {
+                                orderBy: { id: 'desc' },
+                                take: 1
                             }
                         }
                     },
+                    category: { select: { id: true, name: true, image: true, isKOTEnabled: true, groupId: true, group: { select: { id: true, name: true, isKOTEnabled: true } } } },
                     menu: { select: { id: true, name: true } },
                     itemModifiers: { select: { id: true, modifierGroup: { select: { id: true, name: true, options: true } } } }
                 },
@@ -1625,47 +1745,32 @@ export async function restaurantRoutes(app) {
                     return !!category && !resolveCategoryKOT(category);
                 });
             }
-            const normalized = result.map((item) => {
-                let enrichedInventoryItem = item.inventoryItem;
-                if (enrichedInventoryItem && Array.isArray(enrichedInventoryItem.inventoryMRPs)) {
-                    enrichedInventoryItem = {
-                        ...enrichedInventoryItem,
-                        inventoryMRPs: enrichedInventoryItem.inventoryMRPs.map((m) => {
-                            const purchase = Number(m.purchaseRate ?? 0);
-                            const profit = Number(m.profitPercent ?? 0);
-                            const selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
-                            return { ...m, sellingPrice: selling };
-                        })
+            const normalized = result.map((item) => ({
+                ...item,
+                category: item.category
+                    ? {
+                        ...item.category,
+                        isKOTEnabled: resolveCategoryKOT(item.category),
+                    }
+                    : item.category,
+                itemModifiers: (item.itemModifiers || []).map((im) => {
+                    let options = [];
+                    if (im.modifierGroup) {
+                        try {
+                            options = typeof im.modifierGroup.options === 'string'
+                                ? JSON.parse(im.modifierGroup.options)
+                                : (Array.isArray(im.modifierGroup.options) ? im.modifierGroup.options : []);
+                        }
+                        catch (e) { }
+                    }
+                    return {
+                        ...im,
+                        modifierGroup: im.modifierGroup
+                            ? { ...im.modifierGroup, options }
+                            : im.modifierGroup
                     };
-                }
-                return {
-                    ...item,
-                    inventoryItem: enrichedInventoryItem,
-                    category: item.category
-                        ? {
-                            ...item.category,
-                            isKOTEnabled: resolveCategoryKOT(item.category),
-                        }
-                        : item.category,
-                    itemModifiers: (item.itemModifiers || []).map((im) => {
-                        let options = [];
-                        if (im.modifierGroup) {
-                            try {
-                                options = typeof im.modifierGroup.options === 'string'
-                                    ? JSON.parse(im.modifierGroup.options)
-                                    : (Array.isArray(im.modifierGroup.options) ? im.modifierGroup.options : []);
-                            }
-                            catch (e) { }
-                        }
-                        return {
-                            ...im,
-                            modifierGroup: im.modifierGroup
-                                ? { ...im.modifierGroup, options }
-                                : im.modifierGroup
-                        };
-                    })
-                };
-            });
+                })
+            }));
             return { success: true, data: normalized };
         }
         catch (err) {
@@ -1706,13 +1811,13 @@ export async function restaurantRoutes(app) {
                 createData.taxPercent = 0;
             }
             else {
-                const normalizedTaxType = String(createData.taxType || '').trim().toLowerCase();
+                let normalizedTaxType = String(createData.taxType || '').trim().toLowerCase();
                 if (!['internal', 'external'].includes(normalizedTaxType)) {
-                    return reply.status(400).send({ success: false, error: 'Tax Type is required: internal or external' });
+                    normalizedTaxType = 'external';
                 }
-                const parsedTaxPercent = Number(createData.taxPercent);
+                let parsedTaxPercent = Number(createData.taxPercent !== undefined && createData.taxPercent !== null ? createData.taxPercent : 0);
                 if (!Number.isFinite(parsedTaxPercent) || parsedTaxPercent < 0 || parsedTaxPercent > 100) {
-                    return reply.status(400).send({ success: false, error: 'Tax Percent must be between 0 and 100' });
+                    parsedTaxPercent = 0;
                 }
                 createData.taxType = normalizedTaxType;
                 createData.taxPercent = parsedTaxPercent;
@@ -1726,13 +1831,16 @@ export async function restaurantRoutes(app) {
                 const qr = createData.productQR.trim();
                 createData.productQR = qr.length > 0 ? qr : null;
             }
+            if (!createData.productQR) {
+                createData.productQR = await getNextSequentialBarcode(restaurantId);
+            }
             // Normalize and validate non-KOT pack variants.
             // Tax stays on the main menu item (not variant-level).
             if (createData.enablePackOptions) {
                 // Ensure main product QR exists; auto-generate if caller omitted it.
                 let mainQR = String(createData.productQR || '').trim();
                 if (!mainQR) {
-                    mainQR = `PRD-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000000).toString(36)}`;
+                    mainQR = await getNextSequentialBarcode(restaurantId);
                     createData.productQR = mainQR;
                 }
                 if (!Array.isArray(createData.packOptions) || createData.packOptions.length === 0) {
@@ -1816,6 +1924,23 @@ export async function restaurantRoutes(app) {
                     sortOrder: true,
                     createdAt: true,
                     updatedAt: true,
+                    inventoryItemId: true,
+                    productQR: true,
+                    inventoryItem: {
+                        include: {
+                            unit: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                    symbol: true
+                                }
+                            },
+                            inventoryMRPs: {
+                                orderBy: { id: 'desc' },
+                                take: 1
+                            }
+                        }
+                    },
                     category: { select: { id: true, name: true, image: true, isKOTEnabled: true, groupId: true, group: { select: { id: true, name: true, isKOTEnabled: true } } } },
                     menu: { select: { id: true, name: true } },
                     itemModifiers: { select: { id: true, modifierGroup: { select: { id: true, name: true } } } }
@@ -1825,6 +1950,8 @@ export async function restaurantRoutes(app) {
                 app.log?.info?.({ item }, 'menu-items.created');
             }
             catch (e) { }
+            emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'created', item });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
             return { success: true, data: item };
         }
         catch (err) {
@@ -1837,27 +1964,28 @@ export async function restaurantRoutes(app) {
     });
     app.put('/menu-items/:id', async (request, reply) => {
         const { id } = request.params;
+        let restaurantId = request.restaurantId;
         const body = request.body;
         const updateData = { ...body };
         try {
+            const existing = await prisma.menuItem.findUnique({ where: { id: Number(id) }, select: { categoryId: true, restaurantId: true } });
+            if (!existing)
+                return reply.status(404).send({ success: false, error: 'Menu item not found' });
+            if (!restaurantId) {
+                restaurantId = existing.restaurantId;
+            }
             if (updateData.enablePackOptions) {
-                const existing = await prisma.menuItem.findUnique({ where: { id: Number(id) }, select: { categoryId: true, restaurantId: true } });
-                if (!existing)
-                    return reply.status(404).send({ success: false, error: 'Menu item not found' });
                 const resolvedCategoryId = updateData.categoryId ?? existing.categoryId;
                 const category = resolvedCategoryId
-                    ? await prisma.itemCategory.findFirst({ where: { id: Number(resolvedCategoryId), restaurantId: existing.restaurantId }, include: { group: true } })
+                    ? await prisma.itemCategory.findFirst({ where: { id: Number(resolvedCategoryId), restaurantId }, include: { group: true } })
                     : null;
                 if (!category || resolveCategoryKOT(category)) {
                     return reply.status(400).send({ success: false, error: 'Pack options are allowed only for non-KOT items' });
                 }
             }
-            const existing = await prisma.menuItem.findUnique({ where: { id: Number(id) }, select: { categoryId: true, restaurantId: true } });
-            if (!existing)
-                return reply.status(404).send({ success: false, error: 'Menu item not found' });
             const resolvedCategoryId = updateData.categoryId ?? existing.categoryId;
             const selectedCategory = resolvedCategoryId
-                ? await prisma.itemCategory.findFirst({ where: { id: Number(resolvedCategoryId), restaurantId: existing.restaurantId }, include: { group: true } })
+                ? await prisma.itemCategory.findFirst({ where: { id: Number(resolvedCategoryId), restaurantId }, include: { group: true } })
                 : null;
             const isFoodCategory = !selectedCategory || resolveCategoryKOT(selectedCategory);
             if (isFoodCategory) {
@@ -1866,13 +1994,13 @@ export async function restaurantRoutes(app) {
                 updateData.taxPercent = 0;
             }
             else {
-                const normalizedTaxType = String(updateData.taxType || '').trim().toLowerCase();
+                let normalizedTaxType = String(updateData.taxType || '').trim().toLowerCase();
                 if (!['internal', 'external'].includes(normalizedTaxType)) {
-                    return reply.status(400).send({ success: false, error: 'Tax Type is required: internal or external' });
+                    normalizedTaxType = 'external';
                 }
-                const parsedTaxPercent = Number(updateData.taxPercent);
+                let parsedTaxPercent = Number(updateData.taxPercent !== undefined && updateData.taxPercent !== null ? updateData.taxPercent : 0);
                 if (!Number.isFinite(parsedTaxPercent) || parsedTaxPercent < 0 || parsedTaxPercent > 100) {
-                    return reply.status(400).send({ success: false, error: 'Tax Percent must be between 0 and 100' });
+                    parsedTaxPercent = 0;
                 }
                 updateData.taxType = normalizedTaxType;
                 updateData.taxPercent = parsedTaxPercent;
@@ -1891,7 +2019,7 @@ export async function restaurantRoutes(app) {
             if (updateData.enablePackOptions) {
                 let mainQR = String(updateData.productQR || '').trim();
                 if (!mainQR) {
-                    mainQR = `PRD-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000000).toString(36)}`;
+                    mainQR = await getNextSequentialBarcode(restaurantId);
                     updateData.productQR = mainQR;
                 }
                 if (!Array.isArray(updateData.packOptions) || updateData.packOptions.length === 0) {
@@ -1975,11 +2103,30 @@ export async function restaurantRoutes(app) {
                     sortOrder: true,
                     createdAt: true,
                     updatedAt: true,
+                    inventoryItemId: true,
+                    productQR: true,
+                    inventoryItem: {
+                        include: {
+                            unit: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                    symbol: true
+                                }
+                            },
+                            inventoryMRPs: {
+                                orderBy: { id: 'desc' },
+                                take: 1
+                            }
+                        }
+                    },
                     category: { select: { id: true, name: true, image: true, isKOTEnabled: true, groupId: true, group: { select: { id: true, name: true, isKOTEnabled: true } } } },
                     menu: { select: { id: true, name: true } },
                     itemModifiers: { select: { id: true, modifierGroup: { select: { id: true, name: true } } } }
                 }
             });
+            emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'updated', item });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
             return { success: true, data: item };
         }
         catch (err) {
@@ -1992,6 +2139,7 @@ export async function restaurantRoutes(app) {
     });
     app.delete('/menu-items/:id', async (request, reply) => {
         const { id } = request.params;
+        const restaurantId = request.restaurantId;
         try {
             // Use explicit select to avoid Prisma attempting to read a DB column
             // that may not exist yet (e.g., `stockWarningThreshold`). If the
@@ -2003,6 +2151,8 @@ export async function restaurantRoutes(app) {
                     name: true,
                 }
             });
+            emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'deleted', itemId: Number(id) });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
             return { success: true, message: 'Item deleted' };
         }
         catch (err) {
@@ -2017,6 +2167,8 @@ export async function restaurantRoutes(app) {
                         showOnCustomerSite: false,
                     }
                 });
+                emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'deleted', itemId: Number(id) });
+                emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
                 return { success: true, message: 'Item deleted' };
             }
             if (code === 'P2025') {
@@ -2073,6 +2225,11 @@ export async function restaurantRoutes(app) {
                     errors.push(err?.message || String(err));
                 }
             }
+        }
+
+        if (deletedCount > 0) {
+            emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'bulk-deleted', count: deletedCount });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
         }
 
         return {
@@ -2631,6 +2788,8 @@ export async function restaurantRoutes(app) {
                     data: summary,
                 });
             }
+            emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'bulk-uploaded', summary });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
             return { success: true, data: summary };
         }
         catch (err) {
@@ -2791,7 +2950,7 @@ export async function restaurantRoutes(app) {
             name: z.string().min(1),
             description: z.string().optional(),
             image: z.string().optional(),
-            isKOTEnabled: z.boolean(),
+            isKOTEnabled: z.boolean().optional().default(true),
             sortOrder: z.number().optional(),
         });
         try {
@@ -2806,10 +2965,12 @@ export async function restaurantRoutes(app) {
                     name,
                     description: body.description,
                     image: body.image,
-                    isKOTEnabled: body.isKOTEnabled,
+                    isKOTEnabled: body.isKOTEnabled ?? true,
                     sortOrder: body.sortOrder ?? 0,
                 },
             });
+            emitToRestaurant(restaurantId, 'groups_updated', { action: 'created', group });
+            emitToRestaurant(restaurantId, 'categories_updated', { action: 'refresh' });
             return { success: true, data: group };
         }
         catch (err) {
@@ -2854,6 +3015,8 @@ export async function restaurantRoutes(app) {
                 where: { restaurantId, groupId },
                 data: { isKOTEnabled: body.isKOTEnabled },
             });
+            emitToRestaurant(restaurantId, 'groups_updated', { action: 'updated', group });
+            emitToRestaurant(restaurantId, 'categories_updated', { action: 'refresh' });
             return { success: true, data: group };
         }
         catch (err) {
@@ -2873,6 +3036,8 @@ export async function restaurantRoutes(app) {
             return reply.status(400).send({ success: false, error: 'Cannot delete group with categories. Move or delete categories first.' });
         }
         await prisma.itemGroup.delete({ where: { id: groupId } });
+        emitToRestaurant(restaurantId, 'groups_updated', { action: 'deleted', groupId });
+        emitToRestaurant(restaurantId, 'categories_updated', { action: 'refresh' });
         return { success: true };
     });
     // ── Item Categories ──
@@ -2900,17 +3065,21 @@ export async function restaurantRoutes(app) {
             name: z.string().min(1),
             description: z.string().optional(),
             image: z.string().optional(),
-            groupId: z.number(),
-        });
+            groupId: z.number().optional().nullable(),
+        }).passthrough();
         try {
             await ensureDefaultItemGroups(restaurantId);
             const body = schema.parse(request.body);
             const name = String(body.name).trim();
             if (!name)
                 return reply.status(400).send({ success: false, error: 'name is required' });
-            const group = await prisma.itemGroup.findFirst({ where: { id: Number(body.groupId), restaurantId } });
-            if (!group)
-                return reply.status(400).send({ success: false, error: 'Valid group is required' });
+            let group = null;
+            if (body.groupId) {
+                group = await prisma.itemGroup.findFirst({ where: { id: Number(body.groupId), restaurantId } });
+            }
+            if (!group) {
+                group = await prisma.itemGroup.findFirst({ where: { restaurantId }, orderBy: { sortOrder: 'asc' } });
+            }
             const existing = await prisma.itemCategory.findFirst({ where: { restaurantId, name } });
             if (existing)
                 return reply.status(400).send({ success: false, error: 'Category with this name already exists' });
@@ -2920,12 +3089,15 @@ export async function restaurantRoutes(app) {
                     name,
                     description: body.description,
                     image: body.image,
-                    groupId: group.id,
-                    isKOTEnabled: group.isKOTEnabled,
+                    groupId: group?.id || null,
+                    isKOTEnabled: group ? group.isKOTEnabled : true,
                 },
                 include: { group: { select: { id: true, name: true, isKOTEnabled: true, image: true } } },
             });
-            return { success: true, data: { ...category, isKOTEnabled: resolveCategoryKOT(category) } };
+            const resultData = { ...category, isKOTEnabled: resolveCategoryKOT(category) };
+            emitToRestaurant(restaurantId, 'categories_updated', { action: 'created', category: resultData });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            return { success: true, data: resultData };
         }
         catch (err) {
             return reply.status(400).send({ success: false, error: err?.message || String(err) });
@@ -2942,8 +3114,8 @@ export async function restaurantRoutes(app) {
             name: z.string().min(1),
             description: z.string().optional(),
             image: z.string().optional(),
-            groupId: z.number(),
-        });
+            groupId: z.number().optional().nullable(),
+        }).passthrough();
         try {
             await ensureDefaultItemGroups(restaurantId);
             const body = schema.parse(request.body);
@@ -2954,21 +3126,27 @@ export async function restaurantRoutes(app) {
             const duplicate = await prisma.itemCategory.findFirst({ where: { restaurantId, name, NOT: { id: catId } } });
             if (duplicate)
                 return reply.status(400).send({ success: false, error: 'Another category with this name already exists' });
-            const group = await prisma.itemGroup.findFirst({ where: { id: Number(body.groupId), restaurantId } });
-            if (!group)
-                return reply.status(400).send({ success: false, error: 'Valid group is required' });
+            let group = null;
+            if (body.groupId !== undefined && body.groupId !== null) {
+                group = await prisma.itemGroup.findFirst({ where: { id: Number(body.groupId), restaurantId } });
+                if (!group) return reply.status(400).send({ success: false, error: 'Valid group is required' });
+            } else if (existing.groupId) {
+                group = await prisma.itemGroup.findFirst({ where: { id: existing.groupId, restaurantId } });
+            }
             const category = await prisma.itemCategory.update({
                 where: { id: catId },
                 data: {
                     name,
-                    description: body.description,
-                    image: body.image,
-                    groupId: group.id,
-                    isKOTEnabled: group.isKOTEnabled,
+                    description: body.description !== undefined ? body.description : existing.description,
+                    image: body.image !== undefined ? body.image : existing.image,
+                    ...(group ? { groupId: group.id, isKOTEnabled: group.isKOTEnabled } : {}),
                 },
                 include: { group: { select: { id: true, name: true, isKOTEnabled: true, image: true } } },
             });
-            return { success: true, data: { ...category, isKOTEnabled: resolveCategoryKOT(category) } };
+            const resultData = { ...category, isKOTEnabled: resolveCategoryKOT(category) };
+            emitToRestaurant(restaurantId, 'categories_updated', { action: 'updated', category: resultData });
+            emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            return { success: true, data: resultData };
         }
         catch (err) {
             return reply.status(400).send({ success: false, error: err?.message || String(err) });
@@ -2985,6 +3163,8 @@ export async function restaurantRoutes(app) {
         const category = await prisma.itemCategory.delete({
             where: { id: categoryId },
         });
+        emitToRestaurant(restaurantId, 'categories_updated', { action: 'deleted', categoryId });
+        emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
         return { success: true, data: category };
     });
     // ── Modifier Groups ──
@@ -3062,6 +3242,8 @@ export async function restaurantRoutes(app) {
             const area = await prisma.area.create({
                 data: { ...body, restaurantId, branchId },
             });
+            emitToRestaurant(restaurantId, 'areas_updated', { action: 'created', area });
+            emitToRestaurant(restaurantId, 'tables_updated', { action: 'refresh' });
             return { success: true, data: area };
         }
         catch (err) {
@@ -3070,12 +3252,15 @@ export async function restaurantRoutes(app) {
     });
     app.put('/areas/:id', async (request, reply) => {
         const { id } = request.params;
+        const restaurantId = request.restaurantId;
         const body = request.body;
         try {
             const updated = await prisma.area.update({
                 where: { id: Number(id) },
                 data: { name: body.name, sortOrder: body.sortOrder ? Number(body.sortOrder) : undefined },
             });
+            emitToRestaurant(restaurantId, 'areas_updated', { action: 'updated', area: updated });
+            emitToRestaurant(restaurantId, 'tables_updated', { action: 'refresh' });
             return { success: true, data: updated };
         }
         catch (err) {
@@ -3084,10 +3269,13 @@ export async function restaurantRoutes(app) {
     });
     app.delete('/areas/:id', async (request, reply) => {
         const { id } = request.params;
+        const restaurantId = request.restaurantId;
         try {
             await prisma.area.delete({
                 where: { id: Number(id) },
             });
+            emitToRestaurant(restaurantId, 'areas_updated', { action: 'deleted', areaId: Number(id) });
+            emitToRestaurant(restaurantId, 'tables_updated', { action: 'refresh' });
             return { success: true };
         }
         catch (err) {
@@ -3277,6 +3465,7 @@ export async function restaurantRoutes(app) {
             const table = await prisma.table.create({
                 data: { ...body, restaurantId },
             });
+            emitToRestaurant(restaurantId, 'tables_updated', { action: 'created', table });
             return { success: true, data: table };
         }
         catch (err) {
@@ -3285,6 +3474,7 @@ export async function restaurantRoutes(app) {
     });
     app.put('/tables/:id', async (request, reply) => {
         const { id } = request.params;
+        const restaurantId = request.restaurantId;
         const body = request.body;
         try {
             const updated = await prisma.table.update({
@@ -3297,6 +3487,7 @@ export async function restaurantRoutes(app) {
                     isActive: body.isActive !== undefined ? body.isActive : undefined
                 },
             });
+            emitToRestaurant(restaurantId, 'tables_updated', { action: 'updated', table: updated });
             return { success: true, data: updated };
         }
         catch (err) {
@@ -3305,10 +3496,12 @@ export async function restaurantRoutes(app) {
     });
     app.delete('/tables/:id', async (request, reply) => {
         const { id } = request.params;
+        const restaurantId = request.restaurantId;
         try {
             await prisma.table.delete({
                 where: { id: Number(id) },
             });
+            emitToRestaurant(restaurantId, 'tables_updated', { action: 'deleted', tableId: Number(id) });
             return { success: true };
         }
         catch (err) {
@@ -3316,6 +3509,7 @@ export async function restaurantRoutes(app) {
         }
     });
     app.post('/tables/assign-menu', async (request) => {
+        const restaurantId = request.restaurantId;
         const body = request.body;
         const existing = await prisma.tableMenu.findFirst({
             where: { tableId: Number(body.tableId), menuId: Number(body.menuId) }
@@ -3325,6 +3519,7 @@ export async function restaurantRoutes(app) {
                 where: { id: existing.id },
                 data: { isActive: body.isActive }
             });
+            if (restaurantId) emitToRestaurant(restaurantId, 'tables_updated', { action: 'menu_assigned' });
             return { success: true, data: updated };
         }
         else {
@@ -3335,6 +3530,7 @@ export async function restaurantRoutes(app) {
                     isActive: body.isActive
                 }
             });
+            if (restaurantId) emitToRestaurant(restaurantId, 'tables_updated', { action: 'menu_assigned' });
             return { success: true, data: created };
         }
     });
@@ -3343,8 +3539,13 @@ export async function restaurantRoutes(app) {
         const restaurantId = request.restaurantId;
         const { status, type, tableId, startDate, endDate, page = 1, limit = 50 } = request.query;
         const where = { restaurantId };
-        if (status)
-            where.status = status;
+        if (status) {
+            if (typeof status === 'string' && status.includes(',')) {
+                where.status = { in: status.split(',').map(s => s.trim()) };
+            } else {
+                where.status = status;
+            }
+        }
         if (type)
             where.type = type;
         if (tableId)
@@ -3505,7 +3706,8 @@ export async function restaurantRoutes(app) {
                         where: { id: Number(item.menuItemId) },
                         include: { category: { include: { group: true } } }
                     });
-                    if (menuItem && (!menuItem.category || resolveCategoryKOT(menuItem.category))) {
+                    if (menuItem) {
+                        const isKitchenItem = !menuItem.category || resolveCategoryKOT(menuItem.category);
                         const itemModifiersStr = item.modifiers ? (typeof item.modifiers === 'string' ? item.modifiers : JSON.stringify(item.modifiers)) : null;
                         const fallbackChair = (body.chairNumber ? Number(body.chairNumber) : (Array.isArray(body.chairNumbers) && body.chairNumbers.length > 0 ? Number(body.chairNumbers[0]) : null));
                         const parsedChair = (item.chairNumber !== undefined && item.chairNumber !== null && item.chairNumber !== '') ? Number(item.chairNumber) : fallbackChair;
@@ -3515,6 +3717,7 @@ export async function restaurantRoutes(app) {
                             price: menuItem.price,
                             modifiers: itemModifiersStr,
                             note: item.note || null,
+                            status: isKitchenItem ? 'pending' : 'ready',
                         };
                         if (parsedChair !== null) {
                             itemObj.chairNumber = parsedChair;
@@ -3634,9 +3837,12 @@ export async function restaurantRoutes(app) {
                         }
                     }
 
-                    // Force all explicitly selected chairs (combined group) into occupied state
+                    // Force all explicitly selected chairs (combined group or single chair) into occupied state
                     for (const oc of requestedOccupiedChairs) {
                         occupiedSet.add(oc);
+                    }
+                    if (body.chairNumber) {
+                        occupiedSet.add(Number(body.chairNumber));
                     }
 
                     if (occupiedSet.size === 0) {
@@ -3724,7 +3930,10 @@ export async function restaurantRoutes(app) {
                 });
                 const occupiedSeats = Array.from(new Set([
                     ...activeKotItems.map(i => i.chairNumber).filter(c => c !== null && c !== undefined && c !== '').map(Number),
-                    ...activeTokenItems.map(i => i.chairNumber).filter(c => c !== null && c !== undefined && c !== '').map(Number)
+                    ...activeTokenItems.map(i => i.chairNumber).filter(c => c !== null && c !== undefined && c !== '').map(Number),
+                    ...parseGroupSeats(finalizedOrder?.note),
+                    ...(body.chairNumber ? [Number(body.chairNumber)] : []),
+                    ...requestedOccupiedChairs
                 ])).sort((a, b) => a - b);
 
                 const capacity = Number(tableObj?.capacity || 4);
@@ -4806,6 +5015,7 @@ export async function restaurantRoutes(app) {
         }
 
         emitToRestaurant(restaurantId, 'item_removed', { orderId: Number(id), kotItemId: kotItem.id });
+        emitToKitchen(restaurantId, 'item_removed', { orderId: Number(id), kotItemId: kotItem.id });
         return { success: true, data: updatedItem };
     });
 
@@ -4910,6 +5120,61 @@ export async function restaurantRoutes(app) {
 
         emitToRestaurant(restaurantId, 'order_settled', updatedOrder);
         return { success: true, data: { order: updatedOrder, newPayments: createdPayments } };
+    });
+
+    // ── Due Payments Management & Settlement ──
+    app.get('/due-payments', async (request) => {
+        const restaurantId = request.restaurantId;
+        const payments = await prisma.orderPayment.findMany({
+            where: { isDue: true, order: { restaurantId } },
+            include: { order: { include: { customer: true, table: true } } },
+            orderBy: { id: 'desc' },
+        });
+        const dues = payments.map(p => ({
+            id: p.id,
+            orderId: p.orderId,
+            orderNumber: p.order?.orderNumber,
+            invoiceNumber: p.order?.orderNumber,
+            customerName: p.order?.customer?.name || 'Walk-in Guest',
+            customerPhone: p.order?.customer?.phone,
+            amount: Number(p.amount),
+            dueDate: p.order?.createdAt || new Date(),
+            status: 'pending'
+        }));
+        return { success: true, data: dues };
+    });
+
+    app.post('/due-payments/:id/pay', async (request, reply) => {
+        const { id } = request.params;
+        const restaurantId = request.restaurantId;
+        const { method = 'cash' } = request.body || {};
+
+        const payment = await prisma.orderPayment.findFirst({
+            where: { id: Number(id), isDue: true, order: { restaurantId } },
+            include: { order: true }
+        });
+        if (!payment) return reply.status(404).send({ success: false, error: 'Due payment not found' });
+
+        const updated = await prisma.orderPayment.update({
+            where: { id: payment.id },
+            data: {
+                isDue: false,
+                method: method.toLowerCase(),
+                paidAt: new Date()
+            }
+        });
+
+        const allPayments = await prisma.orderPayment.findMany({ where: { orderId: payment.orderId } });
+        const hasUnsettled = allPayments.some(p => p.isDue);
+        if (!hasUnsettled) {
+            await prisma.order.update({
+                where: { id: payment.orderId },
+                data: { status: 'paid' }
+            });
+        }
+
+        emitToRestaurant(restaurantId, 'payment_settled', { paymentId: updated.id, orderId: payment.orderId });
+        return { success: true, data: updated };
     });
 
     app.post('/orders/:id/refund', async (request, reply) => {
@@ -5213,10 +5478,12 @@ export async function restaurantRoutes(app) {
         const customer = await prisma.customer.create({
             data: { ...body, restaurantId },
         });
+        emitToRestaurant(restaurantId, 'customers_updated', { action: 'created', customer });
         return { success: true, data: customer };
     });
     app.put('/customers/:id', async (request, reply) => {
         const { id } = request.params;
+        const restaurantId = request.restaurantId;
         const body = request.body;
         try {
             const updated = await prisma.customer.update({
@@ -5230,6 +5497,7 @@ export async function restaurantRoutes(app) {
                     loyaltyStamps: body.loyaltyStamps !== undefined ? Number(body.loyaltyStamps) : undefined,
                 },
             });
+            emitToRestaurant(restaurantId, 'customers_updated', { action: 'updated', customer: updated });
             return { success: true, data: updated };
         }
         catch (err) {
@@ -5238,10 +5506,12 @@ export async function restaurantRoutes(app) {
     });
     app.delete('/customers/:id', async (request, reply) => {
         const { id } = request.params;
+        const restaurantId = request.restaurantId;
         try {
             await prisma.customer.delete({
                 where: { id: Number(id) },
             });
+            emitToRestaurant(restaurantId, 'customers_updated', { action: 'deleted', customerId: Number(id) });
             return { success: true };
         }
         catch (err) {
@@ -5603,10 +5873,24 @@ export async function restaurantRoutes(app) {
             if (Array.isArray(settingsData.cancellationReasons)) {
                 settingsData.cancellationReasons = settingsData.cancellationReasons.join(', ');
             }
+            const ALLOWED_SETTINGS_KEYS = new Set([
+                'currency', 'currencySymbol', 'taxMode', 'sgstRate', 'cgstRate', 'timezone',
+                'orderPrefix', 'kotPrefix', 'receiptTemplate', 'deliveryFee', 'minOrderAmount',
+                'allowDineIn', 'allowDelivery', 'allowPickup', 'whatsappEnabled', 'whatsappToken',
+                'webhookUrls', 'loyaltyEnabled', 'kioskEnabled', 'customerDisplayEnabled',
+                'presetAmounts', 'additionalCharges', 'cancellationReasons', 'refundReasons',
+                'aboutUs', 'customerSiteConfig', 'theme', 'isInterState', 'igstRate', 'posDeletePassword'
+            ]);
+            const filteredSettingsData = {};
+            for (const [k, v] of Object.entries(settingsData)) {
+                if (ALLOWED_SETTINGS_KEYS.has(k) && v !== undefined) {
+                    filteredSettingsData[k] = v;
+                }
+            }
             const settings = await prisma.restaurantSettings.upsert({
                 where: { restaurantId },
-                update: settingsData,
-                create: { ...settingsData, restaurantId },
+                update: filteredSettingsData,
+                create: { ...filteredSettingsData, restaurantId },
             });
             // Broadcast settings changes so connected admin/POS clients can refresh theme/nav instantly.
             emitToRestaurant(restaurantId, 'settings_updated', {
@@ -5630,6 +5914,25 @@ export async function restaurantRoutes(app) {
             return { success: false, error: err?.message };
         }
     });
+    // ── Printers List ──
+    app.get('/printers', async (request, reply) => {
+        try {
+            if (process.platform === 'win32') {
+                const { execSync } = require('child_process');
+                const psCmd = 'powershell -Command "Get-CimInstance Win32_Printer | Select-Object Name, Default | ConvertTo-Json"';
+                const stdout = execSync(psCmd, { windowsHide: true, timeout: 5000 });
+                if (stdout && stdout.toString().trim()) {
+                    const parsed = JSON.parse(stdout.toString().trim());
+                    const list = Array.isArray(parsed) ? parsed : [parsed];
+                    return { success: true, data: list.map(p => ({ name: p.Name, isDefault: Boolean(p.Default) })) };
+                }
+            }
+            return { success: true, data: [] };
+        } catch (err) {
+            return { success: true, data: [] };
+        }
+    });
+
     // ── Bill Settings ──
     app.get('/bill-settings', async (request) => {
         const restaurantId = request.restaurantId;
@@ -5645,12 +5948,20 @@ export async function restaurantRoutes(app) {
                     showUnitForNonKOT: true,
                     loyaltyDiscountFormat: 'small_line',
                     thankYouMessage: 'Thank you for your business!',
-                    kotItemsDisplay: JSON.stringify({ fields: ['itemName', 'qty', 'rate'] }),
+                    kotItemsDisplay: JSON.stringify({ fields: ['itemName', 'qty', 'rate'], autoPrintKot: true, autoPrintBill: true }),
                     nonKotItemsDisplay: JSON.stringify({ fields: ['itemName', 'unit', 'mrp', 'qty', 'total'] }),
                     billSectionOrder: JSON.stringify(['restaurant_info', 'kot_items', 'non_kot_items', 'subtotal', 'taxes', 'loyalty', 'total']),
                 },
             });
         }
+        let printerConfig = {};
+        try {
+            if (billSettings?.kotItemsDisplay) {
+                const parsed = JSON.parse(billSettings.kotItemsDisplay);
+                if (typeof parsed === 'object') printerConfig = parsed;
+            }
+        } catch (e) {}
+
         return {
             success: true,
             data: {
@@ -5661,6 +5972,10 @@ export async function restaurantRoutes(app) {
                 restaurantAddress: billSettings.restaurantAddress || restaurant?.address || '',
                 restaurantPhone: billSettings.restaurantPhone || restaurant?.phone || '',
                 logoUrl: billSettings.logoUrl || restaurant?.logo || '',
+                kotPrinterName: printerConfig.kotPrinterName || '',
+                billPrinterName: printerConfig.billPrinterName || '',
+                autoPrintKot: printerConfig.autoPrintKot ?? true,
+                autoPrintBill: printerConfig.autoPrintBill ?? true,
             }
         };
     });
@@ -5691,11 +6006,31 @@ export async function restaurantRoutes(app) {
                 return /^[a-zA-Z0-9.\-_]+@[a-zA-Z0-9]+$/.test(val.trim());
             }, { message: 'Invalid UPI VPA format. Example: yourstore@oksbi or 9876543210@paytm' }),
             upiId: z.string().optional().nullable(),
+            kotPrinterName: z.string().optional().nullable(),
+            billPrinterName: z.string().optional().nullable(),
+            autoPrintKot: z.boolean().optional(),
+            autoPrintBill: z.boolean().optional(),
         });
         try {
             const data = schema.parse(request.body);
+            let billSettings = await prisma.billSettings.findUnique({ where: { restaurantId } });
+            let existingDisplay = {};
+            try {
+                if (billSettings?.kotItemsDisplay) {
+                    const parsed = JSON.parse(billSettings.kotItemsDisplay);
+                    if (typeof parsed === 'object') existingDisplay = parsed;
+                }
+            } catch (e) {}
+
+            if (data.kotPrinterName !== undefined) existingDisplay.kotPrinterName = data.kotPrinterName || '';
+            if (data.billPrinterName !== undefined) existingDisplay.billPrinterName = data.billPrinterName || '';
+            if (data.autoPrintKot !== undefined) existingDisplay.autoPrintKot = Boolean(data.autoPrintKot);
+            if (data.autoPrintBill !== undefined) existingDisplay.autoPrintBill = Boolean(data.autoPrintBill);
+
             if (data.kotItemsDisplay && typeof data.kotItemsDisplay === 'object') {
-                data.kotItemsDisplay = JSON.stringify(data.kotItemsDisplay);
+                data.kotItemsDisplay = JSON.stringify({ ...existingDisplay, ...data.kotItemsDisplay });
+            } else {
+                data.kotItemsDisplay = JSON.stringify(existingDisplay);
             }
             if (data.nonKotItemsDisplay && typeof data.nonKotItemsDisplay === 'object') {
                 data.nonKotItemsDisplay = JSON.stringify(data.nonKotItemsDisplay);
@@ -5708,6 +6043,10 @@ export async function restaurantRoutes(app) {
                 restaurantAddress,
                 restaurantPhone,
                 logoUrl,
+                kotPrinterName,
+                billPrinterName,
+                autoPrintKot,
+                autoPrintBill,
                 ...billData
             } = data;
 
@@ -5731,7 +6070,6 @@ export async function restaurantRoutes(app) {
                 }
             }
 
-            let billSettings = await prisma.billSettings.findUnique({ where: { restaurantId } });
             if (!billSettings) {
                 billSettings = await prisma.billSettings.create({
                     data: {
@@ -5739,14 +6077,31 @@ export async function restaurantRoutes(app) {
                         ...billData,
                     },
                 });
-            }
-            else {
+            } else {
                 billSettings = await prisma.billSettings.update({
                     where: { restaurantId },
                     data: billData,
                 });
             }
-            return { success: true, data: { ...billSettings, upiVpa: billSettings.upiVpa || billSettings.upiId || '', showLogo, restaurantAddress, restaurantPhone } };
+            emitToRestaurant(restaurantId, 'settings_updated', {
+                restaurantId,
+                billSettings,
+                restaurantAddress,
+                restaurantPhone,
+                logoUrl,
+                updatedAt: new Date().toISOString(),
+            });
+            return { 
+                success: true, 
+                data: { 
+                    ...billSettings, 
+                    upiVpa: billSettings.upiVpa || billSettings.upiId || '', 
+                    showLogo, 
+                    restaurantAddress, 
+                    restaurantPhone,
+                    logoUrl 
+                } 
+            };
         }
         catch (err) {
             return reply.status(400).send({ success: false, error: err?.message || 'Invalid bill settings request' });

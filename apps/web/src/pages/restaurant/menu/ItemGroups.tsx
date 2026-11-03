@@ -9,6 +9,7 @@ import { Edit, Trash2, FolderOpen, Layers } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import ImageLibraryModal from '@/components/ImageLibraryModal';
+import { queryClient } from '@/lib/queryClient';
 
 export default function ItemGroups() {
   const [showGroupModal, setShowGroupModal] = useState(false);
@@ -70,6 +71,11 @@ export default function ItemGroups() {
       }
       setShowGroupModal(false);
       refetchGroups();
+      queryClient.invalidateQueries({ queryKey: ['item-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['item-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-items-all'] });
+      queryClient.invalidateQueries({ queryKey: ['pos-menu'] });
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed');
     }
@@ -81,6 +87,11 @@ export default function ItemGroups() {
       await api.delete(`/restaurant/item-groups/${id}`);
       toast.success('Group deleted');
       refetchGroups();
+      queryClient.invalidateQueries({ queryKey: ['item-groups'] });
+      queryClient.invalidateQueries({ queryKey: ['item-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['menu-items-all'] });
+      queryClient.invalidateQueries({ queryKey: ['pos-menu'] });
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed');
     }

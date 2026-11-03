@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useAuthStore } from '@/stores/authStore';
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/Card';
@@ -320,7 +321,54 @@ export default function BarcodeSettings() {
   
   const [barcodeType, setBarcodeType] = useState<'1d' | 'qr'>('1d');
   const [presetId, setPresetId] = useState<string>('retail_standard');
-  const [storeHeader, setStoreHeader] = useState<string>('SUMA BAKERY & RESTAURANT');
+  const user = useAuthStore((s) => s.user);
+  const { data: restaurantSettings } = useQuery({
+    queryKey: ['restaurant-settings'],
+    queryFn: () => api.get('/restaurant/settings').then((r) => r.data.data ?? {}).catch(() => ({})),
+  });
+
+  const effectiveCompanyName = useMemo(() => {
+    const raw = restaurantSettings?.restaurantName || user?.restaurant?.name;
+    if (raw && typeof raw === 'string' && raw.trim()) {
+      return raw.trim();
+    }
+    return 'AMORA';
+  }, [restaurantSettings?.restaurantName, user?.restaurant?.name]);
+
+  const [storeHeader, setStoreHeader] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('barcode_store_header');
+      if (saved && saved.trim() && !saved.toUpperCase().includes('SUMA')) {
+        return saved.trim();
+      }
+    } catch {}
+    return '';
+  });
+
+  useEffect(() => {
+    if (!storeHeader || storeHeader.toUpperCase().includes('SUMA')) {
+      const saved = localStorage.getItem('barcode_store_header');
+      if (saved && saved.trim() && !saved.toUpperCase().includes('SUMA')) {
+        setStoreHeader(saved.trim());
+      } else if (effectiveCompanyName) {
+        const comp = effectiveCompanyName.toUpperCase();
+        setStoreHeader(comp);
+        try { localStorage.setItem('barcode_store_header', comp); } catch {}
+      }
+    }
+  }, [effectiveCompanyName, storeHeader]);
+
+  const handleUpdateStoreHeader = (val: string) => {
+    setStoreHeader(val);
+    try { localStorage.setItem('barcode_store_header', val); } catch {}
+  };
+
+  const handleSyncCompanyName = () => {
+    if (effectiveCompanyName) {
+      handleUpdateStoreHeader(effectiveCompanyName.toUpperCase());
+      toast.success(`Barcode header set to "${effectiveCompanyName.toUpperCase()}"!`);
+    }
+  };
   
   const [showStoreHeader, setShowStoreHeader] = useState<boolean>(true);
   const [showItemName, setShowItemName] = useState<boolean>(true);
@@ -599,7 +647,8 @@ export default function BarcodeSettings() {
           }
           .print-single-label {
             margin: 0 !important;
-            padding: 3px 2px 2px 2px !important;
+            padding: 1.5mm 1.5mm 1mm 1.5mm !important;
+            justify-content: space-between !important;
             border: none !important;
             box-shadow: none !important;
             background: white !important;
@@ -625,7 +674,7 @@ export default function BarcodeSettings() {
           }
           /* Print sizing scaling overrides */
           .print-header-text {
-            font-size: ${Math.max(6, activePreset.widthMm * 0.16)}px !important;
+            font-size: ${Math.max(6.5, activePreset.widthMm * 0.13)}pt !important;
             line-height: 1.25 !important;
             font-weight: 800 !important;
             text-transform: uppercase !important;
@@ -638,7 +687,7 @@ export default function BarcodeSettings() {
             display: block !important;
           }
           .print-title-text {
-            font-size: ${Math.max(8, activePreset.widthMm * 0.22)}px !important;
+            font-size: ${Math.max(8.5, activePreset.widthMm * 0.17)}pt !important;
             line-height: 1.25 !important;
             font-weight: 900 !important;
             color: black !important;
@@ -654,7 +703,7 @@ export default function BarcodeSettings() {
             margin: 2px 0 !important;
           }
           .print-value-text {
-            font-size: ${Math.max(6, activePreset.widthMm * 0.16)}px !important;
+            font-size: ${Math.max(6.5, activePreset.widthMm * 0.13)}pt !important;
             letter-spacing: 1px !important;
             font-weight: bold !important;
             color: black !important;
@@ -662,7 +711,7 @@ export default function BarcodeSettings() {
             line-height: 1.2 !important;
           }
           .print-price-text {
-            font-size: ${Math.max(10, activePreset.widthMm * 0.28)}px !important;
+            font-size: ${Math.max(10, activePreset.widthMm * 0.20)}pt !important;
             font-weight: 900 !important;
             color: black !important;
             margin-top: 2px !important;
@@ -698,7 +747,7 @@ export default function BarcodeSettings() {
                 {barcodeType === 'qr' ? (
                   <QRCodeSVG 
                     value={item.barcode || '000000'}
-                    size={Math.min(activePreset.heightPx * 0.45, 90)}
+                    size={Math.min(activePreset.heightPx * 0.32, 50)}
                     level="M"
                     includeMargin={false}
                   />
@@ -707,7 +756,7 @@ export default function BarcodeSettings() {
                     <BarcodeSVG 
                       value={item.barcode} 
                       width={activePreset.widthPx * 0.8}
-                      height={Math.min(activePreset.heightPx * 0.35, 45)}
+                      height={Math.min(activePreset.heightPx * 0.22, 24)}
                     />
                   </div>
                 )}
@@ -1016,6 +1065,31 @@ export default function BarcodeSettings() {
                 </div>
               </div>
 
+              {/* Company / Store Header Input */}
+              <div className="pt-3 border-t border-border/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-text-muted uppercase flex items-center gap-1.5">
+                    <Store size={13} className="text-blue-400" />
+                    Label Company / Store Header
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleSyncCompanyName}
+                    className="text-[10px] font-bold text-blue-400 hover:text-blue-300 flex items-center gap-1 uppercase tracking-wider transition-colors"
+                    title="Reset to registered company name from settings"
+                  >
+                    <RefreshCw size={10} /> Reset from Settings ({effectiveCompanyName})
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={storeHeader}
+                  onChange={(e) => handleUpdateStoreHeader(e.target.value)}
+                  placeholder={effectiveCompanyName || 'AMORA'}
+                  className="glass-input h-10 text-xs font-bold uppercase tracking-wide w-full"
+                />
+              </div>
+
               <div className="pt-3 border-t border-border/30 grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
                   { state: showStoreHeader, set: setShowStoreHeader, label: 'Store Header' },
@@ -1092,7 +1166,7 @@ export default function BarcodeSettings() {
                             {barcodeType === 'qr' ? (
                               <QRCodeSVG 
                                 value={item.barcode || '000000'}
-                                size={Math.min(activePreset.heightPx * 0.45, 90)}
+                                size={Math.min(activePreset.heightPx * 0.32, 50)}
                                 level="M"
                                 includeMargin={false}
                               />
@@ -1101,7 +1175,7 @@ export default function BarcodeSettings() {
                                 <BarcodeSVG 
                                   value={item.barcode} 
                                   width={activePreset.widthPx * 0.8}
-                                  height={Math.min(activePreset.heightPx * 0.35, 45)}
+                                  height={Math.min(activePreset.heightPx * 0.22, 24)}
                                 />
                               </div>
                             )}

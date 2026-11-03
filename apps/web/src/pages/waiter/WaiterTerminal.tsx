@@ -865,6 +865,8 @@ export default function WaiterTerminal() {
         try {
           await api.post('/restaurant/orders', {
             tableId: selectedTable.id,
+            chairNumber: isEntire ? undefined : selectedChair,
+            occupiedChairs: isEntire ? [] : [selectedChair],
             customerName: customerName || (isEntire ? 'Table Guests' : `Customer (Chair ${selectedChair})`),
             customerPhone: customerPhone || undefined,
             staffId: user?.id,
@@ -875,6 +877,8 @@ export default function WaiterTerminal() {
         } catch {
           await api.post('/subpos/token/create', {
             tableId: selectedTable.id,
+            chairNumber: isEntire ? undefined : selectedChair,
+            occupiedChairs: isEntire ? [] : [selectedChair],
             customerName: customerName || (isEntire ? 'Table Guests' : `Customer (Chair ${selectedChair})`),
             customerPhone: customerPhone || undefined,
             staffId: user?.id,
@@ -884,8 +888,10 @@ export default function WaiterTerminal() {
         }
       } else {
         const payload = {
-          bakeryTokenId: activeToken.id,
+          bakeryTokenId: activeToken.id || undefined,
           tableId: selectedTable.id,
+          chairNumber: isEntire ? undefined : selectedChair,
+          occupiedChairs: isEntire ? [] : [selectedChair],
           staffId: user?.id,
           note: seatNote,
           items: itemsPayload,

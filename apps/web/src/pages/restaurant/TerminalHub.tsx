@@ -136,7 +136,7 @@ export default function TerminalHub() {
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Systems Online · Version 2.4.0</span>
           </div>
-          <div className="text-xs text-slate-600 font-medium">© 2026 SMARTGONEXT SaaS · Connected to {user?.restaurant?.name || 'Cloud'}</div>
+          <div className="text-xs text-slate-500 font-medium">© 2026 AMORA POS · Powered by SMARTGONEXT · Connected to {user?.restaurant?.name || 'Amora Bakes & Cafe'}</div>
         </footer>
       </div>
     </div>

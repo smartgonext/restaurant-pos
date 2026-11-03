@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { 
@@ -16,7 +16,8 @@ import {
   Flame,
   LayoutDashboard,
   Plus,
-  Hash
+  Hash,
+  Calendar
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { formatCurrency, formatDateTime, cn } from '@/lib/utils';
@@ -27,6 +28,7 @@ import { soundManager } from '@/lib/sounds';
 import { OrderDetailPanel } from '@/components/orders/OrderDetailPanel';
 import toast from 'react-hot-toast';
 import { Button } from '@/components/ui/Button';
+import { DatePreset, getDateRangeForPreset, toApiDateTimeRange } from '@/lib/dateRanges';
 
 export default function RestaurantDashboard() {
   const navigate = useNavigate();
@@ -37,12 +39,41 @@ export default function RestaurantDashboard() {
   const queryClient = useQueryClient();
   const { socket } = useSocket();
 
+  // Date Filter States
+  const initial = getDateRangeForPreset('Today');
+  const [dateRange, setDateRange] = useState<DatePreset>('Today');
+  const [startDate, setStartDate] = useState(initial.startDate);
+  const [endDate, setEndDate] = useState(initial.endDate);
+
+  useEffect(() => {
+    if (dateRange === 'Custom') return;
+    const next = getDateRangeForPreset(dateRange);
+    setStartDate(next.startDate);
+    setEndDate(next.endDate);
+  }, [dateRange]);
+
+  const { dateFrom, dateTo } = useMemo(() => {
+    return toApiDateTimeRange(startDate, endDate);
+  }, [startDate, endDate]);
+
   const [chartRange, setChartRange] = useState(7);
   const { data: stats, isLoading, refetch } = useQuery({
-    queryKey: ['restaurant-dashboard', chartRange],
-    queryFn: () => api.get(`/restaurant/dashboard?days=${chartRange}`).then((r) => r.data.data ?? {}),
+    queryKey: ['restaurant-dashboard', dateFrom, dateTo, chartRange],
+    queryFn: () => api.get('/restaurant/dashboard', { params: { dateFrom, dateTo, days: chartRange } }).then((r) => r.data.data ?? {}),
     refetchInterval: 30000,
   });
+
+  const getPeriodLabel = () => {
+    if (dateRange === 'Today') return 'Today';
+    if (dateRange === 'Yesterday') return 'Yesterday';
+    if (dateRange === 'Current Week') return 'This Week';
+    if (dateRange === 'Last 7 Days') return 'Last 7 Days';
+    if (dateRange === 'Current Month') return 'This Month';
+    if (startDate === endDate) return startDate;
+    return `${startDate} to ${endDate}`;
+  };
+
+  const periodLabel = getPeriodLabel();
 
   const { data: invSummary } = useQuery({
     queryKey: ['inventory-summary'],
@@ -107,54 +138,128 @@ export default function RestaurantDashboard() {
       {/* Main Content Space - Statistics & Chart (Very Big Side) */}
       <div className="flex-[2.5] flex flex-col gap-4 overflow-y-auto custom-scrollbar pr-2 pb-4">
         
-        {/* Top Section: Title and Quick Action */}
-        <div className="flex items-center justify-between">
-              <div>
-                <h1 data-testid="restaurant-dashboard-title" className="text-xl font-black text-text-primary flex items-center gap-2 uppercase tracking-tight">
-                  <LayoutDashboard className="w-5 h-5 text-blue-500" />
-                  Restaurant Command Center
-                </h1>
-                <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest mt-0.5">Real-time Performance Monitoring</p>
-              </div>
-            <div className="flex items-center gap-2">
-              <Button 
-                  size="sm"
-                  className="bg-blue-600 hover:bg-blue-500 text-white font-black uppercase text-[10px] shadow-lg shadow-blue-500/20 px-6 py-4"
-                  icon={<Plus className="w-4 h-4" />}
-                  onClick={() => navigate('/admin/pos')}
-                  data-testid="new-order-btn"
-                  aria-label="New Order"
-              >
-                  New Order
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                className="!bg-success/20 !text-success !border-success/30 px-4 py-2 text-[10px] font-black"
-                onClick={() => navigate('/admin/reservations?new=1')}
-                data-testid="new-booking-btn"
-                aria-label="New Booking"
-              >
-                New Booking
-              </Button>
+        {/* Top Section: Title, Date Filter & Quick Action */}
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+          <div>
+            <h1 data-testid="restaurant-dashboard-title" className="text-xl font-black text-text-primary flex items-center gap-2 uppercase tracking-tight">
+              <LayoutDashboard className="w-5 h-5 text-blue-500" />
+              Restaurant Command Center
+            </h1>
+            <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest mt-0.5">
+              Performance Monitoring • Showing: <span className="text-blue-400 font-black">{periodLabel}</span>
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Quick Date Presets */}
+            <div className="flex bg-[#0f111a] border border-border/60 rounded-xl p-1 gap-1">
+              {(['Today', 'Yesterday', 'Current Week', 'Current Month', 'Custom'] as DatePreset[]).map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setDateRange(preset)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all",
+                    dateRange === preset
+                      ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20"
+                      : "text-text-muted hover:text-text-primary hover:bg-white/5"
+                  )}
+                >
+                  {preset === 'Current Week' ? 'This Week' : preset === 'Current Month' ? 'This Month' : preset}
+                </button>
+              ))}
             </div>
+
+            {/* Custom Date Pickers */}
+            {dateRange === 'Custom' && (
+              <div className="flex items-center gap-1.5 bg-[#0f111a] border border-border/60 rounded-xl px-2.5 py-1 text-xs animate-in fade-in duration-150">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="bg-transparent text-text-primary text-xs outline-none cursor-pointer"
+                />
+                <span className="text-text-muted font-bold text-[10px] uppercase">to</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="bg-transparent text-text-primary text-xs outline-none cursor-pointer"
+                />
+              </div>
+            )}
+
+            <Button 
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-500 text-white font-black uppercase text-[10px] shadow-lg shadow-blue-500/20 px-5 py-2.5"
+              icon={<Plus className="w-4 h-4" />}
+              onClick={() => navigate('/admin/pos')}
+              data-testid="new-order-btn"
+              aria-label="New Order"
+            >
+              New Order
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="!bg-success/20 !text-success !border-success/30 px-3.5 py-2.5 text-[10px] font-black"
+              onClick={() => navigate('/admin/reservations?new=1')}
+              data-testid="new-booking-btn"
+              aria-label="New Booking"
+            >
+              New Booking
+            </Button>
+          </div>
         </div>
 
         {/* Professional Stats Row */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
           {[
-            { label: "Today's Orders", val: stats.todayOrders, change: stats.ordersChange, icon: ShoppingCart, color: 'blue' },
-            { label: "Today's Sales", val: formatCurrency(stats.todayRevenue), change: stats.revenueChange, icon: DollarSign, color: 'emerald' },
-            { label: "Total Stock Value", val: formatCurrency(stats.totalStockValue || 0), icon: Package, color: 'teal' },
-            { label: "Expenses (Today)", val: formatCurrency(stats.expenses?.today || 0), icon: Flame, color: 'rose' },
-            { label: "Profit (Today)", val: formatCurrency(stats.profitLossOverview?.today?.profit || 0), change: ((stats.profitLossOverview?.today?.profit || 0) >= 0) ? 1 : -1, icon: TrendingUp, color: 'emerald' },
-            { label: "Low Stock Alerts", val: `${(stats.lowStockAlerts || []).length}`, icon: Package, color: 'red' }
+            { 
+              label: dateRange === 'Today' ? "Today's Orders" : dateRange === 'Yesterday' ? "Yesterday's Orders" : `Orders (${periodLabel})`, 
+              val: stats.periodOrders ?? stats.todayOrders, 
+              change: stats.ordersChange, 
+              icon: ShoppingCart, 
+              color: 'blue' 
+            },
+            { 
+              label: dateRange === 'Today' ? "Today's Sales" : dateRange === 'Yesterday' ? "Yesterday's Sales" : `Sales (${periodLabel})`, 
+              val: formatCurrency(stats.periodRevenue ?? stats.todayRevenue), 
+              change: stats.revenueChange, 
+              icon: DollarSign, 
+              color: 'emerald' 
+            },
+            { 
+              label: "Total Stock Value", 
+              val: formatCurrency(stats.totalStockValue || 0), 
+              icon: Package, 
+              color: 'teal' 
+            },
+            { 
+              label: dateRange === 'Today' ? "Expenses (Today)" : dateRange === 'Yesterday' ? "Expenses (Yesterday)" : `Expenses (${periodLabel})`, 
+              val: formatCurrency(stats.expenses?.period ?? stats.expenses?.today ?? 0), 
+              icon: Flame, 
+              color: 'rose' 
+            },
+            { 
+              label: dateRange === 'Today' ? "Profit (Today)" : dateRange === 'Yesterday' ? "Profit (Yesterday)" : `Profit (${periodLabel})`, 
+              val: formatCurrency(stats.profitLossOverview?.period?.profit ?? stats.profitLossOverview?.today?.profit ?? 0), 
+              change: ((stats.profitLossOverview?.period?.profit ?? stats.profitLossOverview?.today?.profit ?? 0) >= 0) ? 1 : -1, 
+              icon: TrendingUp, 
+              color: 'emerald' 
+            },
+            { 
+              label: "Low Stock Alerts", 
+              val: `${(stats.lowStockAlerts || []).length}`, 
+              icon: Package, 
+              color: 'red' 
+            }
           ].map((s, i) => {
             const slug = s.label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
             return (
               <div key={i} data-testid={`stat-card-${slug}`} className="bg-bg-secondary border border-border rounded-xl p-4 flex flex-col justify-between group hover:border-blue-500/30 transition-all cursor-default shadow-sm h-28 relative overflow-hidden">
                 <div className="flex justify-between items-start z-10">
-                  <span className="text-[9px] font-black uppercase text-text-muted tracking-widest leading-none">{s.label}</span>
+                  <span className="text-[9px] font-black uppercase text-text-muted tracking-widest leading-none truncate max-w-[85%]">{s.label}</span>
                   <div className={cn("p-1.5 rounded-lg bg-white/5 border border-white/5", `text-${s.color}-400`)}>
                     {/* @ts-ignore */}
                     <s.icon size={14} />
@@ -164,7 +269,7 @@ export default function RestaurantDashboard() {
                   <div data-testid={`stat-value-${slug}`} className="text-xl font-black text-text-primary leading-none mb-1.5">{s.val}</div>
                   {s.change !== undefined && (
                     <div className={cn("text-[8px] font-black flex items-center gap-1", s.change >= 0 ? "text-success" : "text-danger")}>
-                      {s.change >= 0 ? '↑' : '↓'} {Math.abs(s.change).toFixed ? Math.abs(s.change).toFixed(1) : Math.abs(s.change)}% <span className="opacity-40 text-text-muted font-normal ml-1 whitespace-nowrap">Since last 24h</span>
+                      {s.change >= 0 ? '↑' : '↓'} {Math.abs(s.change).toFixed ? Math.abs(s.change).toFixed(1) : Math.abs(s.change)}% <span className="opacity-40 text-text-muted font-normal ml-1 whitespace-nowrap">vs Previous Period</span>
                     </div>
                   )}
                 </div>
@@ -348,7 +453,7 @@ export default function RestaurantDashboard() {
             <div className="flex items-center justify-between mb-5">
                 <h3 className="text-[10px] font-black text-text-primary uppercase tracking-[0.2em] flex items-center gap-2">
                     <Flame className="w-3 h-3 text-orange-400" />
-                    Top Selling Dishes (Today)
+                    Top Selling Dishes ({periodLabel})
                 </h3>
             </div>
             <div className="space-y-3">
@@ -368,7 +473,7 @@ export default function RestaurantDashboard() {
           </div>
 
           <div className="bg-bg-secondary border border-border rounded-xl p-5 shadow-sm">
-            <h3 className="text-[10px] font-black text-text-primary uppercase tracking-[0.2em] mb-5">Transaction Breakdown</h3>
+            <h3 className="text-[10px] font-black text-text-primary uppercase tracking-[0.2em] mb-5">Transaction Breakdown ({periodLabel})</h3>
             <div className="space-y-3">
               {(stats.paymentMethods || []).map((method: any, idx: number) => (
                 <div key={idx} data-testid={`payment-method-${idx}`} className="flex justify-between items-center text-[11px] border-b border-border/20 pb-2.5 last:border-0 last:pb-0">

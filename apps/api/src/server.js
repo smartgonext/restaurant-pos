@@ -94,6 +94,25 @@ async function start() {
     serverLog('[db] pre-warming database connection...');
     await prisma.$connect();
     serverLog('[db] connection pool established');
+
+    // Auto-heal SQLite schemas for backward compatibility with older user databases
+    const isSqlite = (process.env.DATABASE_URL || '').startsWith('file:');
+    if (isSqlite) {
+      const autoMigrations = [
+        'ALTER TABLE "Order" ADD COLUMN "deliveryExecutiveId" INTEGER;',
+        'ALTER TABLE "DeliveryExecutive" ADD COLUMN "vehicleNumber" TEXT;',
+      ];
+      for (const sql of autoMigrations) {
+        try {
+          await prisma.$executeRawUnsafe(sql);
+          serverLog('[db] auto-applied schema update:', sql);
+        } catch (err) {
+          if (!err?.message?.includes('duplicate column')) {
+            serverLog('[db] schema sync notice:', err?.message || String(err));
+          }
+        }
+      }
+    }
   } catch (err) {
     serverLog('[db] pre-warm warn:', err?.message || String(err));
   }
@@ -150,6 +169,15 @@ async function start() {
   }
 
   serverLog('[server] READY — backend healthy & ultra-fast startup complete');
+
+  // ── Global Uncaught Exception & Promise Rejection Handlers ───────────────
+  process.on('uncaughtException', (err) => {
+    serverLog('[server] Uncaught Exception caught safely:', err && err.stack ? err.stack : String(err));
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    serverLog('[server] Unhandled Promise Rejection caught safely:', reason && reason.stack ? reason.stack : String(reason));
+  });
 
   // ── Graceful shutdown ───────────────────────────────────────────────────
   const signals = ['SIGINT', 'SIGTERM'];

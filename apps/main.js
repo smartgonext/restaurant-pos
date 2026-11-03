@@ -1,5 +1,5 @@
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
-const { spawn } = require("child_process");
+const { app, BrowserWindow, ipcMain, shell, screen } = require("electron");
+const { spawn, execSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const dgram = require("dgram");
@@ -7,6 +7,21 @@ const { pathToFileURL } = require("url");
 const axios = require('axios');
 const isDev = require('electron-is-dev');
 const { autoUpdater } = require('electron-updater');
+
+// ── Hardware Acceleration & Touch Optimization (Scangle Touch POS / Win 10) ──
+app.commandLine.appendSwitch('touch-events', 'enabled');
+app.commandLine.appendSwitch('enable-touch-drag-drop');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=2048');
+
+// Global Exception Protection for Electron Main Process
+process.on('uncaughtException', (err) => {
+  console.error('[Electron Main Process Exception Caught]:', err && err.stack ? err.stack : err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[Electron Main Process Rejection Caught]:', reason && reason.stack ? reason.stack : reason);
+});
 
 function getCliArg(prefix) {
   const match = process.argv.find(arg => arg.startsWith(prefix));
@@ -64,6 +79,7 @@ function discoverActiveServer(timeoutMs = 3000) {
 
 let backend = null;
 let mainWindow = null;
+let customerDisplayWindow = null;
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -119,8 +135,8 @@ async function ensureDatabase() {
   const forceReset = process.argv.includes('--reset-db');
   const exists = fs.existsSync(dbPath);
   
-  // Auto-upgrade if existing file is the old broken template (<700KB) and we have a full template (>800KB)
-  const isOldBrokenTemplate = exists && fs.statSync(dbPath).size < 700000 && templateDbPath && fs.statSync(templateDbPath).size > 800000;
+  // Auto-upgrade if existing file is the old broken template (<600KB) and we have a full template (>700KB)
+  const isOldBrokenTemplate = exists && fs.statSync(dbPath).size < 600000 && templateDbPath && fs.statSync(templateDbPath).size > 700000;
 
   if (exists && !forceReset && !isOldBrokenTemplate) {
     console.log('[OK] Database already exists at:', dbPath, `(size: ${fs.statSync(dbPath).size} bytes)`);
@@ -164,7 +180,69 @@ function getActiveAppVersion() {
 
 /* ================================
    🚀 START BACKEND
-================================ */
+=============================== */
+function killProcessOnPort(port) {
+  try {
+    if (process.platform === 'win32') {
+      const output = execSync(`netstat -ano -p tcp | findstr :${port}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const lines = output.trim().split('\n');
+      const pidsToKill = new Set();
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 5 && parts[1].endsWith(`:${port}`) && parts[3] === 'LISTENING') {
+          const pid = parseInt(parts[4], 10);
+          if (pid && pid !== process.pid) {
+            pidsToKill.add(pid);
+          }
+        }
+      }
+      for (const pid of pidsToKill) {
+        console.log(`[Process Cleanup] Freeing port ${port} by terminating PID ${pid}...`);
+        try {
+          execSync(`taskkill /F /PID ${pid} /T`, { stdio: 'ignore' });
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    // Port is already free
+  }
+}
+
+async function waitForBackend(port = 3001, maxWaitMs = 30000) {
+  const startTime = Date.now();
+  const healthUrl = `http://127.0.0.1:${port}/health`;
+  while (Date.now() - startTime < maxWaitMs) {
+    try {
+      const resp = await axios.get(healthUrl, { timeout: 800 });
+      if (resp.status === 200) {
+        console.log(`✅ Backend health check verified in ${Date.now() - startTime}ms`);
+        return true;
+      }
+    } catch (e) {
+      // Waiting for backend to bind and respond
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  console.warn(`⚠️ Backend health check timed out after ${maxWaitMs}ms`);
+  return false;
+}
+
+function cleanupBackend() {
+  if (backend) {
+    console.log(`[Shutdown] Terminating backend child PID: ${backend.pid}`);
+    try {
+      if (process.platform === 'win32') {
+        execSync(`taskkill /F /PID ${backend.pid} /T`, { stdio: 'ignore' });
+      } else {
+        process.kill(backend.pid, 'SIGTERM');
+      }
+    } catch (e) {
+      try { backend.kill('SIGKILL'); } catch (e2) {}
+    }
+    backend = null;
+  }
+}
+
 function startBackend() {
   if (isTerminalMode) {
     console.log('[LAN-Terminal] Skipping local backend spawn in Terminal Mode.');
@@ -175,6 +253,9 @@ function startBackend() {
     return;
   }
   if (backend) return;
+
+  // Clean any previous ghost process holding port 3001
+  killProcessOnPort(3001);
 
   const basePath = app.getAppPath();
   let serverPath = path.join(basePath, "api", "src", "server.js");
@@ -203,6 +284,29 @@ function startBackend() {
   const uploadsPath = path.join(userDataPath, "uploads");
   if (!fs.existsSync(uploadsPath)) {
     fs.mkdirSync(uploadsPath, { recursive: true });
+  }
+
+  // Ensure bundled uploads (e.g. seeded product images) are copied to userData uploads if missing
+  const bundledUploadsCandidates = [
+    path.join(process.resourcesPath, "api", "uploads"),
+    path.join(app.getAppPath(), "api", "uploads"),
+    path.join(__dirname, "api", "uploads"),
+  ];
+  for (const srcDir of bundledUploadsCandidates) {
+    if (fs.existsSync(srcDir)) {
+      try {
+        const files = fs.readdirSync(srcDir);
+        for (const file of files) {
+          const destFile = path.join(uploadsPath, file);
+          if (!fs.existsSync(destFile) || fs.statSync(destFile).size === 0) {
+            fs.copyFileSync(path.join(srcDir, file), destFile);
+          }
+        }
+      } catch (e) {
+        console.warn('Could not copy bundled uploads:', e.message);
+      }
+      break;
+    }
   }
 
   let webDistPath = app.isPackaged
@@ -328,6 +432,91 @@ async function createWindow() {
     }
     mainWindow.webContents.openDevTools();
   } else {
+    // In production, display an instant sleek splash screen while checking backend readiness
+    const splashHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Amora POS</title>
+        <style>
+          body {
+            margin: 0;
+            background: #060813;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+          }
+          .card {
+            text-align: center;
+            background: rgba(22, 25, 41, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 42px 52px;
+            border-radius: 28px;
+            box-shadow: 0 25px 60px rgba(0,0,0,0.7);
+            max-width: 440px;
+          }
+          .brand {
+            font-size: 34px;
+            font-weight: 900;
+            letter-spacing: 3px;
+            color: #ffffff;
+            margin-bottom: 6px;
+          }
+          .sub {
+            font-size: 13px;
+            font-weight: 700;
+            color: #94a3b8;
+            margin-bottom: 28px;
+            letter-spacing: 1.5px;
+          }
+          .spinner {
+            width: 44px;
+            height: 44px;
+            border: 4px solid rgba(255,255,255,0.08);
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.9s cubic-bezier(0.5, 0.1, 0.5, 0.9) infinite;
+            margin: 0 auto 22px auto;
+          }
+          .status {
+            font-size: 13px;
+            color: #cbd5e1;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+          }
+          .footer {
+            font-size: 11px;
+            font-weight: 700;
+            color: #64748b;
+            margin-top: 24px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+          }
+          @keyframes spin { to { transform: rotate(360deg); } }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="brand">AMORA</div>
+          <div class="sub">BAKES & CAFE · TOUCH POS</div>
+          <div class="spinner"></div>
+          <div class="status">Starting POS Engine & Database...</div>
+          <div class="footer">Powered by SMARTGONEXT</div>
+        </div>
+      </body>
+      </html>
+    `;
+    mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(splashHtml));
+
+    // Ensure backend is ready before rendering React app so data is never stuck
+    const backendReady = await waitForBackend(3001, 25000);
+
     // In production, load the built files from runtime_update, resourcesPath, or local fallback
     const userDataPath = app.getPath("userData");
     const runtimeIndexPath = path.join(userDataPath, "runtime_update", "web", "dist", "index.html");
@@ -341,13 +530,18 @@ async function createWindow() {
           ? fallbackPath
           : null;
 
-    if (finalIndexPath) {
-      mainWindow.loadURL(pathToFileURL(finalIndexPath).toString()).catch((err) => {
-        console.error('❌ Failed to load renderer index.html from file URL:', err);
-        mainWindow.loadURL("http://localhost:3001");
+    if (backendReady) {
+      console.log('🚀 Backend ready! Loading app at http://localhost:3001');
+      mainWindow.loadURL("http://localhost:3001").catch((err) => {
+        console.warn('⚠️ Could not load http://localhost:3001, falling back to file URL:', err);
+        if (finalIndexPath) {
+          mainWindow.loadURL(pathToFileURL(finalIndexPath).toString());
+        }
       });
+    } else if (finalIndexPath) {
+      console.warn('⚠️ Backend health check timed out, falling back to local file URL');
+      mainWindow.loadURL(pathToFileURL(finalIndexPath).toString());
     } else {
-      // Fallback to backend if dist is not found
       mainWindow.loadURL("http://localhost:3001");
     }
   }
@@ -375,13 +569,29 @@ ipcMain.handle("save-bill-txt", (event, data) => {
   }
 });
 
-ipcMain.handle("print-bill", async (event, html) => {
+ipcMain.handle("get-printers", async (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    if (win) {
+      return await win.webContents.getPrintersAsync();
+    }
+  } catch (err) {
+    console.error("[POS] Failed to get printers:", err);
+  }
+  return [];
+});
+
+ipcMain.handle("print-bill", async (event, payload) => {
+  const html = typeof payload === 'string' ? payload : payload?.html;
+  const deviceName = typeof payload === 'object' && payload?.deviceName ? payload.deviceName : '';
   const win = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false } });
   win.loadURL(`data:text/html;charset=utf-8,${encodeURI(html)}`);
 
   return new Promise((resolve) => {
     win.webContents.on("did-finish-load", () => {
-      win.webContents.print({ silent: true, printBackground: true }, (success, failureReason) => {
+      const opts = { silent: true, printBackground: true };
+      if (deviceName) opts.deviceName = deviceName;
+      win.webContents.print(opts, (success, failureReason) => {
         win.close();
         if (success) resolve({ success: true });
         else resolve({ success: false, message: failureReason });
@@ -390,10 +600,82 @@ ipcMain.handle("print-bill", async (event, html) => {
   });
 });
 
+ipcMain.handle("get-display-info", () => {
+  try {
+    const displays = screen.getAllDisplays();
+    const primary = screen.getPrimaryDisplay();
+    return {
+      count: displays.length,
+      hasSecondary: displays.length > 1,
+      displays: displays.map(d => ({
+        id: d.id,
+        isPrimary: d.id === primary.id,
+        bounds: d.bounds
+      }))
+    };
+  } catch (e) {
+    return { count: 1, hasSecondary: false, displays: [] };
+  }
+});
+
 ipcMain.on("open-customer-display", (event, url) => {
-  let displayWin = new BrowserWindow({
-    width: 1280,
-    height: 800,
+  const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  const normalizedPath = url ? (url.startsWith('/') ? url : `/${url}`) : '/admin/customer-display';
+  const sep = normalizedPath.includes('?') ? '&' : '?';
+
+  let targetUrl = '';
+  if (isDev) {
+    targetUrl = `http://localhost:5173${normalizedPath}${sep}__cd=1`;
+  } else {
+    const indexPath = path.join(process.resourcesPath, "web", "dist", "index.html");
+    const fallbackPath = path.join(__dirname, "web", "dist", "index.html");
+    const finalPath = fs.existsSync(indexPath) ? indexPath : fallbackPath;
+    const targetPath = normalizedPath.includes('__cd=1') ? normalizedPath : `${normalizedPath}${sep}__cd=1`;
+    targetUrl = pathToFileURL(finalPath).toString() + `#${targetPath}`;
+  }
+
+  // Detect displays using Electron screen API
+  const displays = screen.getAllDisplays();
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const secondaryDisplay = displays.find(d => d.id !== primaryDisplay.id) || (displays.length > 1 ? displays[1] : null);
+
+  const targetBounds = secondaryDisplay ? secondaryDisplay.bounds : primaryDisplay.bounds;
+  const isDualScreen = Boolean(secondaryDisplay);
+
+  console.log(`[CustomerDisplay] Total displays detected: ${displays.length}. Dual-screen active: ${isDualScreen}`);
+  if (secondaryDisplay) {
+    console.log(`[CustomerDisplay] Targeting secondary monitor: x=${targetBounds.x}, y=${targetBounds.y}, w=${targetBounds.width}, h=${targetBounds.height}`);
+  }
+
+  // Reuse existing customer display window if already open
+  if (customerDisplayWindow && !customerDisplayWindow.isDestroyed()) {
+    console.log(`[CustomerDisplay] Window already open. Reloading/navigating to: ${targetUrl}`);
+    customerDisplayWindow.loadURL(targetUrl).catch((err) => {
+      console.error('❌ Failed to navigate customer display window:', err);
+    });
+    if (secondaryDisplay) {
+      customerDisplayWindow.setBounds(secondaryDisplay.bounds);
+      customerDisplayWindow.setFullScreen(true);
+    }
+    if (customerDisplayWindow.isMinimized()) customerDisplayWindow.restore();
+    if (isDualScreen) {
+      customerDisplayWindow.showInactive();
+    } else {
+      customerDisplayWindow.show();
+      customerDisplayWindow.focus();
+    }
+    return;
+  }
+
+  customerDisplayWindow = new BrowserWindow({
+    x: targetBounds.x,
+    y: targetBounds.y,
+    width: targetBounds.width,
+    height: targetBounds.height,
+    fullscreen: isDualScreen,
+    frame: !isDualScreen,
+    autoHideMenuBar: true,
+    title: "Customer Facing Display",
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
@@ -401,50 +683,45 @@ ipcMain.on("open-customer-display", (event, url) => {
     }
   });
 
-  displayWin.maximize();
-
-  // ── Override user-agent so React uses BrowserRouter (not HashRouter) in this window ──
-  // Without this, the Electron UA triggers createHashRouter, and the path-based URL
-  // (/admin/customer-display) never matches — the app lands on the Dashboard instead.
-  const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-  displayWin.webContents.setUserAgent(chromeUA);
-
-  // Normalize the path — always use a plain path URL (works with BrowserRouter)
-  const normalizedPath = url.startsWith('/') ? url : `/${url}`;
-
-  if (isDev) {
-    // Append __cd=1 so createAppRouter() uses BrowserRouter (not HashRouter) in this window
-    const sep = normalizedPath.includes('?') ? '&' : '?';
-    const targetUrl = `http://localhost:5173${normalizedPath}${sep}__cd=1`;
-    console.log(`[CustomerDisplay] Loading: ${targetUrl}`);
-    displayWin.loadURL(targetUrl);
-  } else {
-    const indexPath = path.join(process.resourcesPath, "web", "dist", "index.html");
-    const fallbackPath = path.join(__dirname, "web", "dist", "index.html");
-    const finalPath = fs.existsSync(indexPath) ? indexPath : fallbackPath;
-    const sep = normalizedPath.includes('?') ? '&' : '?';
-    const targetPath = normalizedPath.includes('__cd=1') ? normalizedPath : `${normalizedPath}${sep}__cd=1`;
-    // Production still needs hash for file:// protocol
-    const fileUrl = pathToFileURL(finalPath).toString() + `#${targetPath}`;
-    console.log(`[CustomerDisplay] Loading (prod): ${fileUrl}`);
-    displayWin.loadURL(fileUrl).catch((err) => {
-      console.error('❌ Failed to load customer display page:', err);
-      displayWin.loadURL("http://localhost:3001");
-    });
+  if (!isDualScreen) {
+    customerDisplayWindow.maximize();
   }
 
-  displayWin.on('closed', () => {
-    displayWin = null;
+  customerDisplayWindow.webContents.setUserAgent(chromeUA);
+
+  console.log(`[CustomerDisplay] Opening new window: ${targetUrl}`);
+  customerDisplayWindow.loadURL(targetUrl).catch((err) => {
+    console.error('❌ Failed to load customer display page:', err);
+    if (!isDev) {
+      customerDisplayWindow.loadURL("http://localhost:3001");
+    }
+  });
+
+  if (isDualScreen) {
+    customerDisplayWindow.showInactive();
+  }
+
+  customerDisplayWindow.on('closed', () => {
+    customerDisplayWindow = null;
   });
 });
 
 // Silent print — no dialog
-ipcMain.on('silent-print', (event, html) => {
+ipcMain.on('silent-print', (event, data) => {
+  const html = typeof data === 'string' ? data : data?.html;
+  const printOptions = typeof data === 'object' && data?.options ? data.options : {};
   const win = new BrowserWindow({ show: false, webPreferences: { javascript: true } });
   win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   win.webContents.once('did-finish-load', () => {
+    const opts = {
+      silent: true,
+      printBackground: true,
+      deviceName: '',
+      margins: { marginType: 'none' },
+      ...printOptions
+    };
     win.webContents.print(
-      { silent: true, printBackground: true, deviceName: '' }, // '' = default printer
+      opts,
       (success, errorType) => {
         event.reply('print-result', success ? null : errorType);
         setTimeout(() => win.destroy(), 1000);
@@ -814,6 +1091,43 @@ function setupAutoUpdater() {
    🎬 APP LIFECYCLE
 =============================== */
 app.whenReady().then(async () => {
+  // ── Auto-launch on Windows Startup (Power on / Reboot) ──
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      openAsHidden: false,
+      path: process.execPath,
+      args: []
+    });
+    console.log('✅ Auto-launch on system startup registered (openAtLogin: true)');
+  } catch (err) {
+    console.warn('⚠️ Could not set login item settings:', err.message);
+  }
+
+  // Auto-launch IPC handlers
+  ipcMain.handle('get-autostart-status', () => {
+    try {
+      const settings = app.getLoginItemSettings();
+      return { success: true, openAtLogin: settings.openAtLogin };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('set-autostart', (event, enable) => {
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: !!enable,
+        openAsHidden: false,
+        path: process.execPath,
+        args: []
+      });
+      return { success: true, openAtLogin: !!enable };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   await ensureDatabase();
   startBackend();
   createWindow();
@@ -825,24 +1139,16 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  cleanupBackend();
   if (process.platform !== "darwin") {
-    if (backend) {
-      try {
-        process.kill(backend.pid, 'SIGTERM');
-      } catch (e) {
-        backend.kill();
-      }
-    }
     app.quit();
   }
 });
 
 app.on("will-quit", () => {
-  if (backend) {
-    try {
-      process.kill(backend.pid, 'SIGTERM');
-    } catch (e) {
-      backend.kill();
-    }
-  }
+  cleanupBackend();
+});
+
+app.on("before-quit", () => {
+  cleanupBackend();
 });
