@@ -92,7 +92,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "Restaurant SaaS"
+      "shortcutName": "Restaurant SaaS",
+      "include": "build/installer.nsh"
     }
   }
 }
