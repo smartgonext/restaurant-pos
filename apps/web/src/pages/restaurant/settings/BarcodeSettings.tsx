@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -225,7 +225,15 @@ interface PrintBatchItem {
 }
 
 export default function BarcodeSettings() {
-  const [activeSettingsTab, setActiveSettingsTab] = useState<'shelf_tags' | 'weigh_scale' | 'cash_drawer' | 'sequential_barcode'>('shelf_tags');
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'shelf_tags' | 'weigh_scale' | 'cash_drawer' | 'sequential_barcode'>(() => {
+    try {
+      const saved = localStorage.getItem('barcode_active_settings_tab');
+      if (saved && ['shelf_tags', 'weigh_scale', 'cash_drawer', 'sequential_barcode'].includes(saved)) {
+        return saved as any;
+      }
+    } catch {}
+    return 'shelf_tags';
+  });
   const [seqDigits, setSeqDigits] = useState<number>(() => Number(localStorage.getItem('barcode_seq_padding') || 5));
   const [seqCustomStart, setSeqCustomStart] = useState<string>(() => localStorage.getItem('barcode_seq_start') || '1');
   const [liveSeqPreview, setLiveSeqPreview] = useState<string>('00001');
@@ -391,8 +399,20 @@ export default function BarcodeSettings() {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
   
-  const [barcodeType, setBarcodeType] = useState<'1d' | 'qr'>('1d');
-  const [presetId, setPresetId] = useState<string>('retail_standard');
+  const [barcodeType, setBarcodeType] = useState<'1d' | 'qr'>(() => {
+    try {
+      const saved = localStorage.getItem('barcode_type');
+      if (saved === '1d' || saved === 'qr') return saved;
+    } catch {}
+    return '1d';
+  });
+  const [presetId, setPresetId] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('barcode_preset_id');
+      if (saved && LABEL_PRESETS.some(p => p.id === saved)) return saved;
+    } catch {}
+    return 'retail_standard';
+  });
   const [is2Up, setIs2Up] = useState<boolean>(() => {
     try { return localStorage.getItem('barcode_is_2up') === 'true'; } catch { return false; }
   });
@@ -449,10 +469,30 @@ export default function BarcodeSettings() {
     }
   };
   
-  const [showStoreHeader, setShowStoreHeader] = useState<boolean>(true);
-  const [showItemName, setShowItemName] = useState<boolean>(true);
-  const [showBarcodeText, setShowBarcodeText] = useState<boolean>(true);
-  const [showPrice, setShowPrice] = useState<boolean>(true);
+  const [showStoreHeader, setShowStoreHeader] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('barcode_show_store_header');
+      return v !== null ? v === 'true' : true;
+    } catch { return true; }
+  });
+  const [showItemName, setShowItemName] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('barcode_show_item_name');
+      return v !== null ? v === 'true' : true;
+    } catch { return true; }
+  });
+  const [showBarcodeText, setShowBarcodeText] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('barcode_show_barcode_text');
+      return v !== null ? v === 'true' : true;
+    } catch { return true; }
+  });
+  const [showPrice, setShowPrice] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('barcode_show_price');
+      return v !== null ? v === 'true' : true;
+    } catch { return true; }
+  });
   const [showMfgDate, setShowMfgDate] = useState<boolean>(() => {
     try {
       const v = localStorage.getItem('barcode_show_mfg');
@@ -471,6 +511,56 @@ export default function BarcodeSettings() {
       return v !== null ? v === 'true' : true;
     } catch { return true; }
   });
+
+  // Master persistent settings saver for all barcode options
+  const saveAllBarcodeSettings = useCallback(() => {
+    try {
+      localStorage.setItem('barcode_active_settings_tab', activeSettingsTab);
+      localStorage.setItem('barcode_type', barcodeType);
+      localStorage.setItem('barcode_preset_id', presetId);
+      localStorage.setItem('barcode_is_2up', String(is2Up));
+      localStorage.setItem('barcode_2up_gap', String(gapMm));
+      if (storeHeader) localStorage.setItem('barcode_store_header', storeHeader);
+      localStorage.setItem('barcode_show_store_header', String(showStoreHeader));
+      localStorage.setItem('barcode_show_item_name', String(showItemName));
+      localStorage.setItem('barcode_show_barcode_text', String(showBarcodeText));
+      localStorage.setItem('barcode_show_price', String(showPrice));
+      localStorage.setItem('barcode_show_mfg', String(showMfgDate));
+      localStorage.setItem('barcode_show_bb', String(showBestBefore));
+      localStorage.setItem('barcode_show_exp', String(showExpDate));
+      if (selectedPrinter) {
+        localStorage.setItem('label_printer_name', selectedPrinter);
+      }
+      localStorage.setItem('barcode_seq_padding', String(seqDigits));
+      if (seqCustomStart && Number(seqCustomStart) > 0) {
+        localStorage.setItem('barcode_seq_start', seqCustomStart);
+      }
+    } catch (e) {
+      console.warn('Failed to save barcode settings to localStorage', e);
+    }
+  }, [
+    activeSettingsTab,
+    barcodeType,
+    presetId,
+    is2Up,
+    gapMm,
+    storeHeader,
+    showStoreHeader,
+    showItemName,
+    showBarcodeText,
+    showPrice,
+    showMfgDate,
+    showBestBefore,
+    showExpDate,
+    selectedPrinter,
+    seqDigits,
+    seqCustomStart,
+  ]);
+
+  // Synchronize on every setting change automatically
+  useEffect(() => {
+    saveAllBarcodeSettings();
+  }, [saveAllBarcodeSettings]);
 
   // Modal State for setting Qty, Mfg Date, Best Before days when adding/editing item
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
@@ -877,6 +967,8 @@ export default function BarcodeSettings() {
 
   // Trigger print directly via isolated HTML document (no blank pages)
   const handlePrint = async () => {
+    // Save all barcode settings before giving print so they persist permanently
+    saveAllBarcodeSettings();
     if (batchItems.length === 0) {
       toast.error('Your print batch is empty! Add items first.');
       return;
@@ -2043,28 +2135,40 @@ export default function BarcodeSettings() {
         <div className="flex bg-[#0f111a] border border-border/60 rounded-xl p-1 shrink-0">
           <button
             type="button"
-            onClick={() => setActiveSettingsTab('shelf_tags')}
+            onClick={() => {
+              setActiveSettingsTab('shelf_tags');
+              try { localStorage.setItem('barcode_active_settings_tab', 'shelf_tags'); } catch {}
+            }}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-black uppercase transition-all ${activeSettingsTab === 'shelf_tags' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/10' : 'text-text-muted hover:text-text-primary'}`}
           >
             <Printer size={13} /> Shelf Tags
           </button>
           <button
             type="button"
-            onClick={() => setActiveSettingsTab('weigh_scale')}
+            onClick={() => {
+              setActiveSettingsTab('weigh_scale');
+              try { localStorage.setItem('barcode_active_settings_tab', 'weigh_scale'); } catch {}
+            }}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-black uppercase transition-all ${activeSettingsTab === 'weigh_scale' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/10' : 'text-text-muted hover:text-text-primary'}`}
           >
             <Layers size={13} /> Weigh Scale Format
           </button>
           <button
             type="button"
-            onClick={() => setActiveSettingsTab('cash_drawer')}
+            onClick={() => {
+              setActiveSettingsTab('cash_drawer');
+              try { localStorage.setItem('barcode_active_settings_tab', 'cash_drawer'); } catch {}
+            }}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-black uppercase transition-all ${activeSettingsTab === 'cash_drawer' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/10' : 'text-text-muted hover:text-text-primary'}`}
           >
             <Wallet size={13} /> Cash Drawer & Printer
           </button>
           <button
             type="button"
-            onClick={() => setActiveSettingsTab('sequential_barcode')}
+            onClick={() => {
+              setActiveSettingsTab('sequential_barcode');
+              try { localStorage.setItem('barcode_active_settings_tab', 'sequential_barcode'); } catch {}
+            }}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-black uppercase transition-all ${activeSettingsTab === 'sequential_barcode' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/10' : 'text-text-muted hover:text-text-primary'}`}
           >
             <Barcode size={13} /> Auto-Barcode Sequence (0001)
@@ -2310,9 +2414,36 @@ export default function BarcodeSettings() {
 
             {/* Form Configuration Settings */}
             <Card className="relative z-10 bg-[#121424]/50 border border-border/40 p-4 space-y-4">
-              <div className="flex items-center gap-2 text-blue-400">
-                <Printer size={16} className="shrink-0" />
-                <h3 className="text-xs font-bold uppercase tracking-wider">Format & Label Presets</h3>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-blue-400">
+                  <Printer size={16} className="shrink-0" />
+                  <h3 className="text-xs font-bold uppercase tracking-wider">Format & Label Presets</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveAllBarcodeSettings();
+                    toast.success('Barcode settings saved successfully! Next time you open, the exact same settings will be used.', { icon: '💾' });
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 border border-blue-500/30 transition-all cursor-pointer shadow-sm"
+                  title="Save current barcode settings to persist on next visit"
+                >
+                  <Check size={13} className="text-blue-400" />
+                  <span>Save Settings</span>
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  saveAllBarcodeSettings();
+                  toast.success('Barcode settings saved successfully! Next time you open, the exact same settings will be used.', { icon: '💾' });
+                }}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 border border-blue-500/30 transition-all cursor-pointer shadow-sm"
+                title="Save current barcode settings to persist on next visit"
+              >
+                <Check size={13} className="text-blue-400" />
+                <span>Save Settings</span>
+              </button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2321,14 +2452,20 @@ export default function BarcodeSettings() {
                   <div className="grid grid-cols-2 gap-2 h-10">
                     <button
                       type="button"
-                      onClick={() => setBarcodeType('1d')}
+                      onClick={() => {
+                        setBarcodeType('1d');
+                        try { localStorage.setItem('barcode_type', '1d'); } catch {}
+                      }}
                       className={`flex items-center justify-center gap-1.5 rounded-lg border text-xs font-black uppercase transition-all ${barcodeType === '1d' ? 'border-blue-500/50 bg-blue-500/10 text-blue-400' : 'border-border/50 text-text-muted hover:text-text-primary bg-bg-tertiary/40'}`}
                     >
                       <Barcode size={14} /> 1D Linear
                     </button>
                     <button
                       type="button"
-                      onClick={() => setBarcodeType('qr')}
+                      onClick={() => {
+                        setBarcodeType('qr');
+                        try { localStorage.setItem('barcode_type', 'qr'); } catch {}
+                      }}
                       className={`flex items-center justify-center gap-1.5 rounded-lg border text-xs font-black uppercase transition-all ${barcodeType === 'qr' ? 'border-blue-500/50 bg-blue-500/10 text-blue-400' : 'border-border/50 text-text-muted hover:text-text-primary bg-bg-tertiary/40'}`}
                     >
                       <QrCode size={14} /> 2D QR Code
@@ -2341,7 +2478,11 @@ export default function BarcodeSettings() {
                   <select
                     className="glass-input h-10 text-xs w-full"
                     value={presetId}
-                    onChange={(e) => setPresetId(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setPresetId(val);
+                      try { localStorage.setItem('barcode_preset_id', val); } catch {}
+                    }}
                   >
                     {LABEL_PRESETS.map((preset) => (
                       <option key={preset.id} value={preset.id}>
@@ -2446,10 +2587,38 @@ export default function BarcodeSettings() {
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
                   {[
-                    { state: showStoreHeader, set: setShowStoreHeader, label: 'Store Header' },
-                    { state: showItemName, set: setShowItemName, label: 'Item Name' },
-                    { state: showBarcodeText, set: setShowBarcodeText, label: 'Barcode Text' },
-                    { state: showPrice, set: setShowPrice, label: 'Price (₹)' },
+                    { 
+                      state: showStoreHeader, 
+                      set: (v: boolean) => {
+                        setShowStoreHeader(v);
+                        try { localStorage.setItem('barcode_show_store_header', String(v)); } catch {}
+                      }, 
+                      label: 'Store Header' 
+                    },
+                    { 
+                      state: showItemName, 
+                      set: (v: boolean) => {
+                        setShowItemName(v);
+                        try { localStorage.setItem('barcode_show_item_name', String(v)); } catch {}
+                      }, 
+                      label: 'Item Name' 
+                    },
+                    { 
+                      state: showBarcodeText, 
+                      set: (v: boolean) => {
+                        setShowBarcodeText(v);
+                        try { localStorage.setItem('barcode_show_barcode_text', String(v)); } catch {}
+                      }, 
+                      label: 'Barcode Text' 
+                    },
+                    { 
+                      state: showPrice, 
+                      set: (v: boolean) => {
+                        setShowPrice(v);
+                        try { localStorage.setItem('barcode_show_price', String(v)); } catch {}
+                      }, 
+                      label: 'Price (₹)' 
+                    },
                     { 
                       state: showMfgDate, 
                       set: (v: boolean) => {
@@ -3458,6 +3627,19 @@ export default function BarcodeSettings() {
           </div>
 
           {/* Modal Actions */}
+          <div className="flex justify-end gap-2.5 pt-3 border-t border-border/30">
+            <Button variant="ghost" size="sm" onClick={() => setIsItemModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button className="bg-blue-600 hover:bg-blue-500 font-bold px-6" size="sm" onClick={handleSaveModalItem}>
+              {editingLedgerId ? 'Update Tag' : 'Add to Print Batch'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
           <div className="flex justify-end gap-2.5 pt-3 border-t border-border/30">
             <Button variant="ghost" size="sm" onClick={() => setIsItemModalOpen(false)}>
               Cancel
