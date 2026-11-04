@@ -450,7 +450,7 @@ export async function restaurantRoutes(app) {
         }
         return Boolean(category.isKOTEnabled);
     };
-    const getNextSequentialBarcode = async (restaurantId) => {
+    const getNextSequentialBarcode = async (restaurantId, customStart = null, digits = 5) => {
         try {
             const items = await prisma.menuItem.findMany({
                 where: { restaurantId, productQR: { not: null } },
@@ -459,9 +459,11 @@ export async function restaurantRoutes(app) {
             let max = 0;
             for (const it of items) {
                 const qr = String(it.productQR || '').trim();
-                if (/^\d+$/.test(qr)) {
+                // Strictly match short internal store barcodes (<= 6 digits and < 100000)
+                // Exclude 8-digit and 13-digit manufacturer EAN/UPC barcodes like 90311017, 89000724
+                if (/^\d+$/.test(qr) && qr.length <= 6) {
                     const num = parseInt(qr, 10);
-                    if (num > max && num < 100000000) max = num;
+                    if (num > max && num < 100000) max = num;
                 }
             }
             const invItems = await prisma.inventoryItem.findMany({
@@ -470,29 +472,35 @@ export async function restaurantRoutes(app) {
             });
             for (const it of invItems) {
                 const qr = String(it.barcode || '').trim();
-                if (/^\d+$/.test(qr)) {
+                if (/^\d+$/.test(qr) && qr.length <= 6) {
                     const num = parseInt(qr, 10);
-                    if (num > max && num < 100000000) max = num;
+                    if (num > max && num < 100000) max = num;
                 }
             }
-            let candidateNum = max + 1;
+            const padLen = Math.max(3, Math.min(8, Number(digits) || 5));
+            let candidateNum = max === 0 ? 1 : max + 1;
+            if (customStart && typeof customStart === 'number' && customStart > 0) {
+                candidateNum = customStart;
+            }
             while (true) {
-                const candidate = String(candidateNum).padStart(5, '0');
-                const exists = await prisma.menuItem.findFirst({ where: { productQR: candidate }, select: { id: true } });
-                const existsInv = await prisma.inventoryItem.findFirst({ where: { barcode: candidate }, select: { id: true } });
+                const candidate = String(candidateNum).padStart(padLen, '0');
+                const exists = await prisma.menuItem.findFirst({ where: { restaurantId, productQR: candidate }, select: { id: true } });
+                const existsInv = await prisma.inventoryItem.findFirst({ where: { restaurantId, barcode: candidate }, select: { id: true } });
                 if (!exists && !existsInv) {
                     return candidate;
                 }
                 candidateNum++;
             }
         } catch (e) {
-            return String(Date.now()).slice(-6);
+            return '00001';
         }
     };
     app.get('/menu-items/next-barcode', async (request, reply) => {
         try {
             const restaurantId = request.restaurantId;
-            const barcode = await getNextSequentialBarcode(restaurantId);
+            const customStart = request.query?.start ? parseInt(request.query.start, 10) : null;
+            const digits = request.query?.digits ? parseInt(request.query.digits, 10) : 5;
+            const barcode = await getNextSequentialBarcode(restaurantId, customStart, digits);
             return { success: true, barcode };
         } catch (err) {
             return reply.status(500).send({ success: false, error: err?.message || String(err) });
@@ -1711,6 +1719,9 @@ export async function restaurantRoutes(app) {
                     updatedAt: true,
                     inventoryItemId: true,
                     productQR: true,
+                    expiryDate: true,
+                    mfgDate: true,
+                    bestBeforeDays: true,
                     inventoryItem: {
                         include: {
                             unit: {
@@ -1895,12 +1906,25 @@ export async function restaurantRoutes(app) {
             const allowedMenuItemFields = [
                 'menuId', 'categoryId', 'inventoryItemId', 'name', 'description', 'price', 'image',
                 'isVeg', 'isAvailable', 'showOnCustomerSite', 'preparationTime', 'productQR', 'isAutoImage',
-                'salesUnit', 'taxType', 'taxPercent', 'enablePackOptions', 'packOptions', 'stockWarningThreshold', 'sortOrder'
+                'salesUnit', 'taxType', 'taxPercent', 'enablePackOptions', 'packOptions', 'stockWarningThreshold', 'sortOrder',
+                'expiryDate', 'mfgDate', 'bestBeforeDays'
             ];
             const dataToInsert = { restaurantId };
             for (const k of allowedMenuItemFields) {
                 if (typeof createData[k] !== 'undefined')
                     dataToInsert[k] = createData[k];
+            }
+            if (dataToInsert.mfgDate) {
+                const d = new Date(dataToInsert.mfgDate);
+                dataToInsert.mfgDate = !isNaN(d.getTime()) ? d : null;
+            }
+            if (dataToInsert.expiryDate) {
+                const d = new Date(dataToInsert.expiryDate);
+                dataToInsert.expiryDate = !isNaN(d.getTime()) ? d : null;
+            }
+            if (typeof dataToInsert.bestBeforeDays !== 'undefined') {
+                const bbd = parseInt(dataToInsert.bestBeforeDays, 10);
+                dataToInsert.bestBeforeDays = Number.isFinite(bbd) && bbd > 0 ? bbd : null;
             }
             const item = await prisma.menuItem.create({
                 data: dataToInsert,
@@ -1926,6 +1950,9 @@ export async function restaurantRoutes(app) {
                     updatedAt: true,
                     inventoryItemId: true,
                     productQR: true,
+                    expiryDate: true,
+                    mfgDate: true,
+                    bestBeforeDays: true,
                     inventoryItem: {
                         include: {
                             unit: {
@@ -2073,12 +2100,25 @@ export async function restaurantRoutes(app) {
             const allowedMenuItemFields = [
                 'menuId', 'categoryId', 'inventoryItemId', 'name', 'description', 'price', 'image',
                 'isVeg', 'isAvailable', 'showOnCustomerSite', 'preparationTime', 'productQR', 'isAutoImage',
-                'salesUnit', 'taxType', 'taxPercent', 'enablePackOptions', 'packOptions', 'stockWarningThreshold', 'sortOrder'
+                'salesUnit', 'taxType', 'taxPercent', 'enablePackOptions', 'packOptions', 'stockWarningThreshold', 'sortOrder',
+                'expiryDate', 'mfgDate', 'bestBeforeDays'
             ];
             const dataToUpdate = {};
             for (const k of allowedMenuItemFields) {
                 if (typeof updateData[k] !== 'undefined')
                     dataToUpdate[k] = updateData[k];
+            }
+            if (dataToUpdate.mfgDate) {
+                const d = new Date(dataToUpdate.mfgDate);
+                dataToUpdate.mfgDate = !isNaN(d.getTime()) ? d : null;
+            }
+            if (dataToUpdate.expiryDate) {
+                const d = new Date(dataToUpdate.expiryDate);
+                dataToUpdate.expiryDate = !isNaN(d.getTime()) ? d : null;
+            }
+            if (typeof dataToUpdate.bestBeforeDays !== 'undefined') {
+                const bbd = parseInt(dataToUpdate.bestBeforeDays, 10);
+                dataToUpdate.bestBeforeDays = Number.isFinite(bbd) && bbd > 0 ? bbd : null;
             }
             const item = await prisma.menuItem.update({
                 where: { id: Number(id) },
@@ -2105,6 +2145,9 @@ export async function restaurantRoutes(app) {
                     updatedAt: true,
                     inventoryItemId: true,
                     productQR: true,
+                    expiryDate: true,
+                    mfgDate: true,
+                    bestBeforeDays: true,
                     inventoryItem: {
                         include: {
                             unit: {

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { cn } from '@/lib/utils';
@@ -7,10 +7,12 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { 
   Printer, QrCode, Barcode, Tag, Sparkles, Store, Check, Trash2, Plus, Minus, Search, Layers, AlertCircle, RefreshCw, XCircle, Wallet
-} from 'lucide-react';
+, Calendar, Edit2, Clock, CalendarDays } from 'lucide-react';
+import { Modal } from '@/components/ui/Modal';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
+import { printHtmlOrFallback, getPrinterSettings, getAvailablePrinters, PrinterInfo } from '@/lib/electronPrint';
 
 // -------------------------------------------------------------
 // 1D Barcode Code 39 Encoder
@@ -196,10 +198,62 @@ interface PrintBatchItem {
   barcode: string;
   price: string;
   quantity: number;
+  includeMfgDate?: boolean;
+  mfgDate?: string;
+  includeBestBefore?: boolean;
+  bestBeforeDays?: number | string;
+  includeExpDate?: boolean;
+  expDate?: string;
 }
 
 export default function BarcodeSettings() {
-  const [activeSettingsTab, setActiveSettingsTab] = useState<'shelf_tags' | 'weigh_scale' | 'cash_drawer'>('shelf_tags');
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'shelf_tags' | 'weigh_scale' | 'cash_drawer' | 'sequential_barcode'>('shelf_tags');
+  const [seqDigits, setSeqDigits] = useState<number>(() => Number(localStorage.getItem('barcode_seq_padding') || 5));
+  const [seqCustomStart, setSeqCustomStart] = useState<string>(() => localStorage.getItem('barcode_seq_start') || '1');
+  const [liveSeqPreview, setLiveSeqPreview] = useState<string>('00001');
+
+  useEffect(() => {
+    const qParams = new URLSearchParams({ digits: String(seqDigits) });
+    if (seqCustomStart && Number(seqCustomStart) > 0) qParams.set('start', seqCustomStart);
+    api.get(`/restaurant/menu-items/next-barcode?${qParams.toString()}`)
+      .then(res => {
+        if (res.data?.success && res.data?.barcode) {
+          setLiveSeqPreview(res.data.barcode);
+        }
+      })
+      .catch(() => {});
+  }, [seqDigits, seqCustomStart]);
+
+  const handleSaveSequenceConfig = () => {
+    localStorage.setItem('barcode_seq_padding', String(seqDigits));
+    if (seqCustomStart && Number(seqCustomStart) > 0) {
+      localStorage.setItem('barcode_seq_start', seqCustomStart);
+    } else {
+      localStorage.removeItem('barcode_seq_start');
+    }
+    toast.success(`Sequential barcode set to start at ${liveSeqPreview}!`);
+  };
+
+  const handleResetTo0001 = () => {
+    setSeqCustomStart('1');
+    localStorage.setItem('barcode_seq_start', '1');
+    toast.success(`Reset sequence to 1 (${String(1).padStart(seqDigits, '0')})!`);
+  };
+  const [availablePrinters, setAvailablePrinters] = useState<PrinterInfo[]>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>(() => {
+    return localStorage.getItem('label_printer_name') || getPrinterSettings().billPrinterName || '';
+  });
+  const [isPrinting, setIsPrinting] = useState<boolean>(false);
+
+  useEffect(() => {
+    getAvailablePrinters().then((printers) => {
+      setAvailablePrinters(printers);
+      if (!selectedPrinter && printers.length > 0) {
+        const defaultPrinter = printers.find(p => p.isDefault)?.name || printers[0].name;
+        setSelectedPrinter(defaultPrinter);
+      }
+    });
+  }, []);
   
   // Cash Drawer Configuration States
   const [drawerType, setDrawerType] = useState<'usb' | 'network'>(() => {
@@ -321,6 +375,7 @@ export default function BarcodeSettings() {
   
   const [barcodeType, setBarcodeType] = useState<'1d' | 'qr'>('1d');
   const [presetId, setPresetId] = useState<string>('retail_standard');
+  const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const { data: restaurantSettings } = useQuery({
     queryKey: ['restaurant-settings'],
@@ -374,6 +429,202 @@ export default function BarcodeSettings() {
   const [showItemName, setShowItemName] = useState<boolean>(true);
   const [showBarcodeText, setShowBarcodeText] = useState<boolean>(true);
   const [showPrice, setShowPrice] = useState<boolean>(true);
+  const [showMfgDate, setShowMfgDate] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('barcode_show_mfg');
+      return v !== null ? v === 'true' : true;
+    } catch { return true; }
+  });
+  const [showExpDate, setShowExpDate] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('barcode_show_exp');
+      return v !== null ? v === 'true' : true;
+    } catch { return true; }
+  });
+  const [showBestBefore, setShowBestBefore] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('barcode_show_bb');
+      return v !== null ? v === 'true' : true;
+    } catch { return true; }
+  });
+
+  // Modal State for setting Qty, Mfg Date, Best Before days when adding/editing item
+  const [isItemModalOpen, setIsItemModalOpen] = useState(false);
+  const [activeModalItem, setActiveModalItem] = useState<any>(null);
+  const [modalQty, setModalQty] = useState<number>(1);
+  const [modalIncludeMfg, setModalIncludeMfg] = useState<boolean>(false);
+  const [modalMfgDate, setModalMfgDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [modalIncludeBestBefore, setModalIncludeBestBefore] = useState<boolean>(false);
+  const [modalIncludeExp, setModalIncludeExp] = useState<boolean>(false);
+  const [modalBestBeforeDays, setModalBestBeforeDays] = useState<string>('');
+  const [modalExpDate, setModalExpDate] = useState<string>('');
+  const [editingLedgerId, setEditingLedgerId] = useState<string | null>(null);
+
+  // Compute Expiry Date dynamically from Mfg Date + Best Before Days
+  const computeExpiryFromDays = (mfgStr: string, daysVal: number | string) => {
+    const d = parseInt(String(daysVal), 10);
+    if (!Number.isFinite(d) || d <= 0) return '';
+    const base = mfgStr ? new Date(mfgStr) : new Date();
+    if (isNaN(base.getTime())) return '';
+    const exp = new Date(base.getTime() + d * 24 * 60 * 60 * 1000);
+    return exp.toISOString().split('T')[0];
+  };
+
+  // Format date: Month and Year only for standard Mfg/Exp; Date and Month for Best Before
+  const formatItemDate = (dateStr?: string, hasBestBefore: boolean = false) => {
+    if (!dateStr) return '';
+    const trimmed = dateStr.trim();
+    if (/^\d{1,2}\/\d{4}$/.test(trimmed)) return trimmed;
+    if (/^\d{1,2}\/\d{1,2}$/.test(trimmed)) return trimmed;
+
+    // Handle YYYY-MM-DD cleanly without timezone shift
+    if (/^\d{4}-\d{1,2}-\d{1,2}/.test(trimmed)) {
+      const parts = trimmed.split('T')[0].split('-');
+      const yyyy = parts[0];
+      const m = parseInt(parts[1], 10);
+      const d = parseInt(parts[2], 10);
+      const mm = String(m).padStart(2, '0');
+      if (hasBestBefore) {
+        return `${d}/${m}`;
+      }
+      return `${mm}/${yyyy}`;
+    }
+
+    const dt = new Date(trimmed);
+    if (isNaN(dt.getTime())) return trimmed;
+    const d = dt.getDate();
+    const m = dt.getMonth() + 1;
+    const yyyy = dt.getFullYear();
+    const mm = String(m).padStart(2, '0');
+
+    // If Best Before is specified, show Date and Month (e.g. 4/11, 9/11)
+    if (hasBestBefore) {
+      return `${d}/${m}`;
+    }
+    // Standard Mfg & Expiry: show Month and Year only (e.g. 11/2026, 08/2026)
+    return `${mm}/${yyyy}`;
+  };
+
+  // Open item modal for new item from search
+  const handleOpenAddItemModal = (item: any) => {
+    setActiveModalItem(item);
+    setModalQty(1);
+    const today = new Date().toISOString().split('T')[0];
+
+    const initialMfg = item.mfgDate 
+      ? new Date(item.mfgDate).toISOString().split('T')[0] 
+      : today;
+    const initialExp = item.expiryDate 
+      ? new Date(item.expiryDate).toISOString().split('T')[0] 
+      : '';
+    const initialBB = item.bestBeforeDays ? String(item.bestBeforeDays) : '';
+
+    // Outside ON automatically sets inside ON!
+    setModalIncludeMfg(showMfgDate);
+    setModalMfgDate(initialMfg);
+    setModalIncludeBestBefore(showBestBefore);
+    setModalBestBeforeDays(initialBB);
+    setModalIncludeExp(showExpDate);
+    setModalExpDate(initialExp);
+    setEditingLedgerId(null);
+    setIsItemModalOpen(true);
+    setShowDropdown(false);
+    setSearchTerm('');
+  };
+
+  // Open item modal for editing existing item in ledger
+  const handleOpenEditItemModal = (item: PrintBatchItem) => {
+    setActiveModalItem(item);
+    setModalQty(item.quantity || 1);
+    setModalIncludeMfg(item.includeMfgDate !== undefined ? item.includeMfgDate : Boolean(item.mfgDate));
+    setModalMfgDate(item.mfgDate || new Date().toISOString().split('T')[0]);
+    setModalIncludeBestBefore(item.includeBestBefore !== undefined ? item.includeBestBefore : Boolean(item.bestBeforeDays));
+    setModalBestBeforeDays(item.bestBeforeDays ? String(item.bestBeforeDays) : '');
+    setModalIncludeExp(item.includeExpDate !== undefined ? item.includeExpDate : Boolean(item.expDate));
+    setModalExpDate(item.expDate || '');
+    setEditingLedgerId(item.id);
+    setIsItemModalOpen(true);
+  };
+
+  // Save / Confirm item in batch
+  const handleSaveModalItem = () => {
+    if (!activeModalItem) return;
+    const qty = Math.max(1, modalQty);
+    let finalExpDate = modalExpDate;
+    if (modalIncludeBestBefore && modalBestBeforeDays && Number(modalBestBeforeDays) > 0 && !finalExpDate) {
+      finalExpDate = computeExpiryFromDays(modalMfgDate, modalBestBeforeDays);
+    }
+
+    if (editingLedgerId) {
+      setBatchItems(prev => prev.map(x => x.id === editingLedgerId ? {
+        ...x,
+        quantity: qty,
+        includeMfgDate: modalIncludeMfg,
+        mfgDate: modalIncludeMfg ? modalMfgDate : undefined,
+        includeBestBefore: modalIncludeBestBefore,
+        bestBeforeDays: modalIncludeBestBefore && modalBestBeforeDays ? Number(modalBestBeforeDays) : undefined,
+        includeExpDate: modalIncludeExp,
+        expDate: modalIncludeExp ? finalExpDate : undefined,
+      } : x));
+      toast.success(`Updated ${activeModalItem.name}!`);
+    } else {
+      const itemId = String(activeModalItem.id);
+      setBatchItems(prev => {
+        const existingIdx = prev.findIndex(x => x.id === itemId);
+        if (existingIdx >= 0) {
+          return prev.map((x, i) => i === existingIdx ? {
+            ...x,
+            quantity: x.quantity + qty,
+            includeMfgDate: modalIncludeMfg,
+            mfgDate: modalIncludeMfg ? modalMfgDate : undefined,
+            includeBestBefore: modalIncludeBestBefore,
+            bestBeforeDays: modalIncludeBestBefore && modalBestBeforeDays ? Number(modalBestBeforeDays) : undefined,
+            includeExpDate: modalIncludeExp,
+            expDate: modalIncludeExp ? finalExpDate : undefined,
+          } : x);
+        }
+        return [
+          ...prev,
+          {
+            id: itemId,
+            name: activeModalItem.name || '',
+            barcode: activeModalItem.barcode || '000000',
+            price: activeModalItem.price || '0.00',
+            quantity: qty,
+            includeMfgDate: modalIncludeMfg,
+            mfgDate: modalIncludeMfg ? modalMfgDate : undefined,
+            includeBestBefore: modalIncludeBestBefore,
+            bestBeforeDays: modalIncludeBestBefore && modalBestBeforeDays ? Number(modalBestBeforeDays) : undefined,
+            includeExpDate: modalIncludeExp,
+            expDate: modalIncludeExp ? finalExpDate : undefined,
+          }
+        ];
+      });
+      toast.success(`${activeModalItem.name} (${qty} labels) added to print batch!`);
+    }
+
+    // Sync changed dates back into Menu Item inside database!
+    const targetMenuItemId = activeModalItem.menuItemId || (
+      typeof activeModalItem.id === 'string' && activeModalItem.id.startsWith('pack-')
+        ? parseInt(activeModalItem.id.split('-')[1], 10)
+        : parseInt(String(activeModalItem.id), 10)
+    );
+
+    if (Number.isFinite(targetMenuItemId) && targetMenuItemId > 0 && !String(activeModalItem.id).startsWith('custom-')) {
+      api.put(`/restaurant/menu-items/${targetMenuItemId}`, {
+        mfgDate: modalIncludeMfg && modalMfgDate ? new Date(modalMfgDate).toISOString() : null,
+        bestBeforeDays: modalIncludeBestBefore && modalBestBeforeDays && Number(modalBestBeforeDays) > 0 ? Number(modalBestBeforeDays) : null,
+        expiryDate: modalIncludeExp && finalExpDate ? new Date(finalExpDate).toISOString() : null,
+      }).then(() => {
+        queryClient.invalidateQueries({ queryKey: ['menu-items-for-batch-barcodes'] });
+      }).catch(err => {
+        console.error('Failed to sync dates to menuItem:', err);
+      });
+    }
+
+    setIsItemModalOpen(false);
+    setActiveModalItem(null);
+  };
 
   // Weighing Scale Configuration & Simulator States
   const [weighPrefix, setWeighPrefix] = useState<string>(() => localStorage.getItem('weigh_scale_prefix') || '22');
@@ -567,17 +818,12 @@ export default function BarcodeSettings() {
   // Add a brand new custom one-off item to batch ledger
   const handleAddCustomItem = () => {
     const customId = `custom-${Date.now()}`;
-    setBatchItems((prev) => [
-      ...prev,
-      {
-        id: customId,
-        name: 'Custom Product Tag',
-        barcode: 'PRD-CUSTOM-01',
-        price: '99.00',
-        quantity: 1
-      }
-    ]);
-    toast.success('Custom product added to print batch!');
+    handleOpenAddItemModal({
+      id: customId,
+      name: 'Custom Product Tag',
+      barcode: 'PRD-CUSTOM-01',
+      price: '99.00'
+    });
   };
 
   // Remove item from batch ledger
@@ -605,13 +851,133 @@ export default function BarcodeSettings() {
     setBatchItems((prev) => prev.map((x) => x.id === id ? { ...x, [field]: value } : x));
   };
 
-  // Trigger print
-  const handlePrint = () => {
+  // Trigger print directly via isolated HTML document (no blank pages)
+  const handlePrint = async () => {
     if (batchItems.length === 0) {
       toast.error('Your print batch is empty! Add items first.');
       return;
     }
-    window.print();
+
+    const container = document.getElementById('barcode-label-print-zone-container');
+    if (!container) {
+      toast.error('Print container not found in DOM.');
+      return;
+    }
+
+    const labelsHtml = container.innerHTML;
+    const printDoc = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Barcode Price Labels</title>
+  <style>
+    @page {
+      size: ${activePreset.widthMm}mm ${activePreset.heightMm}mm;
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      background: #ffffff;
+      color: #000000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    .print-single-label {
+      width: ${activePreset.widthMm}mm;
+      height: ${activePreset.heightMm}mm;
+      max-width: ${activePreset.widthMm}mm;
+      max-height: ${activePreset.heightMm}mm;
+      padding: 1.5mm 1mm;
+      margin: 0;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      text-align: center;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+      page-break-after: always !important;
+      break-after: page !important;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .print-header-text {
+      font-size: ${Math.max(6.5, activePreset.widthMm * 0.13)}pt;
+      line-height: 1.15;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: #000000;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 98%;
+      margin: 0;
+    }
+    .print-title-text {
+      font-size: ${Math.max(8.5, activePreset.widthMm * 0.17)}pt;
+      line-height: 1.15;
+      font-weight: 900;
+      color: #000000;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 98%;
+      margin: 0;
+    }
+    .print-barcode-container {
+      width: 90%;
+      margin: 1mm auto;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .print-barcode-container svg {
+      display: block;
+      margin: 0 auto;
+      max-width: 100%;
+      height: auto;
+    }
+    .print-value-text {
+      font-size: ${Math.max(6.5, activePreset.widthMm * 0.13)}pt;
+      letter-spacing: 1px;
+      font-weight: bold;
+      color: #000000;
+      line-height: 1.1;
+      margin: 0;
+    }
+    .print-price-text {
+      font-size: ${Math.max(10, activePreset.widthMm * 0.20)}pt;
+      font-weight: 900;
+      color: #000000;
+      line-height: 1.1;
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+  ${labelsHtml}
+</body>
+</html>`;
+
+    setIsPrinting(true);
+    const toastId = toast.loading('Sending barcode labels to printer...');
+    try {
+      await printHtmlOrFallback(printDoc, { deviceName: selectedPrinter || undefined });
+      toast.success(`Successfully sent ${totalLabelsToPrint} labels to printer!`, { id: toastId });
+    } catch (err: any) {
+      console.error('Failed to print labels:', err);
+      toast.error(err?.message || 'Print error. Falling back to browser print...', { id: toastId });
+      window.print();
+    } finally {
+      setIsPrinting(false);
+    }
   };
 
   // Calculate totals
@@ -720,30 +1086,88 @@ export default function BarcodeSettings() {
         }
       `}</style>
 
-      {/* Hidden Master Print zone (Used strictly by printer) */}
-      <div id="barcode-label-print-zone-container" className="hidden">
+      {/* Master Print zone (Rendered offscreen for DOM capture & direct print) */}
+      <div 
+        id="barcode-label-print-zone-container" 
+        style={{ position: 'fixed', left: '-9999px', top: '-9999px', width: '1px', height: '1px', overflow: 'hidden' }}
+      >
         {batchItems.map((item) => 
           Array.from({ length: item.quantity }).map((_, repeatIdx) => (
             <div 
               key={`${item.id}-${repeatIdx}`} 
               className="print-single-label"
+              style={{
+                width: `${activePreset.widthMm}mm`,
+                height: `${activePreset.heightMm}mm`,
+                maxWidth: `${activePreset.widthMm}mm`,
+                maxHeight: `${activePreset.heightMm}mm`,
+                padding: '1.2mm 1.5mm 0.8mm 1.5mm',
+                margin: 0,
+                boxSizing: 'border-box',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                textAlign: 'center',
+                overflow: 'hidden',
+                background: '#ffffff',
+                color: '#000000',
+              }}
             >
               {/* Header */}
               {showStoreHeader && storeHeader && (
-                <span className="print-header-text font-black uppercase text-[10px] tracking-wide text-slate-800">
+                <span 
+                  className="print-header-text"
+                  style={{
+                    fontSize: '7pt',
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                    lineHeight: 1.15,
+                    margin: '0 0 0.3mm 0',
+                    maxWidth: '98%',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    color: '#000000',
+                    display: 'block'
+                  }}
+                >
                   {storeHeader}
                 </span>
               )}
 
               {/* Product Name */}
               {showItemName && (
-                <span className="print-title-text font-black text-xs text-black tracking-tight mt-0.5">
+                <span 
+                  className="print-title-text"
+                  style={{
+                    fontSize: '8.5pt',
+                    fontWeight: 900,
+                    lineHeight: 1.15,
+                    margin: '0 0 0.4mm 0',
+                    maxWidth: '98%',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    color: '#000000',
+                    display: 'block'
+                  }}
+                >
                   {item.name || 'STORE PRODUCT'}
                 </span>
               )}
 
               {/* Graphic */}
-              <div className="print-barcode-container w-[90%] my-1 flex justify-center items-center">
+              <div 
+                className="print-barcode-container"
+                style={{
+                  width: '88%',
+                  margin: '0.4mm auto',
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center'
+                }}
+              >
                 {barcodeType === 'qr' ? (
                   <QRCodeSVG 
                     value={item.barcode || '000000'}
@@ -756,7 +1180,7 @@ export default function BarcodeSettings() {
                     <BarcodeSVG 
                       value={item.barcode} 
                       width={activePreset.widthPx * 0.8}
-                      height={Math.min(activePreset.heightPx * 0.22, 24)}
+                      height={18}
                     />
                   </div>
                 )}
@@ -764,17 +1188,122 @@ export default function BarcodeSettings() {
 
               {/* Readability value */}
               {showBarcodeText && barcodeType === '1d' && item.barcode && (
-                <span className="print-value-text text-[9px] font-black tracking-widest text-slate-700 uppercase">
+                <span 
+                  className="print-value-text"
+                  style={{
+                    fontSize: '6.5pt',
+                    fontWeight: 800,
+                    letterSpacing: '0.8px',
+                    lineHeight: 1.1,
+                    margin: '0.2mm 0 0 0',
+                    color: '#000000',
+                    textTransform: 'uppercase',
+                    display: 'block'
+                  }}
+                >
                   {item.barcode}
                 </span>
               )}
 
-              {/* Pricing tag */}
-              {showPrice && (
-                <span className="print-price-text text-base font-black text-black leading-none mt-1">
-                  ₹{Number(item.price || 0).toFixed(2)}
-                </span>
-              )}
+              {/* Bottom Row: 2-Column Table (Date Left, Price Right) - GUARANTEED NEVER TO STACK */}
+              <table 
+                className="print-bottom-row"
+                style={{
+                  width: '96%',
+                  marginTop: 'auto',
+                  border: 0,
+                  borderCollapse: 'collapse',
+                  padding: 0
+                }}
+              >
+                <tbody>
+                  <tr>
+                    <td 
+                      className="print-date-col"
+                      style={{
+                        textAlign: 'left',
+                        verticalAlign: 'bottom',
+                        padding: 0,
+                        lineHeight: 1.1
+                      }}
+                    >
+                      {((showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate) || 
+                        (showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays) || 
+                        (showExpDate && (item.includeExpDate ?? true) && item.expDate)) && (
+                        <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', lineHeight: 1.1 }}>
+                          {showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate && (
+                            <span 
+                              className="print-date-text"
+                              style={{
+                                fontSize: '6.5pt',
+                                fontWeight: 700,
+                                color: '#000000',
+                                whiteSpace: 'nowrap',
+                                lineHeight: 1.1
+                              }}
+                            >
+                              Mfg: {formatItemDate(item.mfgDate, Boolean(showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays))}
+                            </span>
+                          )}
+                          {showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays && (
+                            <span 
+                              className="print-date-text"
+                              style={{
+                                fontSize: '6.5pt',
+                                fontWeight: 700,
+                                color: '#000000',
+                                whiteSpace: 'nowrap',
+                                lineHeight: 1.1
+                              }}
+                            >
+                              BB: {item.bestBeforeDays}d {item.expDate ? `(${formatItemDate(item.expDate, true)})` : ''}
+                            </span>
+                          )}
+                          {showExpDate && (item.includeExpDate ?? true) && item.expDate && !item.bestBeforeDays && (
+                            <span 
+                              className="print-date-text"
+                              style={{
+                                fontSize: '6.5pt',
+                                fontWeight: 700,
+                                color: '#000000',
+                                whiteSpace: 'nowrap',
+                                lineHeight: 1.1
+                              }}
+                            >
+                              Exp: {formatItemDate(item.expDate, false)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td 
+                      className="print-price-col"
+                      style={{
+                        textAlign: 'right',
+                        verticalAlign: 'bottom',
+                        padding: 0,
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {showPrice && (
+                        <span 
+                          className="print-price-text"
+                          style={{
+                            fontSize: '11pt',
+                            fontWeight: 900,
+                            color: '#000000',
+                            lineHeight: 1,
+                            margin: 0,
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          ₹{Number(item.price || 0).toFixed(2)}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           ))
         )}
@@ -809,6 +1338,13 @@ export default function BarcodeSettings() {
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-black uppercase transition-all ${activeSettingsTab === 'cash_drawer' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/10' : 'text-text-muted hover:text-text-primary'}`}
           >
             <Wallet size={13} /> Cash Drawer & Printer
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSettingsTab('sequential_barcode')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-black uppercase transition-all ${activeSettingsTab === 'sequential_barcode' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/10' : 'text-text-muted hover:text-text-primary'}`}
+          >
+            <Barcode size={13} /> Auto-Barcode Sequence (0001)
           </button>
         </div>
       </div>
@@ -877,7 +1413,7 @@ export default function BarcodeSettings() {
                         <button
                           key={item.id}
                           type="button"
-                          onClick={() => handleAddMenuItem(item)}
+                          onClick={() => handleOpenAddItemModal(item)}
                           className={cn(
                             "w-full flex items-center justify-between px-4 py-2.5 text-left text-xs transition-colors border-b border-border/20 last:border-b-0",
                             item.isPackOption 
@@ -966,6 +1502,25 @@ export default function BarcodeSettings() {
                               title="Click to edit barcode"
                             />
                           </div>
+                          {((item.includeMfgDate && item.mfgDate) || (item.includeBestBefore && item.bestBeforeDays) || (item.includeExpDate && item.expDate)) && (
+                            <div className="flex flex-wrap items-center gap-1.5 px-2 pt-0.5">
+                              {item.includeMfgDate && item.mfgDate && (
+                                <span className="text-[9px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-1.5 py-0.5 rounded font-mono font-bold">
+                                  Mfg: {formatItemDate(item.mfgDate, Boolean(item.includeBestBefore && item.bestBeforeDays))}
+                                </span>
+                              )}
+                              {item.includeBestBefore && item.bestBeforeDays && (
+                                <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-mono font-bold">
+                                  BB: {item.bestBeforeDays}d
+                                </span>
+                              )}
+                              {item.includeExpDate && item.expDate && !item.bestBeforeDays && (
+                                <span className="text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded font-mono font-bold">
+                                  Exp: {formatItemDate(item.expDate, false)}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         <div className="md:col-span-6 flex items-center gap-2 pl-2">
@@ -1005,6 +1560,15 @@ export default function BarcodeSettings() {
                             <Plus size={12} />
                           </button>
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditItemModal(item)}
+                          className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/25 border border-blue-500/30 flex items-center justify-center transition-all shadow-sm"
+                          title="Edit dates, best before & label configuration"
+                        >
+                          <Edit2 size={13} />
+                        </button>
 
                         <button
                           type="button"
@@ -1090,23 +1654,63 @@ export default function BarcodeSettings() {
                 />
               </div>
 
-              <div className="pt-3 border-t border-border/30 grid grid-cols-2 md:grid-cols-4 gap-3">
-                {[
-                  { state: showStoreHeader, set: setShowStoreHeader, label: 'Store Header' },
-                  { state: showItemName, set: setShowItemName, label: 'Item Name' },
-                  { state: showBarcodeText, set: setShowBarcodeText, label: 'Barcode Text' },
-                  { state: showPrice, set: setShowPrice, label: 'Show Price' }
-                ].map((ctrl, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => ctrl.set(!ctrl.state)}
-                    className={`flex items-center justify-between p-2 rounded-lg border text-xs transition-all ${ctrl.state ? 'bg-blue-500/5 border-blue-500/30 text-blue-400 font-bold' : 'bg-bg-tertiary border-border/50 text-text-muted'}`}
-                  >
-                    <span>{ctrl.label}</span>
-                    {ctrl.state && <Check size={12} className="text-blue-400 shrink-0" />}
-                  </button>
-                ))}
+              <div className="pt-3 border-t border-border/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-text-muted uppercase tracking-wider">
+                    Label Display Elements (ON / OFF)
+                  </span>
+                  <span className="text-[10px] text-blue-400 font-mono font-bold">50 x 25 mm format</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+                  {[
+                    { state: showStoreHeader, set: setShowStoreHeader, label: 'Store Header' },
+                    { state: showItemName, set: setShowItemName, label: 'Item Name' },
+                    { state: showBarcodeText, set: setShowBarcodeText, label: 'Barcode Text' },
+                    { state: showPrice, set: setShowPrice, label: 'Price (₹)' },
+                    { 
+                      state: showMfgDate, 
+                      set: (v: boolean) => {
+                        setShowMfgDate(v);
+                        try { localStorage.setItem('barcode_show_mfg', String(v)); } catch {}
+                      }, 
+                      label: 'Mfg Date' 
+                    },
+                    { 
+                      state: showBestBefore, 
+                      set: (v: boolean) => {
+                        setShowBestBefore(v);
+                        try { localStorage.setItem('barcode_show_bb', String(v)); } catch {}
+                      }, 
+                      label: 'Best Before' 
+                    },
+                    { 
+                      state: showExpDate, 
+                      set: (v: boolean) => {
+                        setShowExpDate(v);
+                        try { localStorage.setItem('barcode_show_exp', String(v)); } catch {}
+                      }, 
+                      label: 'Expiry Date' 
+                    }
+                  ].map((ctrl, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => ctrl.set(!ctrl.state)}
+                      className={`flex items-center justify-between px-3 py-2 rounded-lg border text-xs transition-all ${
+                        ctrl.state 
+                          ? 'bg-blue-500/10 border-blue-500/40 text-blue-400 font-bold shadow-sm' 
+                          : 'bg-bg-tertiary/70 border-border/40 text-text-muted hover:text-text-secondary'
+                      }`}
+                    >
+                      <span className="truncate">{ctrl.label}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-black tracking-wider uppercase ${
+                        ctrl.state ? 'bg-blue-500 text-white' : 'bg-bg-secondary text-text-muted border border-border/30'
+                      }`}>
+                        {ctrl.state ? 'ON' : 'OFF'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </Card>
 
@@ -1190,29 +1794,92 @@ export default function BarcodeSettings() {
                             </p>
                           )}
 
-                          {showPrice && (
-                            <p 
-                              style={{ fontSize: `${Math.max(10, activePreset.widthPx * 0.065)}px` }} 
-                              className="print-price-text text-base font-black text-black leading-none mt-1 select-none"
-                            >
-                              ₹{Number(item.price || 0).toFixed(2)}
-                            </p>
-                          )}
-                        </div>
+                          <table 
+                            className="print-bottom-row w-[94%] mx-auto mt-auto border-0 border-collapse select-none"
+                            style={{ width: '94%', marginTop: 'auto', border: 0, borderCollapse: 'collapse' }}
+                          >
+                            <tbody>
+                              <tr>
+                                <td 
+                                  className="print-date-col text-left align-bottom p-0"
+                                  style={{ textAlign: 'left', verticalAlign: 'bottom', padding: 0 }}
+                                >
+                                  {((showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate) || 
+                                    (showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays) || 
+                                    (showExpDate && (item.includeExpDate ?? true) && item.expDate)) && (
+                                    <div className="flex flex-col text-left leading-tight">
+                                      {showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate && (
+                                        <span style={{ fontSize: `${Math.max(5.5, activePreset.widthPx * 0.030)}px` }} className="print-date-text font-bold text-slate-800">
+                                          Mfg: {formatItemDate(item.mfgDate, Boolean(showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays))}
+                                        </span>
+                                      )}
+                                      {showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays && (
+                                        <span style={{ fontSize: `${Math.max(5.5, activePreset.widthPx * 0.030)}px` }} className="print-date-text font-bold text-slate-800">
+                                          BB: {item.bestBeforeDays}d {item.expDate ? `(${formatItemDate(item.expDate, true)})` : ''}
+                                        </span>
+                                      )}
+                                      {showExpDate && (item.includeExpDate ?? true) && item.expDate && !item.bestBeforeDays && (
+                                        <span style={{ fontSize: `${Math.max(5.5, activePreset.widthPx * 0.030)}px` }} className="print-date-text font-bold text-slate-800">
+                                          Exp: {formatItemDate(item.expDate, false)}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                                <td 
+                                  className="print-price-col text-right align-bottom p-0 whitespace-nowrap"
+                                  style={{ textAlign: 'right', verticalAlign: 'bottom', padding: 0, whiteSpace: 'nowrap' }}
+                                >
+                                  {showPrice && (
+                                    <span 
+                                      style={{ fontSize: `${Math.max(9, activePreset.widthPx * 0.055)}px` }} 
+                                      className="print-price-text text-sm font-black text-black leading-none select-none"
+                                    >
+                                      ₹{Number(item.price || 0).toFixed(2)}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table></div>
                       </div>
                     </div>
                   ))
                 )}
               </div>
 
-              <div className="w-full pt-4 border-t border-border/30 mt-4 shrink-0">
+              <div className="w-full pt-4 border-t border-border/30 mt-4 shrink-0 space-y-3">
+                {availablePrinters.length > 0 && (
+                  <div className="flex flex-col gap-1.5 bg-bg-tertiary/40 p-2.5 rounded-xl border border-border/40">
+                    <label className="text-[10px] font-bold text-text-muted uppercase tracking-wider flex items-center justify-between">
+                      <span className="flex items-center gap-1.5"><Printer className="w-3.5 h-3.5 text-blue-400" /> Target Printer</span>
+                      <span className="text-[10px] text-blue-400 font-mono font-bold truncate max-w-[140px]">{selectedPrinter || 'System Default'}</span>
+                    </label>
+                    <select
+                      value={selectedPrinter}
+                      onChange={(e) => {
+                        setSelectedPrinter(e.target.value);
+                        localStorage.setItem('label_printer_name', e.target.value);
+                      }}
+                      className="glass-input h-9 text-xs font-semibold bg-bg-secondary text-text-primary rounded-lg px-2 border border-border/50 focus:ring-1 focus:ring-blue-500/50"
+                    >
+                      <option value="">System Default Printer</option>
+                      {availablePrinters.map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {p.displayName || p.name} {p.isDefault ? '(Default)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <Button 
-                  className="w-full shadow-glow-sm bg-gradient-primary text-white font-black tracking-wider" 
+                  className="w-full shadow-glow-sm bg-gradient-primary text-white font-black tracking-wider h-11" 
                   icon={<Printer className="w-4 h-4" />}
                   onClick={handlePrint}
-                  disabled={batchItems.length === 0}
+                  disabled={batchItems.length === 0 || isPrinting}
                 >
-                  Send Batch to Thermal Printer ({totalLabelsToPrint} Labels)
+                  {isPrinting ? 'Sending to Printer...' : `Send Batch to Thermal Printer (${totalLabelsToPrint} Labels)`}
                 </Button>
               </div>
             </Card>
@@ -1514,7 +2181,7 @@ export default function BarcodeSettings() {
           </div>
 
         </div>
-      ) : (
+      ) : activeSettingsTab === 'cash_drawer' ? (
         /* TAB 3: CASH DRAWER & PRINTER INTEGRATION SYSTEM (Premium View) */
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 animate-in fade-in duration-200">
           
@@ -1715,8 +2382,370 @@ export default function BarcodeSettings() {
           </div>
 
         </div>
-      )}
+      ) : (
+        /* TAB 4: SEQUENTIAL AUTO-BARCODE CONFIG & 0001 RESET */
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-200">
+          
+          {/* CONFIGURATION PANEL (7 Columns) */}
+          <div className="lg:col-span-7 space-y-6">
+            <Card className="bg-[#121424]/50 border border-border/40 p-5 space-y-5">
+              <div className="flex items-center gap-2 text-blue-400">
+                <Barcode className="w-5 h-5 shrink-0" />
+                <h3 className="text-sm font-black uppercase tracking-wider">Sequential Auto-Barcode Settings</h3>
+              </div>
 
+              <p className="text-xs text-text-muted leading-relaxed">
+                When you add new products or bakery items without a manufacturer barcode, the POS automatically assigns sequential barcodes like <span className="text-blue-400 font-mono font-bold">00001, 00002, 00003...</span>
+                Manufacturer barcodes (e.g. 8-digit and 13-digit retail items like Coke, Kinley, Roshen) are strictly isolated so they never distort your store numbers.
+              </p>
+
+              {/* Digits length selector */}
+              <div className="space-y-2 pt-2">
+                <label className="text-xs font-bold text-text-muted uppercase">Barcode Digit Length Format</label>
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    { digits: 4, sample: '0001' },
+                    { digits: 5, sample: '00001 (Standard)' },
+                    { digits: 6, sample: '000001' }
+                  ].map((opt) => (
+                    <button
+                      key={opt.digits}
+                      type="button"
+                      onClick={() => setSeqDigits(opt.digits)}
+                      className={`p-3 rounded-xl border flex flex-col items-center justify-center transition-all ${
+                        seqDigits === opt.digits
+                          ? 'border-blue-500 bg-blue-500/10 text-blue-400 shadow-md shadow-blue-500/5'
+                          : 'border-border/50 bg-[#161824]/60 text-text-muted hover:text-text-primary'
+                      }`}
+                    >
+                      <span className="text-xs font-black">{opt.digits} Digits</span>
+                      <span className="text-[10px] font-mono mt-0.5 opacity-80">{opt.sample}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Starting Sequence Number & Reset */}
+              <div className="space-y-2 pt-2">
+                <label className="text-xs font-bold text-text-muted uppercase">Next Starting Sequence Number</label>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <input
+                    type="number"
+                    min="1"
+                    max="99999"
+                    value={seqCustomStart}
+                    onChange={(e) => setSeqCustomStart(e.target.value)}
+                    className="glass-input h-11 w-full sm:w-36 text-center font-mono font-black text-base tracking-widest text-blue-400 focus:ring-1 focus:ring-blue-500/50"
+                    placeholder="1"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={handleResetTo0001}
+                    className="h-11 px-4 text-xs font-black uppercase tracking-wider bg-[#1f223f] hover:bg-[#2b3058] text-white border border-border/50 shrink-0"
+                  >
+                    🔄 Reset to 1 ({String(1).padStart(seqDigits, '0')})
+                  </Button>
+                </div>
+                <span className="text-[11px] text-text-muted block">
+                  Click <strong>Reset to 1</strong> if you want your next newly created item to start from <span className="text-blue-400 font-mono font-bold">{String(1).padStart(seqDigits, '0')}</span>.
+                </span>
+              </div>
+
+              {/* Save & Apply Button */}
+              <div className="pt-4 border-t border-border/30">
+                <Button
+                  type="button"
+                  onClick={handleSaveSequenceConfig}
+                  className="w-full h-11 text-xs font-black uppercase tracking-wider shadow-glow-sm bg-gradient-primary text-white"
+                >
+                  💾 Save & Apply Sequence Settings
+                </Button>
+              </div>
+            </Card>
+          </div>
+
+          {/* PREVIEW & EXPLANATION PANEL (5 Columns) */}
+          <div className="lg:col-span-5 space-y-6">
+            <Card className="bg-[#121424]/50 border border-border/40 p-5 space-y-4">
+              <div className="flex items-center gap-2 text-purple-400">
+                <Sparkles className="w-5 h-5 shrink-0" />
+                <h3 className="text-sm font-black uppercase tracking-wider">Live Next Barcode Preview</h3>
+              </div>
+
+              <div className="p-4 bg-white rounded-xl flex flex-col items-center justify-center space-y-2 text-center shadow-inner">
+                <span className="text-[10px] font-black uppercase tracking-wide text-slate-800">AMORA BAKES</span>
+                <span className="text-xs font-black text-black">NEXT NEW PRODUCT</span>
+                <div className="w-[90%] my-1 flex justify-center">
+                  <BarcodeSVG value={liveSeqPreview} width={200} height={40} />
+                </div>
+                <span className="text-[10px] font-mono font-black text-slate-700 tracking-widest uppercase">
+                  {liveSeqPreview}
+                </span>
+                <span className="text-sm font-black text-black leading-none">₹0.00</span>
+              </div>
+
+              <div className="p-3.5 bg-blue-500/10 border border-blue-500/20 rounded-xl space-y-1.5 text-xs">
+                <span className="text-blue-400 font-bold block uppercase text-[10px]">✅ Why 9**** occurred & How it is fixed:</span>
+                <p className="text-text-muted text-[11px] leading-relaxed">
+                  Some pre-seeded manufacturer products (like Dryco Health Mix Jar <code className="text-blue-300 font-mono">90311017</code>) had 8-digit EAN barcodes starting with 9. The generator previously saw that as a store sequential number and tried to create 90311018.
+                </p>
+                <p className="text-text-muted text-[11px] leading-relaxed">
+                  We have strictly separated manufacturer barcodes from store codes. Now, your store sequence operates cleanly starting from <strong className="text-blue-400 font-mono">{liveSeqPreview}</strong>, incrementing one by one!
+                </p>
+              </div>
+            </Card>
+          </div>
+
+        </div>
+      )}
+      {/* ITEM DATE & QUANTITY POP-UP MODAL */}
+      <Modal 
+        open={isItemModalOpen} 
+        onClose={() => setIsItemModalOpen(false)} 
+        title={editingLedgerId ? `Edit Print Tag: ${activeModalItem?.name || ''}` : `Configure Label: ${activeModalItem?.name || ''}`}
+        size="md"
+      >
+        <div className="space-y-4 p-1">
+          {/* Product info banner */}
+          <div className="p-3 bg-[#121424] rounded-xl border border-border/40 flex items-center justify-between">
+            <div>
+              <h4 className="text-sm font-black text-text-primary">{activeModalItem?.name}</h4>
+              <p className="text-[11px] font-mono text-blue-400 mt-0.5">Barcode: {activeModalItem?.barcode || '000000'}</p>
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] text-text-muted uppercase font-bold block">Rate / Price</span>
+              <span className="text-sm font-black text-white">₹{Number(activeModalItem?.price || 0).toFixed(2)}</span>
+            </div>
+          </div>
+
+          {/* Form inputs */}
+          <div className="space-y-3.5">
+            {/* Quantity */}
+            <div className="bg-[#141628] p-3 rounded-xl border border-border/40 flex items-center justify-between">
+              <div>
+                <label className="text-xs font-bold text-text-primary uppercase tracking-wider block">
+                  Labels to Print (Quantity)
+                </label>
+                <p className="text-[10px] text-text-muted">Number of stickers to generate</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  type="button" 
+                  onClick={() => setModalQty(Math.max(1, modalQty - 1))}
+                  className="w-8 h-8 rounded bg-bg-tertiary border border-border/50 text-text-primary hover:bg-bg-hover flex items-center justify-center font-bold"
+                >
+                  -
+                </button>
+                <input 
+                  type="number"
+                  min="1"
+                  max="999"
+                  value={modalQty}
+                  onChange={(e) => setModalQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="glass-input w-16 h-8 text-sm font-black text-center"
+                />
+                <button 
+                  type="button" 
+                  onClick={() => setModalQty(modalQty + 1)}
+                  className="w-8 h-8 rounded bg-bg-tertiary border border-border/50 text-text-primary hover:bg-bg-hover flex items-center justify-center font-bold"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            {/* OPTION 1: MANUFACTURE DATE (ON / OFF) */}
+            <div className={`p-3 rounded-xl border transition-all ${modalIncludeMfg ? 'bg-blue-500/5 border-blue-500/30' : 'bg-[#141628]/60 border-border/30'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-blue-400" />
+                  <span className="text-xs font-bold text-text-primary uppercase tracking-wider">Manufacture Date (Mfg)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setModalIncludeMfg(!modalIncludeMfg)}
+                  className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider transition-all ${modalIncludeMfg ? 'bg-emerald-500 text-black shadow-md' : 'bg-bg-tertiary text-text-muted hover:text-text-primary border border-border/50'}`}
+                >
+                  {modalIncludeMfg ? '✓ ON (Print Mfg)' : '✕ OFF (No Mfg)'}
+                </button>
+              </div>
+
+              {modalIncludeMfg ? (
+                <div className="flex items-center gap-2.5 pt-1 animate-in fade-in duration-150">
+                  <input 
+                    type="date"
+                    value={modalMfgDate}
+                    onChange={(e) => {
+                      setModalMfgDate(e.target.value);
+                      if (modalIncludeBestBefore && modalBestBeforeDays && Number(modalBestBeforeDays) > 0) {
+                        setModalExpDate(computeExpiryFromDays(e.target.value, modalBestBeforeDays));
+                      }
+                    }}
+                    className="glass-input flex-1 h-9 text-xs font-semibold"
+                  />
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      const today = new Date().toISOString().split('T')[0];
+                      setModalMfgDate(today);
+                      if (modalIncludeBestBefore && modalBestBeforeDays && Number(modalBestBeforeDays) > 0) {
+                        setModalExpDate(computeExpiryFromDays(today, modalBestBeforeDays));
+                      }
+                    }}
+                    className="px-2.5 h-9 rounded bg-bg-tertiary border border-border/50 text-[11px] font-bold text-blue-400 hover:bg-bg-hover shrink-0"
+                  >
+                    Today
+                  </button>
+                </div>
+              ) : (
+                <p className="text-[10px] text-text-muted italic">No manufacture date will be printed on this tag.</p>
+              )}
+            </div>
+
+            {/* OPTION 2: BEST BEFORE (ON / OFF) */}
+            <div className={`p-3 rounded-xl border transition-all ${modalIncludeBestBefore ? 'bg-emerald-500/5 border-emerald-500/30' : 'bg-[#141628]/60 border-border/30'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs font-bold text-text-primary uppercase tracking-wider">Best Before (BB Days)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setModalIncludeBestBefore(!modalIncludeBestBefore)}
+                  className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider transition-all ${modalIncludeBestBefore ? 'bg-emerald-500 text-black shadow-md' : 'bg-bg-tertiary text-text-muted hover:text-text-primary border border-border/50'}`}
+                >
+                  {modalIncludeBestBefore ? '✓ ON (Print BB)' : '✕ OFF (No BB)'}
+                </button>
+              </div>
+
+              {modalIncludeBestBefore ? (
+                <div className="pt-1 animate-in fade-in duration-150 space-y-2">
+                  <div className="relative">
+                    <input 
+                      type="number"
+                      min="1"
+                      max="3650"
+                      placeholder="e.g. 5 or 6"
+                      value={modalBestBeforeDays}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setModalBestBeforeDays(val);
+                        if (val && Number(val) > 0) {
+                          const calculated = computeExpiryFromDays(modalMfgDate, val);
+                          setModalExpDate(calculated);
+                        }
+                      }}
+                      className="glass-input w-full h-9 text-xs font-semibold pr-14"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-text-muted font-bold">Days</span>
+                  </div>
+                  {modalBestBeforeDays && (
+                    <p className="text-[10px] text-emerald-400 font-semibold">
+                      Label prints: <span className="font-mono font-bold">BB: {modalBestBeforeDays}d</span> {modalExpDate ? `(${formatItemDate(modalExpDate, true)})` : ''}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-[10px] text-text-muted italic">No Best Before days will be printed on this tag.</p>
+              )}
+            </div>
+
+            {/* OPTION 3: EXPIRY DATE (ON / OFF) */}
+            <div className={`p-3 rounded-xl border transition-all ${modalIncludeExp ? 'bg-amber-500/5 border-amber-500/30' : 'bg-[#141628]/60 border-border/30'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <CalendarDays className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs font-bold text-text-primary uppercase tracking-wider">Expiry Date (Exp Date)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setModalIncludeExp(!modalIncludeExp)}
+                  className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider transition-all ${modalIncludeExp ? 'bg-amber-400 text-black shadow-md' : 'bg-bg-tertiary text-text-muted hover:text-text-primary border border-border/50'}`}
+                >
+                  {modalIncludeExp ? '✓ ON (Print Exp)' : '✕ OFF (No Exp)'}
+                </button>
+              </div>
+
+              {modalIncludeExp ? (
+                <div className="pt-1 animate-in fade-in duration-150 space-y-1.5">
+                  <input 
+                    type="date"
+                    value={modalExpDate}
+                    onChange={(e) => setModalExpDate(e.target.value)}
+                    className="glass-input w-full h-9 text-xs font-semibold"
+                  />
+                  {modalExpDate && (
+                    <p className="text-[10px] text-amber-400 font-semibold">
+                      Label prints: <span className="font-mono font-bold">Exp: {formatItemDate(modalExpDate, false)}</span> (Month & Year only)
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-[10px] text-text-muted italic">No expiry date will be printed on this tag.</p>
+              )}
+            </div>
+          </div>
+
+          {/* Live 50x25mm Label Preview in Modal */}
+          <div className="pt-2 border-t border-border/30">
+            <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider block mb-2">
+              Preview on 50 x 25 mm Label
+            </span>
+            <div className="p-3 bg-[#0d0f1c] rounded-xl flex justify-center items-center">
+              <div 
+                style={{ width: '220px', height: '110px' }}
+                className="bg-white text-black rounded shadow p-2 flex flex-col items-center justify-between text-center select-none overflow-hidden"
+              >
+                {showStoreHeader && storeHeader && (
+                  <span className="text-[9px] font-black uppercase text-slate-800 tracking-wide line-clamp-1">{storeHeader}</span>
+                )}
+                {showItemName && (
+                  <span className="text-[10px] font-black text-black tracking-tight line-clamp-1 mt-0.5">{activeModalItem?.name}</span>
+                )}
+                <div className="w-[85%] my-1 flex justify-center items-center">
+                  <BarcodeSVG value={activeModalItem?.barcode || '000000'} width={180} height={20} />
+                </div>
+                {showBarcodeText && (
+                  <span className="text-[8px] font-mono font-bold tracking-widest text-slate-700 leading-none">{activeModalItem?.barcode || '000000'}</span>
+                )}
+                <div className="w-full mt-auto flex items-end justify-between px-1">
+                  <div className="flex flex-col text-left leading-none">
+                    {showMfgDate && modalIncludeMfg && modalMfgDate && (
+                      <span className="text-[7px] font-bold text-slate-800">
+                        Mfg: {formatItemDate(modalMfgDate, Boolean(modalIncludeBestBefore && modalBestBeforeDays))}
+                      </span>
+                    )}
+                    {showBestBefore && modalIncludeBestBefore && modalBestBeforeDays && (
+                      <span className="text-[7px] font-bold text-slate-800">
+                        BB: {modalBestBeforeDays}d {modalExpDate ? `(${formatItemDate(modalExpDate, true)})` : ''}
+                      </span>
+                    )}
+                    {showExpDate && modalIncludeExp && modalExpDate && !modalBestBeforeDays && (
+                      <span className="text-[7px] font-bold text-slate-800">
+                        Exp: {formatItemDate(modalExpDate, false)}
+                      </span>
+                    )}
+                  </div>
+                  {showPrice && (
+                    <span className="text-xs font-black text-black leading-none ml-auto">₹{Number(activeModalItem?.price || 0).toFixed(2)}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Modal Actions */}
+          <div className="flex justify-end gap-2.5 pt-3 border-t border-border/30">
+            <Button variant="ghost" size="sm" onClick={() => setIsItemModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button className="bg-blue-600 hover:bg-blue-500 font-bold px-6" size="sm" onClick={handleSaveModalItem}>
+              {editingLedgerId ? 'Update Tag' : 'Add to Print Batch'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

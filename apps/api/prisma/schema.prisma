@@ -329,6 +329,8 @@ model MenuItem {
  packOptions String?
  stockWarningThreshold Int? // number of servings considered low for this menu item
  expiryDate DateTime? // optional expiry date for non-KOT items
+ mfgDate DateTime? // optional manufacture date for non-KOT items
+ bestBeforeDays Int? // optional best before days (e.g. 5 or 6)
  sortOrder Int @default(0)
  createdAt DateTime @default(now())
  updatedAt DateTime @updatedAt

@@ -182,23 +182,30 @@ export default function MenuItems() {
 
   const generateProductQR = (currentList?: any[]) => {
     const listToUse = (currentList && currentList.length > 0) ? currentList : (items || []);
+    const padLen = Math.max(3, Math.min(8, Number(localStorage.getItem('barcode_seq_padding') || 5)));
+    const customStart = Number(localStorage.getItem('barcode_seq_start') || 0);
     let max = 0;
     for (const it of listToUse) {
       const qr = String(it?.productQR || '').trim();
-      if (/^\d+$/.test(qr)) {
+      // Strictly match short internal store barcodes (<= 6 digits and < 100000)
+      // Excludes manufacturer 8-digit and 13-digit EAN/UPC barcodes like 90311017, 89000724
+      if (/^\d+$/.test(qr) && qr.length <= 6) {
         const num = parseInt(qr, 10);
-        if (num > max && num < 100000000) max = num;
+        if (num > max && num < 100000) max = num;
       }
     }
     for (const it of (invItems || [])) {
       const qr = String(it?.barcode || '').trim();
-      if (/^\d+$/.test(qr)) {
+      if (/^\d+$/.test(qr) && qr.length <= 6) {
         const num = parseInt(qr, 10);
-        if (num > max && num < 100000000) max = num;
+        if (num > max && num < 100000) max = num;
       }
     }
-    const nextNum = max + 1;
-    return String(nextNum).padStart(5, '0');
+    let nextNum = max === 0 ? 1 : max + 1;
+    if (customStart > 0 && customStart > nextNum) {
+      nextNum = customStart;
+    }
+    return String(nextNum).padStart(padLen, '0');
   };
 
   const isCategoryKOTEnabled = (category: any) => {
@@ -322,7 +329,11 @@ export default function MenuItems() {
       setSelectedModifier('');
 
       // Query server for next guaranteed sequential barcode
-      api.get('/restaurant/menu-items/next-barcode').then(res => {
+      const padLen = localStorage.getItem('barcode_seq_padding') || '5';
+      const startNum = localStorage.getItem('barcode_seq_start') || '';
+      const qParams = new URLSearchParams({ digits: padLen });
+      if (startNum) qParams.set('start', startNum);
+      api.get(`/restaurant/menu-items/next-barcode?${qParams.toString()}`).then(res => {
         if (res.data?.success && res.data?.barcode) {
           setFormData(prev => ({
             ...prev,
@@ -1441,7 +1452,11 @@ export default function MenuItems() {
                     onClick={() => {
                       const localGen = generateProductQR(items);
                       setFormData(prev => ({ ...prev, productQR: localGen }));
-                      api.get('/restaurant/menu-items/next-barcode').then(res => {
+                      const padLen = localStorage.getItem('barcode_seq_padding') || '5';
+                      const startNum = localStorage.getItem('barcode_seq_start') || '';
+                      const qParams = new URLSearchParams({ digits: padLen });
+                      if (startNum) qParams.set('start', startNum);
+                      api.get(`/restaurant/menu-items/next-barcode?${qParams.toString()}`).then(res => {
                         if (res.data?.success && res.data?.barcode) {
                           setFormData(prev => ({ ...prev, productQR: res.data.barcode }));
                         }

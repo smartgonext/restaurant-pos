@@ -289,28 +289,44 @@ export async function buildApp() {
   }
 
   await app.register(rateLimit, {
-    max: process.env.NODE_ENV === 'production' ? 50000 : 100000,
+    max: process.env.NODE_ENV === 'production' ? 100000 : 200000,
     timeWindow: '1 minute',
     cache: 10000,
     skipOnError: true,
     allowList: (req) => {
-      // Whitelist local desktop / loopback / LAN
-      const ip = (req.headers['x-forwarded-for'] || req.ip || req.raw?.socket?.remoteAddress || '').toString();
-      if (ip.includes('127.0.0.1') || ip.includes('::1') || ip.includes('localhost') || ip.includes('::ffff:127.0.0.1')) {
+      // 1. Whitelist local desktop / loopback / LAN local network IPs (e.g. 192.168.x.x, 10.x.x.x, 26.x.x.x)
+      const rawIp = (req.headers['x-forwarded-for'] || req.ip || req.raw?.socket?.remoteAddress || '').toString();
+      const cleanIp = rawIp.replace(/^::ffff:/, '');
+      if (
+        !cleanIp ||
+        cleanIp.includes('127.0.0.1') ||
+        cleanIp.includes('::1') ||
+        cleanIp.includes('localhost') ||
+        /^192\.168\.\d+\.\d+$/.test(cleanIp) ||
+        /^10\.\d+\.\d+\.\d+$/.test(cleanIp) ||
+        /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(cleanIp) ||
+        /^26\.\d+\.\d+\.\d+$/.test(cleanIp)
+      ) {
         return true;
       }
-      // Whitelist static asset paths and images
-      const url = req.url || '';
+
+      // 2. Whitelist static asset paths, images and fallbacks (never rate limit images)
+      const url = (req.url || '').split('?')[0].toLowerCase();
       if (
         url.startsWith('/uploads') ||
         url.startsWith('/static') ||
+        url.startsWith('/assets') ||
         url.startsWith('/fallback-food') ||
         url.endsWith('.png') ||
         url.endsWith('.jpg') ||
         url.endsWith('.jpeg') ||
         url.endsWith('.svg') ||
         url.endsWith('.webp') ||
-        url.endsWith('.ico')
+        url.endsWith('.ico') ||
+        url.endsWith('.woff') ||
+        url.endsWith('.woff2') ||
+        url.endsWith('.css') ||
+        url.endsWith('.js')
       ) {
         return true;
       }
@@ -353,6 +369,7 @@ export async function buildApp() {
 
   // Safe fallback endpoint for missing food images
   app.get('/fallback-food.png', async (req, reply) => {
+    reply.header('Cache-Control', 'public, max-age=31536000, immutable');
     const fallbackPath = path.join(uploadsDir, 'fallback-food.png');
     if (fs.existsSync(fallbackPath)) {
       return reply.type('image/png').send(fs.readFileSync(fallbackPath));
