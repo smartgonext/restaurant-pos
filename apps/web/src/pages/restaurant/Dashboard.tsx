@@ -17,7 +17,10 @@ import {
   LayoutDashboard,
   Plus,
   Hash,
-  Calendar
+  Calendar,
+  Zap,
+  Edit3,
+  Barcode
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { formatCurrency, formatDateTime, cn } from '@/lib/utils';
@@ -61,6 +64,12 @@ export default function RestaurantDashboard() {
     queryKey: ['restaurant-dashboard', dateFrom, dateTo, chartRange],
     queryFn: () => api.get('/restaurant/dashboard', { params: { dateFrom, dateTo, days: chartRange } }).then((r) => r.data.data ?? {}),
     refetchInterval: 30000,
+  });
+
+  const { data: recentInstantItems = [] } = useQuery<any[]>({
+    queryKey: ['recent-instant-items'],
+    queryFn: () => api.get('/restaurant/menu-items/recent-instant').then((r) => r.data?.data || []),
+    refetchInterval: 15000,
   });
 
   const getPeriodLabel = () => {
@@ -595,6 +604,98 @@ export default function RestaurantDashboard() {
             )}
         </div>
       </div>
+
+      {/* ── ⚡ RECENT INSTANT POS ITEMS ── */}
+      {recentInstantItems.length > 0 && (
+        <div className="space-y-4 pt-4 border-t border-border/40">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <Zap size={18} className="fill-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-black uppercase tracking-tight flex items-center gap-2">
+                  <span>⚡ Newly Added Instant POS Items</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                    {recentInstantItems.length} Recent
+                  </span>
+                </h3>
+                <p className="text-[11px] text-text-muted">Items added on the spot from MainPOS Terminal. Click Edit to review or adjust details.</p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate('/restaurant/menu-items')}
+              className="text-xs font-bold"
+            >
+              View All Menu Items
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {recentInstantItems.map((item: any) => {
+              const invMrp = item.inventoryItem?.inventoryMRPs?.[0];
+              const mrpVal = invMrp?.mrp ? Number(invMrp.mrp) : Number(item.price || 0);
+              const costVal = Number(item.inventoryItem?.costPerUnit ?? invMrp?.purchaseRate ?? 0);
+              return (
+                <div
+                  key={item.id}
+                  className="bg-bg-tertiary border border-border hover:border-amber-500/40 rounded-2xl p-4 transition-all shadow-sm flex flex-col justify-between group"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        ⚡ Instant POS
+                      </span>
+                      {item.category?.name && (
+                        <span className="text-[10px] font-bold text-text-muted truncate max-w-[120px]">
+                          {item.category.name}
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-black text-text-primary tracking-tight group-hover:text-amber-400 transition-colors">
+                        {item.name}
+                      </h4>
+                      <div className="flex items-center gap-2 text-[10px] text-text-muted font-mono mt-0.5">
+                        <Barcode size={12} className="text-amber-400" />
+                        <span>{item.productQR || 'No Barcode'}</span>
+                        {item.salesUnit && (
+                          <>
+                            <span>•</span>
+                            <span>{item.salesUnit}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-3 mt-3 border-t border-border/40 flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-black text-text-primary">
+                        {formatCurrency(Number(item.price || 0))}
+                      </div>
+                      <div className="text-[9px] text-text-muted flex items-center gap-1.5 font-bold">
+                        {mrpVal > 0 && <span>MRP: {formatCurrency(mrpVal)}</span>}
+                        {costVal > 0 && <span>• Cost: {formatCurrency(costVal)}</span>}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/restaurant/menu-items?search=${encodeURIComponent(item.name)}`)}
+                      className="px-3 py-1.5 rounded-xl bg-bg-secondary hover:bg-amber-500 hover:text-black border border-border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Edit3 size={12} />
+                      <span>Edit</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <OrderDetailPanel
         orderId={selectedOrderId}

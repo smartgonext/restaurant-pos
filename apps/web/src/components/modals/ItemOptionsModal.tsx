@@ -34,6 +34,7 @@ interface ItemOptionsModalProps {
     modifiers: { name: string; price: number }[];
   }) => void;
   onCancel: () => void;
+  onEditProduct?: () => void;
 }
 
 const QUICK_NOTES = [
@@ -61,6 +62,7 @@ export const ItemOptionsModal: React.FC<ItemOptionsModalProps> = ({
   isLight = false,
   onSave,
   onCancel,
+  onEditProduct,
 }) => {
   const [qty, setQty] = useState<number>(existingQty);
   const [isParcel, setIsParcel] = useState<boolean>(existingIsParcel);
@@ -129,14 +131,32 @@ export const ItemOptionsModal: React.FC<ItemOptionsModalProps> = ({
               Base Price: {formatCurrency(itemPrice)} {salesUnit ? `per ${salesUnit}` : ''}
             </p>
           </div>
-          <button
-            onClick={onCancel}
-            className={cn(
-              "p-2 rounded-full hover:bg-gray-800/50 transition-colors text-gray-400 hover:text-white"
+          <div className="flex items-center gap-2">
+            {onEditProduct && (
+              <button
+                type="button"
+                onClick={onEditProduct}
+                className={cn(
+                  "px-3 py-1.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-all shadow-sm",
+                  isLight 
+                    ? "bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100" 
+                    : "bg-purple-950/40 text-purple-300 border-purple-800/60 hover:bg-purple-900/50"
+                )}
+                title="Edit item rates, MRP, barcode or category on the spot"
+              >
+                <Edit3 size={13} className="text-purple-400" />
+                <span>Edit Item</span>
+              </button>
             )}
-          >
-            <X size={20} />
-          </button>
+            <button
+              onClick={onCancel}
+              className={cn(
+                "p-2 rounded-full hover:bg-gray-800/50 transition-colors text-gray-400 hover:text-white"
+              )}
+            >
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         {/* Scrollable Content */}

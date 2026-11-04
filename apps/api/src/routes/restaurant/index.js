@@ -2283,6 +2283,236 @@ export async function restaurantRoutes(app) {
             errors
         };
     });
+
+    // ── Instant Item Add from MainPOS Terminal ──
+    app.post('/menu-items/instant-add', async (request, reply) => {
+        const restaurantId = request.restaurantId;
+        const { name, price, mrp, purchaseRate, categoryId, productQR, salesUnit } = request.body || {};
+        if (!name || String(name).trim().length === 0) {
+            return reply.status(400).send({ success: false, error: 'Product name is required' });
+        }
+        const cleanName = String(name).trim();
+        const numPrice = Number(price) > 0 ? Number(price) : (Number(mrp) > 0 ? Number(mrp) : 0);
+        if (numPrice <= 0) {
+            return reply.status(400).send({ success: false, error: 'Valid selling price or MRP is required' });
+        }
+        const numMrp = Number(mrp) > 0 ? Number(mrp) : numPrice;
+        const numPurchase = Number(purchaseRate) > 0 ? Number(purchaseRate) : 0;
+        const profitPercent = numPurchase > 0 && numPrice > numPurchase ? Number((((numPrice - numPurchase) / numPurchase) * 100).toFixed(2)) : 0;
+
+        // Resolve Barcode
+        let finalBarcode = String(productQR || '').trim();
+        if (!finalBarcode) {
+            finalBarcode = await getNextSequentialBarcode(restaurantId);
+        }
+
+        // Resolve Category
+        let targetCatId = categoryId ? Number(categoryId) : null;
+        if (!targetCatId) {
+            const firstCat = await prisma.itemCategory.findFirst({
+                where: { restaurantId },
+                orderBy: { sortOrder: 'asc' }
+            });
+            targetCatId = firstCat?.id;
+        }
+
+        const category = targetCatId ? await prisma.itemCategory.findFirst({ where: { id: targetCatId, restaurantId } }) : null;
+        const isNonKot = category ? !resolveCategoryKOT(category) : true;
+
+        // Resolve Menu
+        const firstMenu = await prisma.menu.findFirst({ where: { restaurantId }, orderBy: { id: 'asc' } });
+
+        // Create MenuItem
+        const menuItem = await prisma.menuItem.create({
+            data: {
+                restaurantId,
+                name: cleanName,
+                price: numPrice,
+                productQR: finalBarcode,
+                categoryId: targetCatId || undefined,
+                menuId: firstMenu?.id || undefined,
+                salesUnit: isNonKot ? (salesUnit || 'Piece (pc)') : null,
+                description: '⚡ Instant Add from POS',
+                isAutoImage: true,
+                isVeg: true,
+                isAvailable: true,
+                stockWarningThreshold: isNonKot ? 5 : undefined
+            }
+        });
+
+        // Create or Link Inventory Item if Non-KOT
+        if (isNonKot) {
+            try {
+                let unitSymbol = salesUnit || 'pc';
+                let unitName = salesUnit || 'Piece';
+                if (salesUnit) {
+                    const parts = salesUnit.split(' ');
+                    if (parts.length > 0) {
+                        unitName = parts[0];
+                        const matchSym = salesUnit.match(/\(([^)]+)\)/);
+                        if (matchSym && matchSym[1]) unitSymbol = matchSym[1];
+                        else unitSymbol = parts[1] || parts[0].toLowerCase().slice(0, 3);
+                    }
+                }
+                let invUnit = await prisma.inventoryUnit.findFirst({
+                    where: { restaurantId, OR: [{ name: unitName }, { symbol: unitSymbol }] }
+                });
+                if (!invUnit) {
+                    invUnit = await prisma.inventoryUnit.create({
+                        data: { restaurantId, name: unitName, symbol: unitSymbol }
+                    });
+                }
+                let invCat = null;
+                if (category?.name) {
+                    invCat = await prisma.inventoryItemCategory.findFirst({
+                        where: { restaurantId, name: category.name }
+                    });
+                    if (!invCat) {
+                        invCat = await prisma.inventoryItemCategory.create({
+                            data: { restaurantId, name: category.name }
+                        });
+                    }
+                }
+                let invItem = await prisma.inventoryItem.create({
+                    data: {
+                        restaurantId,
+                        categoryId: invCat?.id || undefined,
+                        unitId: invUnit.id,
+                        name: cleanName,
+                        costPerUnit: numPurchase,
+                        barcode: finalBarcode,
+                        thresholdQty: 5,
+                        currentStock: 0
+                    }
+                });
+                await prisma.inventoryMRP.create({
+                    data: {
+                        inventoryItemId: invItem.id,
+                        mrp: numMrp,
+                        purchaseRate: numPurchase,
+                        profitPercent
+                    }
+                });
+                await prisma.menuItem.update({
+                    where: { id: menuItem.id },
+                    data: { inventoryItemId: invItem.id }
+                });
+                menuItem.inventoryItem = invItem;
+            } catch (invErr) {
+                app.log?.warn?.({ err: invErr?.message }, 'Failed to link inventory for instant item');
+            }
+        }
+
+        emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'instant_added', item: menuItem });
+        return { success: true, data: menuItem };
+    });
+
+    // ── On-The-Spot Quick Edit from MainPOS Terminal ──
+    app.post('/menu-items/:id/quick-edit', async (request, reply) => {
+        const restaurantId = request.restaurantId;
+        const itemId = Number(request.params.id);
+        const { name, price, mrp, purchaseRate, categoryId, productQR, salesUnit } = request.body || {};
+        
+        const existing = await prisma.menuItem.findFirst({
+            where: { id: itemId, restaurantId },
+            include: { inventoryItem: true }
+        });
+        if (!existing) {
+            return reply.status(404).send({ success: false, error: 'Item not found' });
+        }
+
+        const cleanName = name ? String(name).trim() : existing.name;
+        const numPrice = Number(price) > 0 ? Number(price) : Number(existing.price || 0);
+        const numMrp = Number(mrp) > 0 ? Number(mrp) : numPrice;
+        const numPurchase = Number(purchaseRate) >= 0 ? Number(purchaseRate) : 0;
+        const profitPercent = numPurchase > 0 && numPrice > numPurchase ? Number((((numPrice - numPurchase) / numPurchase) * 100).toFixed(2)) : 0;
+        
+        let finalBarcode = productQR !== undefined ? String(productQR || '').trim() : existing.productQR;
+        if (!finalBarcode && productQR === 'auto') {
+            finalBarcode = await getNextSequentialBarcode(restaurantId);
+        }
+
+        const updateData = {
+            name: cleanName,
+            price: numPrice,
+            productQR: finalBarcode || null,
+        };
+        if (categoryId) updateData.categoryId = Number(categoryId);
+        if (salesUnit !== undefined) updateData.salesUnit = salesUnit || null;
+
+        const updated = await prisma.menuItem.update({
+            where: { id: itemId },
+            data: updateData
+        });
+
+        // Update linked inventory item and MRP if exists
+        const invItemId = existing.inventoryItemId || updated.inventoryItemId;
+        if (invItemId) {
+            try {
+                const invUpdate = { name: cleanName };
+                if (numPurchase > 0) invUpdate.costPerUnit = numPurchase;
+                if (finalBarcode) invUpdate.barcode = finalBarcode;
+                await prisma.inventoryItem.update({
+                    where: { id: invItemId },
+                    data: invUpdate
+                });
+
+                const existingMrp = await prisma.inventoryMRP.findFirst({
+                    where: { inventoryItemId: invItemId },
+                    orderBy: { id: 'desc' }
+                });
+                if (existingMrp) {
+                    await prisma.inventoryMRP.update({
+                        where: { id: existingMrp.id },
+                        data: {
+                            mrp: numMrp,
+                            purchaseRate: numPurchase,
+                            profitPercent
+                        }
+                    });
+                } else if (numMrp > 0 || numPurchase > 0) {
+                    await prisma.inventoryMRP.create({
+                        data: {
+                            inventoryItemId: invItemId,
+                            mrp: numMrp,
+                            purchaseRate: numPurchase,
+                            profitPercent
+                        }
+                    });
+                }
+            } catch (invErr) {
+                app.log?.warn?.({ err: invErr?.message }, 'Failed to update linked inventory item');
+            }
+        }
+
+        emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'quick_edited', item: updated });
+        return { success: true, data: updated };
+    });
+
+    // ── Get Recent Instant POS Items (for Admin Dashboard) ──
+    app.get('/menu-items/recent-instant', async (request, reply) => {
+        const restaurantId = request.restaurantId;
+        const items = await prisma.menuItem.findMany({
+            where: {
+                restaurantId,
+                isDeleted: false,
+                description: { contains: 'Instant Add' }
+            },
+            include: {
+                category: { select: { id: true, name: true, isKOTEnabled: true } },
+                inventoryItem: {
+                    include: {
+                        inventoryMRPs: { orderBy: { id: 'desc' }, take: 1 },
+                        unit: { select: { name: true, symbol: true } }
+                    }
+                }
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 20
+        });
+        return { success: true, data: items };
+    });
+
     // ── Bulk upload menu items (Excel/CSV) ──
     app.post('/menu-items/bulk-upload', async (request, reply) => {
         const restaurantId = request.restaurantId;

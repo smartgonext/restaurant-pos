@@ -10,10 +10,10 @@ import restaurantApi from '@/lib/api';
 import toast from 'react-hot-toast';
 import {
   Search, CreditCard, Banknote, Smartphone, LogOut,
-  Trash2, Edit, CheckCircle, ChevronLeft, ChevronRight,
+  Trash2, Edit, Edit3, CheckCircle, ChevronLeft, ChevronRight,
   History as HistoryIcon, Tag, RefreshCw, Wallet, Printer, Split,
   AlignLeft, LayoutGrid, RotateCcw, ChevronDown, ShoppingCart, RotateCw,
-  Sun, Moon, User, Plus, X, Landmark
+  Sun, Moon, User, Plus, X, Landmark, Zap, Barcode, Check
 } from 'lucide-react';
 import { Bell } from 'lucide-react';
 import { useThemeStore } from '@/stores/themeStore';
@@ -988,6 +988,260 @@ export default function MainPOSTerminal() {
     }
 
     setOptionsModalTarget(null);
+  };
+
+  // ── ON-THE-SPOT QUICK EDIT & INSTANT ITEM ADD ──
+  const POS_SALES_UNITS = [
+    'Piece (pc)',
+    'Kilogram (kg)',
+    'Gram (g)',
+    'Liter (l)',
+    'Milliliter (ml)',
+    'Packet (pkt)',
+    'Box (box)',
+    'Dozen (dz)',
+    'Plate',
+    'Portion',
+  ];
+
+  interface QuickEditState {
+    item: any;
+    name: string;
+    categoryId: number | string;
+    productQR: string;
+    salesUnit: string;
+    mrp: string;
+    purchaseRate: string;
+    sellingPrice: string;
+    profitPercent: string;
+    isSaving: boolean;
+    isGeneratingBarcode: boolean;
+  }
+  const [quickEditState, setQuickEditState] = useState<QuickEditState | null>(null);
+
+  interface InstantAddState {
+    isOpen: boolean;
+    name: string;
+    categoryId: number | string;
+    productQR: string;
+    salesUnit: string;
+    mrp: string;
+    purchaseRate: string;
+    sellingPrice: string;
+    profitPercent: string;
+    isSaving: boolean;
+    isGeneratingBarcode: boolean;
+  }
+  const [instantAddState, setInstantAddState] = useState<InstantAddState>({
+    isOpen: false,
+    name: '',
+    categoryId: '',
+    productQR: '',
+    salesUnit: 'Piece (pc)',
+    mrp: '',
+    purchaseRate: '',
+    sellingPrice: '',
+    profitPercent: '',
+    isSaving: false,
+    isGeneratingBarcode: false,
+  });
+
+  const instantNameInputRef = useRef<HTMLInputElement>(null);
+  const instantCategorySelectRef = useRef<HTMLSelectElement>(null);
+  const instantUnitSelectRef = useRef<HTMLSelectElement>(null);
+  const instantMrpInputRef = useRef<HTMLInputElement>(null);
+  const instantSellingInputRef = useRef<HTMLInputElement>(null);
+  const instantPurchaseInputRef = useRef<HTMLInputElement>(null);
+
+  const handleOpenQuickEdit = (item: any) => {
+    if (!item) return;
+    const invMrp = item.inventoryItem?.inventoryMRPs?.[0] || item.inventoryMRPs?.[0];
+    const cost = Number(item.inventoryItem?.costPerUnit ?? invMrp?.purchaseRate ?? 0);
+    const mrp = Number(invMrp?.mrp ?? item.price ?? 0);
+    const price = Number(item.price ?? mrp);
+    const profit = (invMrp?.profitPercent != null && invMrp.profitPercent !== '')
+      ? String(invMrp.profitPercent)
+      : (cost > 0 && price > cost ? String(Number((((price - cost) / cost) * 100).toFixed(2))) : '');
+
+    setQuickEditState({
+      item,
+      name: item.name || (item as any).displayName || '',
+      categoryId: item.categoryId || (categories[0]?.id ?? ''),
+      productQR: item.productQR || '',
+      salesUnit: item.salesUnit || 'Piece (pc)',
+      mrp: mrp > 0 ? String(mrp) : (price > 0 ? String(price) : ''),
+      purchaseRate: cost > 0 ? String(cost) : '',
+      sellingPrice: price > 0 ? String(price) : '',
+      profitPercent: profit,
+      isSaving: false,
+      isGeneratingBarcode: false,
+    });
+  };
+
+  const handleSaveQuickEdit = async () => {
+    if (!quickEditState) return;
+    if (!quickEditState.name.trim()) {
+      toast.error('Product name is required');
+      return;
+    }
+    const numPrice = Number(quickEditState.sellingPrice) > 0 
+      ? Number(quickEditState.sellingPrice) 
+      : Number(quickEditState.mrp || 0);
+    if (numPrice <= 0) {
+      toast.error('Valid Selling Price or MRP is required');
+      return;
+    }
+    setQuickEditState(prev => prev ? ({ ...prev, isSaving: true }) : null);
+    try {
+      const res = await restaurantApi.post(`/restaurant/menu-items/${quickEditState.item.id}/quick-edit`, {
+        name: quickEditState.name.trim(),
+        categoryId: quickEditState.categoryId ? Number(quickEditState.categoryId) : undefined,
+        productQR: quickEditState.productQR.trim() || undefined,
+        salesUnit: quickEditState.salesUnit || undefined,
+        mrp: Number(quickEditState.mrp || 0),
+        purchaseRate: Number(quickEditState.purchaseRate || 0),
+        price: numPrice,
+      });
+      if (res.data?.success) {
+        toast.success(`⚡ "${quickEditState.name}" updated on the spot!`, { icon: '✅' });
+        queryClient.invalidateQueries({ queryKey: ['mainpos-items'] });
+        queryClient.invalidateQueries({ queryKey: ['menu-items'] });
+        
+        // Update item in localCart if present
+        setLocalCart(prev => prev.map(cartIt => {
+          if (cartIt.menuItemId === quickEditState.item.id) {
+            return {
+              ...cartIt,
+              displayName: quickEditState.name.trim(),
+              price: numPrice,
+            };
+          }
+          return cartIt;
+        }));
+        setQuickEditState(null);
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Failed to update item');
+      setQuickEditState(prev => prev ? ({ ...prev, isSaving: false }) : null);
+    }
+  };
+
+  const handleGenerateBarcodeForQuickEdit = async () => {
+    if (!quickEditState) return;
+    setQuickEditState(prev => prev ? ({ ...prev, isGeneratingBarcode: true }) : null);
+    try {
+      const res = await restaurantApi.get('/restaurant/menu-items/next-barcode');
+      if (res.data?.success && res.data?.barcode) {
+        setQuickEditState(prev => prev ? ({ ...prev, productQR: res.data.barcode, isGeneratingBarcode: false }) : null);
+      } else {
+        setQuickEditState(prev => prev ? ({ ...prev, isGeneratingBarcode: false }) : null);
+      }
+    } catch {
+      setQuickEditState(prev => prev ? ({ ...prev, isGeneratingBarcode: false }) : null);
+    }
+  };
+
+  const handleOpenInstantAdd = async (searchVal?: string) => {
+    const rawVal = (searchVal || search || '').trim();
+    const isBarcodeLike = /^\d{4,}$/.test(rawVal);
+    let initialBarcode = isBarcodeLike ? rawVal : '';
+    let initialName = !isBarcodeLike ? rawVal : '';
+
+    const firstNonKotCat = categories.find((c: any) => !c.isKOTEnabled) || categories[0];
+
+    setInstantAddState({
+      isOpen: true,
+      name: initialName,
+      categoryId: firstNonKotCat?.id ?? '',
+      productQR: initialBarcode,
+      salesUnit: 'Piece (pc)',
+      mrp: '',
+      purchaseRate: '',
+      sellingPrice: '',
+      profitPercent: '',
+      isSaving: false,
+      isGeneratingBarcode: !initialBarcode,
+    });
+
+    if (!initialBarcode) {
+      try {
+        const res = await restaurantApi.get('/restaurant/menu-items/next-barcode');
+        if (res.data?.success && res.data?.barcode) {
+          setInstantAddState(prev => ({
+            ...prev,
+            productQR: res.data.barcode,
+            isGeneratingBarcode: false,
+          }));
+        } else {
+          setInstantAddState(prev => ({ ...prev, isGeneratingBarcode: false }));
+        }
+      } catch {
+        setInstantAddState(prev => ({ ...prev, isGeneratingBarcode: false }));
+      }
+    }
+
+    setTimeout(() => {
+      instantNameInputRef.current?.focus();
+      instantNameInputRef.current?.select();
+    }, 120);
+  };
+
+  const handleGenerateBarcodeForInstant = async () => {
+    setInstantAddState(prev => ({ ...prev, isGeneratingBarcode: true }));
+    try {
+      const res = await restaurantApi.get('/restaurant/menu-items/next-barcode');
+      if (res.data?.success && res.data?.barcode) {
+        setInstantAddState(prev => ({ ...prev, productQR: res.data.barcode, isGeneratingBarcode: false }));
+      } else {
+        setInstantAddState(prev => ({ ...prev, isGeneratingBarcode: false }));
+      }
+    } catch {
+      setInstantAddState(prev => ({ ...prev, isGeneratingBarcode: false }));
+    }
+  };
+
+  const handleSaveInstantAdd = async () => {
+    if (!instantAddState.name.trim()) {
+      toast.error('Product name is required');
+      instantNameInputRef.current?.focus();
+      return;
+    }
+    const numPrice = Number(instantAddState.sellingPrice) > 0 
+      ? Number(instantAddState.sellingPrice) 
+      : Number(instantAddState.mrp || 0);
+    if (numPrice <= 0) {
+      toast.error('Valid Selling Price or MRP is required');
+      instantSellingInputRef.current?.focus();
+      return;
+    }
+    setInstantAddState(prev => ({ ...prev, isSaving: true }));
+    try {
+      const res = await restaurantApi.post('/restaurant/menu-items/instant-add', {
+        name: instantAddState.name.trim(),
+        categoryId: instantAddState.categoryId ? Number(instantAddState.categoryId) : undefined,
+        productQR: instantAddState.productQR.trim() || undefined,
+        salesUnit: instantAddState.salesUnit || 'Piece (pc)',
+        mrp: Number(instantAddState.mrp || 0),
+        purchaseRate: Number(instantAddState.purchaseRate || 0),
+        price: numPrice,
+      });
+      if (res.data?.success && res.data?.data) {
+        const newItem = res.data.data;
+        toast.success(`⚡ "${newItem.name}" added & placed in cart!`, { icon: '⚡' });
+        queryClient.invalidateQueries({ queryKey: ['mainpos-items'] });
+        queryClient.invalidateQueries({ queryKey: ['menu-items'] });
+        
+        // Immediately add to cart!
+        handleAddToCart(newItem);
+
+        // Reset and close
+        setSearch('');
+        setInstantAddState(prev => ({ ...prev, isOpen: false, isSaving: false }));
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Failed to instant add item');
+      setInstantAddState(prev => ({ ...prev, isSaving: false }));
+    }
   };
   const displayWindowRef = useRef<Window | null>(null);
   const isPresentingRef = useRef(sessionStorage.getItem('pos_is_presenting') === 'true');
@@ -2058,14 +2312,14 @@ export default function MainPOSTerminal() {
       setSearch('');
       return true;
     } else if (code.length > 0) {
-      // 5. Fallback: If numeric and no menu items matched, try loading as a token number
-      if (/^\d+$/.test(code)) {
+      // 5. Fallback: If short numeric and no menu items matched, try loading as a token number
+      if (/^\d{1,3}$/.test(code)) {
         setSearch('');
         lookupToken(code);
         return true;
       }
-      toast.error('Item not found for scanning');
-      setSearch('');
+      toast.error(`Barcode "${code}" not found in catalog`);
+      handleOpenInstantAdd(code);
       return false;
     }
     return false;
@@ -2673,6 +2927,19 @@ export default function MainPOSTerminal() {
           )}>
             {combinedCartItemsCount} ITEMS
           </span>
+          <button
+            onClick={() => handleOpenInstantAdd()}
+            className={cn(
+              "py-1.5 px-3 rounded-md text-[11px] font-black uppercase transition flex items-center gap-1.5 border shadow-sm cursor-pointer",
+              isLight 
+                ? "bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200" 
+                : "bg-amber-950/60 text-amber-300 border-amber-700/80 hover:bg-amber-900/60"
+            )}
+            title="Instant Add new product to store and add straight to cart"
+          >
+            <Zap size={13} className="text-amber-400 fill-amber-400" />
+            <span>⚡ Instant Item</span>
+          </button>
           {/* <button
             onClick={() => setWaiterBillsModalOpen(true)}
             className={cn(
@@ -3255,6 +3522,25 @@ export default function MainPOSTerminal() {
               storageKey="pos_category_order"
               className="w-full max-w-full min-w-0"
             />
+            {filteredItems.length === 0 && search.trim() && (
+              <div className={cn(
+                "p-2.5 rounded-xl border flex items-center justify-between gap-3 animate-in fade-in duration-200",
+                isLight ? "bg-amber-50 border-amber-200 text-amber-950" : "bg-amber-950/30 border-amber-800/60 text-amber-200"
+              )}>
+                <div className="text-xs">
+                  <span className="font-bold">No item found for "{search.trim()}"</span>
+                  <p className="text-[10px] opacity-75">Click to add this item immediately to store and cart</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleOpenInstantAdd(search.trim())}
+                  className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-black text-xs flex items-center gap-1.5 shadow-md transition-all shrink-0 cursor-pointer"
+                >
+                  <Zap size={13} className="fill-black" />
+                  <span>+ Instant Add</span>
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto custom-scrollbar pb-4 rounded-md pr-1">
@@ -4135,7 +4421,557 @@ export default function MainPOSTerminal() {
           isLight={isLight}
           onSave={handleSaveItemOptions}
           onCancel={() => setOptionsModalTarget(null)}
+          onEditProduct={() => {
+            const targetItem = optionsModalTarget.item;
+            setOptionsModalTarget(null);
+            handleOpenQuickEdit(targetItem);
+          }}
         />
+      )}
+
+      {/* ── ON-THE-SPOT QUICK PRODUCT EDIT MODAL ── */}
+      {quickEditState && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className={cn(
+            "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
+            isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
+          )}>
+            {/* Header */}
+            <div className={cn(
+              "px-5 py-4 border-b flex items-center justify-between",
+              isLight ? "bg-slate-50 border-slate-200" : "bg-[#181a24] border-gray-800"
+            )}>
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                  <Edit3 size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black uppercase tracking-tight">On-The-Spot Edit Product</h3>
+                  <p className="text-[11px] opacity-60">Instantly update price, MRP, barcode, or category</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuickEditState(null)}
+                className="p-1.5 rounded-lg opacity-60 hover:opacity-100 hover:bg-white/10 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4 overflow-y-auto custom-scrollbar flex-1 text-xs">
+              {/* Product Name */}
+              <div>
+                <label className="font-bold text-[11px] opacity-70 block mb-1">Product Name *</label>
+                <input
+                  type="text"
+                  value={quickEditState.name}
+                  onChange={(e) => setQuickEditState(prev => prev ? ({ ...prev, name: e.target.value }) : null)}
+                  className={cn(
+                    "w-full px-3 py-2 rounded-xl border text-sm font-bold outline-none transition-all",
+                    isLight ? "bg-white border-slate-300 focus:border-purple-600 text-slate-900" : "bg-black/30 border-gray-700 focus:border-purple-500 text-white"
+                  )}
+                  placeholder="e.g. Dry Pista 500g"
+                />
+              </div>
+
+              {/* Category & Barcode */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-[11px] opacity-70 block mb-1">Category</label>
+                  <select
+                    value={quickEditState.categoryId}
+                    onChange={(e) => setQuickEditState(prev => prev ? ({ ...prev, categoryId: e.target.value }) : null)}
+                    className={cn(
+                      "w-full px-3 py-2 rounded-xl border text-xs font-bold outline-none",
+                      isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/30 border-gray-700 text-white"
+                    )}
+                  >
+                    {categories.map((c: any) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {!c.isKOTEnabled ? '(Non-KOT)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-bold text-[11px] opacity-70">Barcode / QR</label>
+                    <button
+                      type="button"
+                      onClick={handleGenerateBarcodeForQuickEdit}
+                      disabled={quickEditState.isGeneratingBarcode}
+                      className="text-[10px] text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw size={10} className={quickEditState.isGeneratingBarcode ? "animate-spin" : ""} />
+                      <span>{quickEditState.isGeneratingBarcode ? 'Generating...' : 'Auto'}</span>
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={quickEditState.productQR}
+                    onChange={(e) => setQuickEditState(prev => prev ? ({ ...prev, productQR: e.target.value }) : null)}
+                    className={cn(
+                      "w-full px-3 py-2 rounded-xl border text-xs font-mono font-bold outline-none",
+                      isLight ? "bg-white border-slate-300 focus:border-purple-600 text-slate-900" : "bg-black/30 border-gray-700 focus:border-purple-500 text-white"
+                    )}
+                    placeholder="Barcode number"
+                  />
+                </div>
+              </div>
+
+              {/* Unit & Selling Price */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-[11px] opacity-70 block mb-1">Sales Unit</label>
+                  <select
+                    value={quickEditState.salesUnit}
+                    onChange={(e) => setQuickEditState(prev => prev ? ({ ...prev, salesUnit: e.target.value }) : null)}
+                    className={cn(
+                      "w-full px-3 py-2 rounded-xl border text-xs font-bold outline-none",
+                      isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/30 border-gray-700 text-white"
+                    )}
+                  >
+                    {POS_SALES_UNITS.map(u => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-bold text-[11px] text-emerald-400 block mb-1">Selling Price (₹) *</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={quickEditState.sellingPrice}
+                    onChange={(e) => {
+                      const sp = e.target.value;
+                      const cost = Number(quickEditState.purchaseRate || 0);
+                      const spNum = Number(sp);
+                      const profit = cost > 0 && spNum > cost ? String(Number((((spNum - cost) / cost) * 100).toFixed(2))) : quickEditState.profitPercent;
+                      setQuickEditState(prev => prev ? ({ ...prev, sellingPrice: sp, profitPercent: profit }) : null);
+                    }}
+                    className={cn(
+                      "w-full px-3 py-2 rounded-xl border text-sm font-black outline-none",
+                      isLight ? "bg-white border-slate-300 focus:border-emerald-600 text-emerald-700" : "bg-black/30 border-gray-700 focus:border-emerald-500 text-emerald-400"
+                    )}
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
+              {/* MRP & Purchase Rate */}
+              <div className="grid grid-cols-3 gap-3 p-3 rounded-xl border border-dashed border-gray-700/60 bg-black/20">
+                <div>
+                  <label className="font-bold text-[10px] opacity-70 block mb-1">MRP (₹)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={quickEditState.mrp}
+                    onChange={(e) => {
+                      const newMrp = e.target.value;
+                      setQuickEditState(prev => {
+                        if (!prev) return null;
+                        const shouldUpdateSelling = !prev.sellingPrice || prev.sellingPrice === prev.mrp;
+                        const nextSelling = shouldUpdateSelling ? newMrp : prev.sellingPrice;
+                        const cost = Number(prev.purchaseRate || 0);
+                        const spNum = Number(nextSelling || 0);
+                        const profit = cost > 0 && spNum > cost ? String(Number((((spNum - cost) / cost) * 100).toFixed(2))) : prev.profitPercent;
+                        return {
+                          ...prev,
+                          mrp: newMrp,
+                          sellingPrice: nextSelling,
+                          profitPercent: profit
+                        };
+                      });
+                    }}
+                    className={cn(
+                      "w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold outline-none",
+                      isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/40 border-gray-700 text-white"
+                    )}
+                    placeholder="0.00"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-[10px] opacity-70 block mb-1">Purchase Rate (₹)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={quickEditState.purchaseRate}
+                    onChange={(e) => {
+                      const pr = e.target.value;
+                      setQuickEditState(prev => {
+                        if (!prev) return null;
+                        const cost = Number(pr || 0);
+                        const spNum = Number(prev.sellingPrice || prev.mrp || 0);
+                        const profit = cost > 0 && spNum > cost ? String(Number((((spNum - cost) / cost) * 100).toFixed(2))) : '';
+                        return {
+                          ...prev,
+                          purchaseRate: pr,
+                          profitPercent: profit
+                        };
+                      });
+                    }}
+                    className={cn(
+                      "w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold outline-none",
+                      isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/40 border-gray-700 text-white"
+                    )}
+                    placeholder="0.00"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-[10px] opacity-70 block mb-1">Profit %</label>
+                  <div className={cn(
+                    "w-full px-2.5 py-1.5 rounded-lg border text-xs font-mono font-bold flex items-center justify-center",
+                    isLight ? "bg-slate-100 border-slate-300 text-slate-700" : "bg-black/30 border-gray-800 text-purple-300"
+                  )}>
+                    {quickEditState.profitPercent ? `${quickEditState.profitPercent}%` : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className={cn(
+              "px-5 py-3 border-t flex items-center justify-end gap-2.5",
+              isLight ? "bg-slate-50 border-slate-200" : "bg-[#181a24] border-gray-800"
+            )}>
+              <button
+                type="button"
+                onClick={() => setQuickEditState(null)}
+                className={cn(
+                  "px-4 py-2 rounded-xl text-xs font-bold transition",
+                  isLight ? "bg-slate-200 hover:bg-slate-300 text-slate-800" : "bg-gray-800 hover:bg-gray-700 text-gray-200"
+                )}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveQuickEdit}
+                disabled={quickEditState.isSaving}
+                className="px-5 py-2 rounded-xl text-xs font-black bg-purple-600 hover:bg-purple-500 text-white flex items-center gap-1.5 shadow-md transition disabled:opacity-50 cursor-pointer"
+              >
+                {quickEditState.isSaving ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
+                <span>{quickEditState.isSaving ? 'Updating...' : 'Save Changes'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ⚡ INSTANT ITEM ADD MODAL (KEYBOARD OPTIMIZED) ── */}
+      {instantAddState.isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className={cn(
+            "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
+            isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
+          )}>
+            {/* Header */}
+            <div className={cn(
+              "px-5 py-4 border-b flex items-center justify-between",
+              isLight ? "bg-amber-50/70 border-amber-200" : "bg-amber-950/20 border-amber-900/40"
+            )}>
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  <Zap size={18} className="fill-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black uppercase tracking-tight flex items-center gap-1.5">
+                    <span>⚡ Instant Product Add</span>
+                  </h3>
+                  <p className="text-[11px] opacity-60">Saves item & immediately places in cart</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInstantAddState(prev => ({ ...prev, isOpen: false }))}
+                className="p-1.5 rounded-lg opacity-60 hover:opacity-100 hover:bg-white/10 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-3.5 overflow-y-auto custom-scrollbar flex-1 text-xs">
+              {/* Barcode / QR */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-bold text-[11px] opacity-70 flex items-center gap-1">
+                    <Barcode size={13} className="text-amber-400" />
+                    <span>Barcode / QR</span>
+                  </label>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={handleGenerateBarcodeForInstant}
+                    disabled={instantAddState.isGeneratingBarcode}
+                    className="text-[10px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw size={10} className={instantAddState.isGeneratingBarcode ? "animate-spin" : ""} />
+                    <span>{instantAddState.isGeneratingBarcode ? 'Generating...' : 'Auto Barcode'}</span>
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={instantAddState.productQR}
+                  onChange={(e) => setInstantAddState(prev => ({ ...prev, productQR: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      instantNameInputRef.current?.focus();
+                    }
+                  }}
+                  className={cn(
+                    "w-full px-3 py-2 rounded-xl border text-xs font-mono font-bold outline-none",
+                    isLight ? "bg-white border-slate-300 focus:border-amber-500 text-slate-900" : "bg-black/30 border-gray-700 focus:border-amber-500 text-white"
+                  )}
+                  placeholder="Auto-generated barcode or scanned code"
+                />
+              </div>
+
+              {/* Product Name (Autofocused) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-bold text-[11px] text-amber-400">Product Name *</label>
+                  <span className="text-[10px] opacity-50 font-mono">Press [Enter] ↵</span>
+                </div>
+                <input
+                  ref={instantNameInputRef}
+                  type="text"
+                  value={instantAddState.name}
+                  onChange={(e) => setInstantAddState(prev => ({ ...prev, name: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      instantCategorySelectRef.current?.focus();
+                    }
+                  }}
+                  className={cn(
+                    "w-full px-3.5 py-2.5 rounded-xl border text-sm font-bold outline-none ring-2 ring-amber-500/20 transition-all",
+                    isLight ? "bg-white border-amber-300 focus:border-amber-500 text-slate-900" : "bg-black/30 border-amber-500/40 focus:border-amber-400 text-white"
+                  )}
+                  placeholder="e.g. Cashew Premium 250g"
+                />
+              </div>
+
+              {/* Category & Unit */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-bold text-[11px] opacity-70">Category</label>
+                    <span className="text-[10px] opacity-50 font-mono">↵</span>
+                  </div>
+                  <select
+                    ref={instantCategorySelectRef}
+                    value={instantAddState.categoryId}
+                    onChange={(e) => setInstantAddState(prev => ({ ...prev, categoryId: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        instantUnitSelectRef.current?.focus();
+                      }
+                    }}
+                    className={cn(
+                      "w-full px-3 py-2 rounded-xl border text-xs font-bold outline-none",
+                      isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/30 border-gray-700 text-white"
+                    )}
+                  >
+                    {categories.map((c: any) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {!c.isKOTEnabled ? '(Non-KOT)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-bold text-[11px] opacity-70">Unit</label>
+                    <span className="text-[10px] opacity-50 font-mono">↵</span>
+                  </div>
+                  <select
+                    ref={instantUnitSelectRef}
+                    value={instantAddState.salesUnit}
+                    onChange={(e) => setInstantAddState(prev => ({ ...prev, salesUnit: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        instantMrpInputRef.current?.focus();
+                      }
+                    }}
+                    className={cn(
+                      "w-full px-3 py-2 rounded-xl border text-xs font-bold outline-none",
+                      isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/30 border-gray-700 text-white"
+                    )}
+                  >
+                    {POS_SALES_UNITS.map(u => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Rates: MRP, Selling Price, Purchase Rate */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-bold text-[11px] opacity-70">MRP (₹)</label>
+                    <span className="text-[10px] opacity-50 font-mono">↵</span>
+                  </div>
+                  <input
+                    ref={instantMrpInputRef}
+                    type="number"
+                    step="any"
+                    value={instantAddState.mrp}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setInstantAddState(prev => {
+                        const shouldSetSelling = !prev.sellingPrice || prev.sellingPrice === prev.mrp;
+                        const nextSelling = shouldSetSelling ? val : prev.sellingPrice;
+                        const cost = Number(prev.purchaseRate || 0);
+                        const spNum = Number(nextSelling || 0);
+                        const profit = cost > 0 && spNum > cost ? String(Number((((spNum - cost) / cost) * 100).toFixed(2))) : prev.profitPercent;
+                        return {
+                          ...prev,
+                          mrp: val,
+                          sellingPrice: nextSelling,
+                          profitPercent: profit,
+                        };
+                      });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (!instantAddState.sellingPrice && instantAddState.mrp) {
+                          setInstantAddState(prev => ({ ...prev, sellingPrice: prev.mrp }));
+                        }
+                        instantSellingInputRef.current?.focus();
+                        instantSellingInputRef.current?.select();
+                      }
+                    }}
+                    className={cn(
+                      "w-full px-3 py-2 rounded-xl border text-sm font-bold outline-none",
+                      isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/30 border-gray-700 text-white"
+                    )}
+                    placeholder="0.00"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-bold text-[11px] text-emerald-400">Selling Price (₹) *</label>
+                    <span className="text-[10px] opacity-50 font-mono font-bold text-emerald-400">↵ Save</span>
+                  </div>
+                  <input
+                    ref={instantSellingInputRef}
+                    type="number"
+                    step="any"
+                    value={instantAddState.sellingPrice}
+                    onChange={(e) => {
+                      const sp = e.target.value;
+                      const cost = Number(instantAddState.purchaseRate || 0);
+                      const spNum = Number(sp);
+                      const profit = cost > 0 && spNum > cost ? String(Number((((spNum - cost) / cost) * 100).toFixed(2))) : instantAddState.profitPercent;
+                      setInstantAddState(prev => ({ ...prev, sellingPrice: sp, profitPercent: profit }));
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveInstantAdd();
+                      }
+                    }}
+                    className={cn(
+                      "w-full px-3 py-2 rounded-xl border text-sm font-black outline-none ring-2 ring-emerald-500/20",
+                      isLight ? "bg-white border-emerald-300 focus:border-emerald-600 text-emerald-700" : "bg-black/30 border-emerald-500/40 focus:border-emerald-400 text-emerald-400"
+                    )}
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
+              {/* Purchase Rate (Optional) & Profit % */}
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="font-bold text-[10px] opacity-60 block mb-1">Purchase Rate (Optional)</label>
+                  <input
+                    ref={instantPurchaseInputRef}
+                    type="number"
+                    step="any"
+                    value={instantAddState.purchaseRate}
+                    onChange={(e) => {
+                      const pr = e.target.value;
+                      const cost = Number(pr || 0);
+                      const spNum = Number(instantAddState.sellingPrice || instantAddState.mrp || 0);
+                      const profit = cost > 0 && spNum > cost ? String(Number((((spNum - cost) / cost) * 100).toFixed(2))) : '';
+                      setInstantAddState(prev => ({ ...prev, purchaseRate: pr, profitPercent: profit }));
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveInstantAdd();
+                      }
+                    }}
+                    className={cn(
+                      "w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold outline-none",
+                      isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/30 border-gray-700 text-white"
+                    )}
+                    placeholder="Cost price"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-[10px] opacity-60 block mb-1">Profit % Margin</label>
+                  <div className={cn(
+                    "w-full px-2.5 py-1.5 rounded-lg border text-xs font-mono font-bold flex items-center justify-center",
+                    isLight ? "bg-slate-100 border-slate-300 text-slate-700" : "bg-black/30 border-gray-800 text-emerald-400"
+                  )}>
+                    {instantAddState.profitPercent ? `+${instantAddState.profitPercent}%` : '—'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick Enter Flow Helper Tip */}
+              <div className={cn(
+                "p-2 rounded-xl text-[10px] border flex items-center gap-2",
+                isLight ? "bg-amber-50/50 border-amber-200 text-amber-900" : "bg-amber-950/20 border-amber-900/30 text-amber-300"
+              )}>
+                <span className="text-xs">⚡</span>
+                <span>Type <strong>Name</strong> ↵, <strong>Category/Unit</strong> ↵, <strong>Price</strong> ↵ to immediately save & bill!</span>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className={cn(
+              "px-5 py-3 border-t flex items-center justify-end gap-2.5",
+              isLight ? "bg-slate-50 border-slate-200" : "bg-[#181a24] border-gray-800"
+            )}>
+              <button
+                type="button"
+                onClick={() => setInstantAddState(prev => ({ ...prev, isOpen: false }))}
+                className={cn(
+                  "px-4 py-2 rounded-xl text-xs font-bold transition",
+                  isLight ? "bg-slate-200 hover:bg-slate-300 text-slate-800" : "bg-gray-800 hover:bg-gray-700 text-gray-200"
+                )}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveInstantAdd}
+                disabled={instantAddState.isSaving}
+                className="px-5 py-2.5 rounded-xl text-xs font-black bg-amber-500 hover:bg-amber-400 text-black flex items-center gap-1.5 shadow-lg transition disabled:opacity-50 cursor-pointer"
+              >
+                {instantAddState.isSaving ? <RefreshCw size={14} className="animate-spin" /> : <Zap size={14} className="fill-black" />}
+                <span>{instantAddState.isSaving ? 'Adding Item...' : 'Save & Add to Cart ↵'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

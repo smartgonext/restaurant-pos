@@ -1268,7 +1268,14 @@ export default function MenuItems() {
                           )}
                         </div>
                         <div className="flex flex-col gap-0.5">
-                          <p className="font-black text-text-primary uppercase tracking-tighter text-sm">{item.name}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="font-black text-text-primary uppercase tracking-tighter text-sm">{item.name}</p>
+                            {item.description?.includes('Instant Add') && (
+                              <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                                ⚡ POS Instant
+                              </span>
+                            )}
+                          </div>
                           <span className="text-[10px] text-blue-400 font-bold uppercase">{item.category?.name || 'Uncategorized'}</span>
                         </div>
                       </div>
