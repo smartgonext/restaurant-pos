@@ -1824,7 +1824,7 @@ export async function restaurantRoutes(app) {
             else {
                 let normalizedTaxType = String(createData.taxType || '').trim().toLowerCase();
                 if (!['internal', 'external'].includes(normalizedTaxType)) {
-                    normalizedTaxType = 'external';
+                    normalizedTaxType = 'internal';
                 }
                 let parsedTaxPercent = Number(createData.taxPercent !== undefined && createData.taxPercent !== null ? createData.taxPercent : 0);
                 if (!Number.isFinite(parsedTaxPercent) || parsedTaxPercent < 0 || parsedTaxPercent > 100) {
@@ -2023,7 +2023,7 @@ export async function restaurantRoutes(app) {
             else {
                 let normalizedTaxType = String(updateData.taxType || '').trim().toLowerCase();
                 if (!['internal', 'external'].includes(normalizedTaxType)) {
-                    normalizedTaxType = 'external';
+                    normalizedTaxType = 'internal';
                 }
                 let parsedTaxPercent = Number(updateData.taxPercent !== undefined && updateData.taxPercent !== null ? updateData.taxPercent : 0);
                 if (!Number.isFinite(parsedTaxPercent) || parsedTaxPercent < 0 || parsedTaxPercent > 100) {
@@ -2347,6 +2347,8 @@ export async function restaurantRoutes(app) {
                     categoryId: targetCatId || undefined,
                     menuId: firstMenu?.id || undefined,
                     salesUnit: isNonKot ? (salesUnit || 'Piece (pc)') : null,
+                    taxType: isNonKot ? 'internal' : 'external',
+                    taxPercent: 0,
                     description: '⚡ Instant Add from POS',
                     isAutoImage: true,
                     isVeg: true,

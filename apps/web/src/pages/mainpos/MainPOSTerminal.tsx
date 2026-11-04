@@ -1875,8 +1875,10 @@ export default function MainPOSTerminal() {
         return { menuItemId: i.menuItemId, name: resolvedName, price: i.price, quantity: i.quantity, image: resolved };
       });
       const subtotal = mappedItems.reduce((s, it) => s + it.price * it.quantity, 0);
-      const tax = mappedItems.reduce((sum, item) => {
+      const isTaxInc = String((restaurantSettings as any)?.taxMode || '').toLowerCase() === 'inclusive';
+      const tax = isTaxInc ? 0 : mappedItems.reduce((sum, item) => {
         const menu = allItems.find(m => m.id === item.menuItemId);
+        if (String(menu?.taxType || 'internal').toLowerCase() === 'internal') return sum;
         const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), menu?.taxType, Number(menu?.taxPercent ?? 0));
         return sum + Number(line.tax || 0);
       }, 0);
@@ -1940,13 +1942,15 @@ export default function MainPOSTerminal() {
       ? Number(currentToken.subtotal || 0)
       : mappedItems.reduce((s, it) => s + Number(it.price) * Number(it.quantity), 0);
 
+    const isTaxInc = String((restaurantSettings as any)?.taxMode || '').toLowerCase() === 'inclusive';
     const tax = currentToken
       ? Number(currentToken.tax || ((currentToken.sgst || 0) + (currentToken.cgst || 0) + (currentToken.igst || 0)) || 0)
-      : mappedItems.reduce((sum, item) => {
+      : (isTaxInc ? 0 : mappedItems.reduce((sum, item) => {
           const menu = allItems.find(m => m.id === item.menuItemId);
+          if (String(menu?.taxType || 'internal').toLowerCase() === 'internal') return sum;
           const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), menu?.taxType, Number(menu?.taxPercent ?? 0));
           return sum + Number(line.tax || 0);
-        }, 0);
+        }, 0));
 
     const discount = currentToken ? Number(currentToken.discountApplied || 0) : 0;
     const total = currentToken ? Number(currentToken.total || 0) : Math.max(0, subtotal + tax - discount);
@@ -2835,20 +2839,33 @@ export default function MainPOSTerminal() {
   const removedTokenItems = currentToken?.items.filter(i => i.isRemoved) ?? [];
   const localCartSubtotal = localCart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
   const existingRemaining = currentToken ? Math.max(0, Number(currentToken.total) - currentToken.payments.reduce((s, p) => s + Number(p.amount), 0)) : 0;
-  const storeTaxRate = billSettings?.showGST === false
+  const isTaxInclusiveMode = String((restaurantSettings as any)?.taxMode || '').toLowerCase() === 'inclusive';
+
+  const storeTaxRate = (billSettings?.showGST === false || isTaxInclusiveMode)
     ? 0
-    : (billSettings ? (Number(billSettings.sgstRate || 0) + Number(billSettings.cgstRate || 0) + Number(billSettings.igstRate || 0)) : null);
+    : ((restaurantSettings as any)?.sgstRate !== undefined && (restaurantSettings as any)?.sgstRate !== null)
+      ? (Number((restaurantSettings as any).sgstRate || 0) + Number((restaurantSettings as any).cgstRate || 0) + Number((restaurantSettings as any).igstRate || 0))
+      : (billSettings ? (Number(billSettings.sgstRate || 0) + Number(billSettings.cgstRate || 0) + Number(billSettings.igstRate || 0)) : null);
 
   const localCartTax = localCart.reduce((sum, item) => {
     const menu = allItems.find((m) => m.id === item.menuItemId);
-    const taxRate = (storeTaxRate !== null && storeTaxRate !== undefined && storeTaxRate > 0) ? storeTaxRate : Number(menu?.taxPercent ?? 0);
-    const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), menu?.taxType, taxRate);
+    const itemTaxType = isTaxInclusiveMode ? 'internal' : String(menu?.taxType || 'internal').toLowerCase();
+    // In inclusive/internal tax mode, tax is already included inside item price, never added on top
+    if (itemTaxType === 'internal') {
+      return sum;
+    }
+    const taxRate = (storeTaxRate !== null && storeTaxRate !== undefined) ? storeTaxRate : Number(menu?.taxPercent ?? 0);
+    const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), itemTaxType, taxRate);
     return sum + Number(line.tax || 0);
   }, 0);
   const localCartFinal = localCart.reduce((sum, item) => {
     const menu = allItems.find((m) => m.id === item.menuItemId);
-    const taxRate = (storeTaxRate !== null && storeTaxRate !== undefined && storeTaxRate > 0) ? storeTaxRate : Number(menu?.taxPercent ?? 0);
-    const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), menu?.taxType, taxRate);
+    const itemTaxType = isTaxInclusiveMode ? 'internal' : String(menu?.taxType || 'internal').toLowerCase();
+    if (itemTaxType === 'internal') {
+      return sum + (Number(item.price) * Number(item.quantity));
+    }
+    const taxRate = (storeTaxRate !== null && storeTaxRate !== undefined) ? storeTaxRate : Number(menu?.taxPercent ?? 0);
+    const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), itemTaxType, taxRate);
     return sum + Number(line.final || 0);
   }, 0);
   const calculatedTotal = currentToken ? existingRemaining + localCartFinal : localCartFinal;

@@ -65,8 +65,8 @@ export default function MenuItems() {
     productQR: '', isAutoImage: true,
     imageSource: 'manual' as 'manual' | 'ai' | 'library',
     salesUnit: 'piece',
-    taxType: 'external',
-    taxPercent: '5',
+    taxType: 'internal',
+    taxPercent: '0',
     enablePackOptions: false,
     stockWarningThreshold: '',
     expiryDate: ''
@@ -389,8 +389,8 @@ export default function MenuItems() {
         productQR: autoQR, isAutoImage: true,
         imageSource: 'manual' as 'manual' | 'ai' | 'library',
         salesUnit: 'piece',
-        taxType: 'external',
-        taxPercent: '5',
+        taxType: 'internal',
+        taxPercent: '0',
         enablePackOptions: false,
         stockWarningThreshold: '',
         expiryDate: ''
@@ -1507,7 +1507,15 @@ export default function MenuItems() {
               <CategorySearchSelect
                 categories={categories || []}
                 value={formData.categoryId}
-                onChange={(catId) => setFormData({ ...formData, categoryId: catId })}
+                onChange={(catId) => {
+                  const cat = categories?.find(c => Number(c.id) === Number(catId));
+                  const isFood = cat ? isCategoryKOTEnabled(cat) : false;
+                  setFormData(prev => ({
+                    ...prev,
+                    categoryId: catId,
+                    taxType: !isFood ? 'internal' : prev.taxType
+                  }));
+                }}
                 isKOTEnabled={isCategoryKOTEnabled}
                 placeholder="Search or select category..."
               />
@@ -1779,8 +1787,8 @@ export default function MenuItems() {
                     value={formData.taxType}
                     onChange={(e) => setFormData(prev => ({ ...prev, taxType: e.target.value }))}
                   >
-                    <option value="external">External (Tax Added)</option>
                     <option value="internal">Internal (Tax Included)</option>
+                    <option value="external">External (Tax Added)</option>
                   </select>
                 </div>
                 <div className="col-span-6">
