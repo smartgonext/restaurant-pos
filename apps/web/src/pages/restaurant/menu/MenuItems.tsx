@@ -480,6 +480,7 @@ export default function MenuItems() {
       'Group',
       'AssignedMenu',
       'StockWarn',
+      'OpeningStock',
       'ExpiryDate',
       'TaxType',
       'TaxPercent',
@@ -496,8 +497,8 @@ export default function MenuItems() {
         ]
       : [
           nonKotHeaders,
-          ['MU-001', 'Murukku', 60, 40, 25, { f: 'IF(D2>0,ROUND(D2*(1+E2/100),2),"")', v: 50 }, 'Kilogram (kg)', 'Snacks', 'Non KOT', 'General Menu', 4, '2026-12-31', 'external', 5, 'true', 'Main|1|Kilogram (kg)|MU-001|60|40|25|50|4;Mini|0.5|Kilogram (kg)|MU-001-MINI|35|25|20|30|2', 'ai'],
-          ['BAK-001', 'Bakoda', 120, 80, { f: 'IF(AND(D3>0,F3>0),ROUND(((F3-D3)/D3)*100,2),"")', v: 25 }, 100, 'Piece (pc)', 'Snacks', 'Non KOT', 'General Menu', 6, '', 'external', 5, 'false', '', 'lib'],
+          ['MU-001', 'Murukku', 60, 40, 25, { f: 'IF(D2>0,ROUND(D2*(1+E2/100),2),"")', v: 50 }, 'Kilogram (kg)', 'Snacks', 'Non KOT', 'General Menu', 4, 25, '2026-12-31', 'external', 5, 'true', 'Main|1|Kilogram (kg)|MU-001|60|40|25|50|4;Mini|0.5|Kilogram (kg)|MU-001-MINI|35|25|20|30|2', 'ai'],
+          ['BAK-001', 'Bakoda', 120, 80, { f: 'IF(AND(D3>0,F3>0),ROUND(((F3-D3)/D3)*100,2),"")', v: 25 }, 100, 'Piece (pc)', 'Snacks', 'Non KOT', 'General Menu', 6, 50, '', 'external', 5, 'false', '', 'lib'],
         ];
 
     const sheet = XLSX.utils.aoa_to_sheet(rows);

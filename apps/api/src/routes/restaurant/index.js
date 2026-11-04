@@ -2703,6 +2703,8 @@ export async function restaurantRoutes(app) {
                     const description = (rowObj['chefnote'] || rowObj['chefnote/description'] || rowObj['description'] || rowObj["chef's note / description"] || '').trim() || null;
                     const preparationTime = Math.max(0, Math.round(parseNum(rowObj['kitchenprepmin'] || rowObj['kitchen prep (min)'] || rowObj['preparationtime'] || 0, 0)));
                     const stockWarningThreshold = Math.max(0, Math.round(parseNum(rowObj['stockwarn'] || rowObj['stock warn (servings)'] || rowObj['stockwarningthreshold'] || 0, 0)));
+                    const rawOpeningStock = rowObj['openingstock'] || rowObj['opening stock'] || rowObj['currentstock'] || rowObj['stock'];
+                    const openingStock = rawOpeningStock !== undefined && String(rawOpeningStock).trim() !== '' ? parseNum(rawOpeningStock, 0) : null;
                     const expiryRaw = (rowObj['expirydate'] || rowObj['expiry date'] || '').trim();
                     const expiryDate = expiryRaw ? new Date(expiryRaw) : undefined;
                     const isVeg = parseBool(rowObj['vegetarianoption'] || rowObj['isveg'] || rowObj['veg'] || false, false);
@@ -2774,6 +2776,116 @@ export async function restaurantRoutes(app) {
                     else {
                         saved = await prisma.menuItem.create({ data: { ...payload, restaurantId } });
                         summary.created += 1;
+                    }
+
+                    // Sync Non-KOT inventory item and opening stock
+                    if (isNonKot && saved?.id) {
+                        try {
+                            let invItem = null;
+                            if (saved.inventoryItemId) {
+                                invItem = await prisma.inventoryItem.findFirst({
+                                    where: { id: saved.inventoryItemId, restaurantId }
+                                });
+                            }
+                            if (!invItem) {
+                                invItem = await prisma.inventoryItem.findFirst({
+                                    where: { restaurantId, name: saved.name.trim() }
+                                });
+                            }
+
+                            let unitSymbol = salesUnit || 'pc';
+                            let unitName = salesUnit || 'Piece';
+                            if (salesUnit) {
+                                const parts = salesUnit.split(' ');
+                                if (parts.length > 0) {
+                                    unitName = parts[0];
+                                    const matchSym = salesUnit.match(/\(([^)]+)\)/);
+                                    if (matchSym && matchSym[1]) {
+                                        unitSymbol = matchSym[1];
+                                    } else {
+                                        unitSymbol = parts[1] || parts[0].toLowerCase().slice(0, 3);
+                                    }
+                                }
+                            }
+
+                            let invUnit = await prisma.inventoryUnit.findFirst({
+                                where: { restaurantId, OR: [{ name: unitName }, { symbol: unitSymbol }] }
+                            });
+                            if (!invUnit) {
+                                invUnit = await prisma.inventoryUnit.create({
+                                    data: { restaurantId, name: unitName, symbol: unitSymbol }
+                                });
+                            }
+
+                            let invCat = null;
+                            if (categoryName) {
+                                invCat = await prisma.inventoryItemCategory.findFirst({
+                                    where: { restaurantId, name: categoryName }
+                                });
+                                if (!invCat) {
+                                    invCat = await prisma.inventoryItemCategory.create({
+                                        data: { restaurantId, name: categoryName }
+                                    });
+                                }
+                            }
+
+                            if (!invItem) {
+                                invItem = await prisma.inventoryItem.create({
+                                    data: {
+                                        restaurantId,
+                                        categoryId: invCat?.id || undefined,
+                                        unitId: invUnit.id,
+                                        name: saved.name.trim(),
+                                        image: saved.image || undefined,
+                                        thresholdQty: stockWarningThreshold,
+                                        currentStock: openingStock !== null ? openingStock : 0,
+                                        costPerUnit: purchaseRate > 0 ? purchaseRate : Math.round(Number(saved.price || 0) * 0.7 * 100) / 100,
+                                        barcode: saved.productQR || undefined
+                                    }
+                                });
+                            } else {
+                                const updateData = {};
+                                if (openingStock !== null) updateData.currentStock = openingStock;
+                                if (stockWarningThreshold > 0) updateData.thresholdQty = stockWarningThreshold;
+                                if (purchaseRate > 0) updateData.costPerUnit = purchaseRate;
+                                if (saved.productQR) updateData.barcode = saved.productQR;
+                                if (saved.image) updateData.image = saved.image;
+                                if (invCat?.id) updateData.categoryId = invCat.id;
+                                if (invUnit?.id) updateData.unitId = invUnit.id;
+                                if (Object.keys(updateData).length > 0) {
+                                    invItem = await prisma.inventoryItem.update({
+                                        where: { id: invItem.id },
+                                        data: updateData
+                                    });
+                                }
+                            }
+
+                            if (invItem && saved.inventoryItemId !== invItem.id) {
+                                await prisma.menuItem.update({
+                                    where: { id: saved.id },
+                                    data: { inventoryItemId: invItem.id }
+                                });
+                            }
+
+                            if (invItem && (purchaseRate > 0 || mrp > 0)) {
+                                const effectiveMrp = mrp > 0 ? mrp : saved.price;
+                                const alreadyHasMrp = await prisma.inventoryMRP.findFirst({
+                                    where: { inventoryItemId: invItem.id, mrp: effectiveMrp }
+                                });
+                                if (!alreadyHasMrp) {
+                                    await prisma.inventoryMRP.create({
+                                        data: {
+                                            inventoryItemId: invItem.id,
+                                            mrp: effectiveMrp,
+                                            purchaseRate: purchaseRate || 0,
+                                            profitPercent: profitPercent || 0
+                                        }
+                                    });
+                                }
+                            }
+                        } catch (invErr) {
+                            app.log?.warn?.({ err: invErr?.message }, 'Failed to sync inventory item during bulk upload');
+                        }
                     }
                     if (modifierGroupNames.length > 0 && saved?.id) {
                         const groups = await prisma.modifierGroup.findMany({
@@ -2890,6 +3002,7 @@ export async function restaurantRoutes(app) {
                     { header: 'Group', key: 'group', width: 16 },
                     { header: 'AssignedMenu', key: 'assignedMenu', width: 20 },
                     { header: 'StockWarn', key: 'stockWarn', width: 12 },
+                    { header: 'OpeningStock', key: 'openingStock', width: 14 },
                     { header: 'ExpiryDate', key: 'expiryDate', width: 14 },
                     { header: 'TaxType', key: 'taxType', width: 14 },
                     { header: 'TaxPercent', key: 'taxPercent', width: 12 },
@@ -2946,6 +3059,7 @@ export async function restaurantRoutes(app) {
                         group: item.category?.group?.name || 'Non KOT',
                         assignedMenu: item.menu?.name || '',
                         stockWarn: item.stockWarningThreshold ?? '',
+                        openingStock: item.inventoryItem?.currentStock ?? '',
                         expiryDate: item.expiryDate ? new Date(item.expiryDate).toISOString().split('T')[0] : '',
                         taxType: item.taxType || 'external',
                         taxPercent: item.taxPercent ?? 5,
