@@ -2432,19 +2432,7 @@ export default function BarcodeSettings() {
                   <span>Save Settings</span>
                 </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  saveAllBarcodeSettings();
-                  toast.success('Barcode settings saved successfully! Next time you open, the exact same settings will be used.', { icon: '💾' });
-                }}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 border border-blue-500/30 transition-all cursor-pointer shadow-sm"
-                title="Save current barcode settings to persist on next visit"
-              >
-                <Check size={13} className="text-blue-400" />
-                <span>Save Settings</span>
-              </button>
-              </div>
+
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">
@@ -3627,19 +3615,6 @@ export default function BarcodeSettings() {
           </div>
 
           {/* Modal Actions */}
-          <div className="flex justify-end gap-2.5 pt-3 border-t border-border/30">
-            <Button variant="ghost" size="sm" onClick={() => setIsItemModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button className="bg-blue-600 hover:bg-blue-500 font-bold px-6" size="sm" onClick={handleSaveModalItem}>
-              {editingLedgerId ? 'Update Tag' : 'Add to Print Batch'}
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    </div>
-  );
-}
           <div className="flex justify-end gap-2.5 pt-3 border-t border-border/30">
             <Button variant="ghost" size="sm" onClick={() => setIsItemModalOpen(false)}>
               Cancel
