@@ -2293,7 +2293,8 @@ export async function restaurantRoutes(app) {
             const data = await request.file();
             if (!data)
                 return reply.code(400).send({ success: false, error: 'No file uploaded' });
-            const templateType = (request.query?.template || request.body?.template || 'non-kot').toString().toLowerCase();
+            const templateType = (data.fields?.template?.value || request.query?.template || request.body?.template || 'non-kot').toString().toLowerCase();
+            const autoGenerateBarcodes = parseBool(data.fields?.autoGenerateBarcodes?.value || request.query?.autoGenerateBarcodes, false);
             const uploadsDir = resolveUploadsDir();
             if (!fs.existsSync(uploadsDir))
                 await fs.promises.mkdir(uploadsDir, { recursive: true });
@@ -2319,6 +2320,48 @@ export async function restaurantRoutes(app) {
                 headers.push(raw.toLowerCase());
             }
             app.log.info({ headers, rowCount: sheet.rowCount }, 'bulk-upload.started');
+
+            // Barcode batch sequential generator if autoGenerateBarcodes is enabled
+            let currentBarcodeNum = 0;
+            const padLen = 5;
+            const allocatedBarcodes = new Set();
+            if (autoGenerateBarcodes) {
+                const allItems = await prisma.menuItem.findMany({
+                    where: { restaurantId, productQR: { not: null } },
+                    select: { productQR: true }
+                });
+                for (const it of allItems) {
+                    const qr = String(it.productQR || '').trim();
+                    allocatedBarcodes.add(qr);
+                    if (/^\d+$/.test(qr) && qr.length <= 6) {
+                        const num = parseInt(qr, 10);
+                        if (num > currentBarcodeNum && num < 100000) currentBarcodeNum = num;
+                    }
+                }
+                const allInv = await prisma.inventoryItem.findMany({
+                    where: { restaurantId, barcode: { not: null } },
+                    select: { barcode: true }
+                });
+                for (const it of allInv) {
+                    const qr = String(it.barcode || '').trim();
+                    allocatedBarcodes.add(qr);
+                    if (/^\d+$/.test(qr) && qr.length <= 6) {
+                        const num = parseInt(qr, 10);
+                        if (num > currentBarcodeNum && num < 100000) currentBarcodeNum = num;
+                    }
+                }
+            }
+
+            const getNextSequentialBarcodeForBatch = () => {
+                while (true) {
+                    currentBarcodeNum++;
+                    const candidate = String(currentBarcodeNum).padStart(padLen, '0');
+                    if (!allocatedBarcodes.has(candidate)) {
+                        allocatedBarcodes.add(candidate);
+                        return candidate;
+                    }
+                }
+            };
             const summary = { created: 0, updated: 0, errors: [], warnings: [] };
             const autoImageByName = (itemName) => {
                 const safe = encodeURIComponent(String(itemName || 'food').trim() || 'food');
@@ -2413,6 +2456,13 @@ export async function restaurantRoutes(app) {
                 .trim();
             const imageKeySlug = (value) => normalizeImageKey(value).replace(/\s+/g, '');
             const imageKeyTokens = (value) => normalizeImageKey(value).split(/\s+/).filter(Boolean);
+            const cleanImageFileName = (rawName) => {
+                let base = path.parse(String(rawName || '')).name;
+                base = base.replace(/^\d+[-_]/, '').replace(/[-_]\d+$/, '');
+                base = base.replace(/^lib[-_]/i, '');
+                base = base.replace(/[-_]\d+[-_]/g, ' ');
+                return base;
+            };
             const pickLibraryImage = async (nameHint) => {
                 const allImages = await getLibraryImages();
                 if (!allImages.length)
@@ -2423,7 +2473,11 @@ export async function restaurantRoutes(app) {
                     return null;
 
                 // 1) Fast exact slug match (best quality + deterministic)
-                const exact = allImages.find((file) => imageKeySlug(path.parse(file).name) === hintSlug);
+                const exact = allImages.find((file) => {
+                    const rawSlug = imageKeySlug(path.parse(file).name);
+                    const cleanSlug = imageKeySlug(cleanImageFileName(file));
+                    return cleanSlug === hintSlug || rawSlug === hintSlug;
+                });
                 if (exact)
                     return `/static/${exact}`;
 
@@ -2431,7 +2485,7 @@ export async function restaurantRoutes(app) {
                 let best = null;
                 let bestScore = 0;
                 for (const file of allImages) {
-                    const fileBase = path.parse(file).name;
+                    const fileBase = cleanImageFileName(file);
                     const fileSlug = imageKeySlug(fileBase);
                     const fileTokens = imageKeyTokens(fileBase);
                     if (!fileTokens.length)
@@ -2446,6 +2500,7 @@ export async function restaurantRoutes(app) {
                     let score = shared * 10;
                     if (fileSlug === hintSlug) score += 30;
                     if (fileSlug.startsWith(hintSlug) || hintSlug.startsWith(fileSlug)) score += 15;
+                    if (fileSlug.includes(hintSlug) || hintSlug.includes(fileSlug)) score += 10;
 
                     if (score > bestScore) {
                         best = file;
@@ -2598,7 +2653,21 @@ export async function restaurantRoutes(app) {
                         summary.errors.push({ row: r, error: 'Missing name' });
                         continue;
                     }
-                    const productQR = (rowObj['productqr'] || rowObj['product qr'] || rowObj['barcode'] || rowObj['sku'] || '').trim() || null;
+                    let productQR = (rowObj['productqr'] || rowObj['product qr'] || rowObj['barcode'] || rowObj['sku'] || '').trim() || null;
+                    if (!productQR && autoGenerateBarcodes) {
+                        let existingItemWithQR = null;
+                        if (name) {
+                            existingItemWithQR = await prisma.menuItem.findFirst({
+                                where: { restaurantId, name },
+                                select: { productQR: true }
+                            });
+                        }
+                        if (existingItemWithQR?.productQR) {
+                            productQR = existingItemWithQR.productQR;
+                        } else {
+                            productQR = getNextSequentialBarcodeForBatch();
+                        }
+                    }
                     const mrp = parseNum(rowObj['mrp'] || 0, 0);
                     let purchaseRate = parseNum(rowObj['purchaserate'] || rowObj['purchase rate'] || rowObj['purchase'] || 0, 0);
                     let profitPercent = parseNum(rowObj['profitpercent'] || rowObj['profit %'] || rowObj['profit'] || 0, 0);
@@ -2673,33 +2742,30 @@ export async function restaurantRoutes(app) {
                         ? (imageName.startsWith('/static/') || imageName.startsWith('http') ? imageName : `/static/${imageName}`)
                         : null;
                     const wantsLibraryImage = imageMode === 'lib' || imageMode === 'library';
+                    const wantsAiImage = imageMode === 'ai' || imageMode === 'auto';
                     if (wantsLibraryImage) {
                         const pickedImage = await pickLibraryImage(imageName || name);
                         if (pickedImage) {
                             image = pickedImage;
                         }
                         else {
-                            const pexelsUrl = await fetchPexelsImageUrl(name);
-                            if (pexelsUrl) {
-                                const persisted = await persistRemoteImage(pexelsUrl, name);
-                                if (persisted) {
-                                    image = persisted;
-                                }
-                                else {
-                                    summary.warnings.push({ row: r, warning: 'ImageMode=lib found Pexels image but failed to save it locally' });
-                                }
-                            }
-
-                            if (!image) {
-                                image = autoImageByName(name);
-                                summary.warnings.push({ row: r, warning: `ImageMode=lib could not find matching library image for '${name}'. Generated AI dish image instead.` });
-                            }
+                            // User rule: if library image not found by item name, save item WITHOUT image (do NOT generate wrong AI image)
+                            image = null;
+                            summary.warnings.push({ row: r, warning: `ImageMode=lib: No matching library image found for '${name}'. Item saved cleanly without image.` });
                         }
                     }
-                    if (!wantsLibraryImage && (!image || imageMode === 'ai' || imageMode === 'auto')) {
-                        image = autoImageByName(name);
+                    else if (wantsAiImage) {
+                        if (!image) {
+                            image = autoImageByName(name);
+                        }
                     }
-                    const isAutoImage = !wantsLibraryImage && (imageMode === 'ai' || imageMode === 'auto' || !image);
+                    else {
+                        // Regular mode: if no explicit image filename/URL provided, keep image = null (do NOT generate AI image)
+                        if (!image) {
+                            image = null;
+                        }
+                    }
+                    const isAutoImage = wantsAiImage && Boolean(image);
                     const description = (rowObj['chefnote'] || rowObj['chefnote/description'] || rowObj['description'] || rowObj["chef's note / description"] || '').trim() || null;
                     const preparationTime = Math.max(0, Math.round(parseNum(rowObj['kitchenprepmin'] || rowObj['kitchen prep (min)'] || rowObj['preparationtime'] || 0, 0)));
                     const stockWarningThreshold = Math.max(0, Math.round(parseNum(rowObj['stockwarn'] || rowObj['stock warn (servings)'] || rowObj['stockwarningthreshold'] || 0, 0)));
@@ -2758,7 +2824,7 @@ export async function restaurantRoutes(app) {
                         salesUnit: isNonKot ? (salesUnit || null) : null,
                         taxType: isNonKot ? (taxType || 'external') : 'external',
                         taxPercent: isNonKot ? (Number.isFinite(taxPercent) ? taxPercent : 0) : 0,
-                        image: image || undefined,
+                        image: image || (wantsLibraryImage ? null : undefined),
                         isAutoImage,
                         productQR: productQR || undefined,
                         expiryDate: isNonKot && expiryDate && !isNaN(expiryDate.getTime()) ? expiryDate : undefined,
@@ -2867,18 +2933,31 @@ export async function restaurantRoutes(app) {
                                 });
                             }
 
-                            if (invItem && (purchaseRate > 0 || mrp > 0)) {
-                                const effectiveMrp = mrp > 0 ? mrp : saved.price;
-                                const alreadyHasMrp = await prisma.inventoryMRP.findFirst({
-                                    where: { inventoryItemId: invItem.id, mrp: effectiveMrp }
+                            if (invItem && (purchaseRate > 0 || mrp > 0 || price > 0)) {
+                                const effectiveMrp = mrp > 0 ? mrp : (price > 0 ? price : calculatedSelling);
+                                const effectivePurchase = purchaseRate > 0 ? purchaseRate : (invItem.costPerUnit || 0);
+                                const effectiveProfit = profitPercent > 0 ? profitPercent : (effectivePurchase > 0 && effectiveMrp > effectivePurchase ? Number((((effectiveMrp - effectivePurchase) / effectivePurchase) * 100).toFixed(2)) : 0);
+
+                                const existingMrp = await prisma.inventoryMRP.findFirst({
+                                    where: { inventoryItemId: invItem.id },
+                                    orderBy: { id: 'desc' }
                                 });
-                                if (!alreadyHasMrp) {
+                                if (existingMrp) {
+                                    await prisma.inventoryMRP.update({
+                                        where: { id: existingMrp.id },
+                                        data: {
+                                            mrp: effectiveMrp,
+                                            purchaseRate: effectivePurchase,
+                                            profitPercent: effectiveProfit
+                                        }
+                                    });
+                                } else {
                                     await prisma.inventoryMRP.create({
                                         data: {
                                             inventoryItemId: invItem.id,
                                             mrp: effectiveMrp,
-                                            purchaseRate: purchaseRate || 0,
-                                            profitPercent: profitPercent || 0
+                                            purchaseRate: effectivePurchase,
+                                            profitPercent: effectiveProfit
                                         }
                                     });
                                 }
@@ -2956,6 +3035,9 @@ export async function restaurantRoutes(app) {
     app.get('/menu-items/export', async (request, reply) => {
         const restaurantId = request.restaurantId;
         const templateType = (request.query?.template || 'non-kot').toString().toLowerCase();
+        const categoryFilter = request.query?.categoryId ? Number(request.query.categoryId) : null;
+        const unitFilter = (request.query?.unit || '').toString().trim().toLowerCase();
+        const searchQuery = (request.query?.search || '').toString().trim().toLowerCase();
         try {
             const items = await prisma.menuItem.findMany({
                 where: { restaurantId, isDeleted: false },
@@ -2972,7 +3054,20 @@ export async function restaurantRoutes(app) {
             const isKotExport = templateType === 'kot';
             const filteredItems = items.filter(it => {
                 const isKot = resolveCategoryKOT(it.category);
-                return isKotExport ? isKot : !isKot;
+                if (templateType === 'kot' && !isKot) return false;
+                if (templateType === 'non-kot' && isKot) return false;
+                if (categoryFilter && !isNaN(categoryFilter) && it.categoryId !== categoryFilter) return false;
+                if (unitFilter && unitFilter !== 'all') {
+                    const itemUnit = String(it.salesUnit || it.inventoryItem?.unit?.symbol || it.inventoryItem?.unit?.name || '').toLowerCase();
+                    if (!itemUnit.includes(unitFilter)) return false;
+                }
+                if (searchQuery) {
+                    const name = String(it.name || '').toLowerCase();
+                    const qr = String(it.productQR || '').toLowerCase();
+                    const sku = String(it.inventoryItem?.sku || '').toLowerCase();
+                    if (!name.includes(searchQuery) && !qr.includes(searchQuery) && !sku.includes(searchQuery)) return false;
+                }
+                return true;
             });
 
             if (isKotExport) {
@@ -2992,6 +3087,7 @@ export async function restaurantRoutes(app) {
             } else {
                 sheet.columns = [
                     { header: 'ProductQR', key: 'productQR', width: 18 },
+                    { header: 'ItemCode', key: 'itemCode', width: 16 },
                     { header: 'SignatureName', key: 'signatureName', width: 28 },
                     { header: 'MRP', key: 'mrp', width: 12 },
                     { header: 'PurchaseRate', key: 'purchaseRate', width: 14 },
@@ -3049,6 +3145,7 @@ export async function restaurantRoutes(app) {
 
                     const row = sheet.addRow({
                         productQR: item.productQR || '',
+                        itemCode: item.inventoryItem?.sku || (item.productQR ? `CD-${item.productQR}` : ''),
                         signatureName: item.name || '',
                         mrp: latestMrp?.mrp ?? 0,
                         purchaseRate: latestMrp?.purchaseRate ?? 0,
@@ -3071,9 +3168,10 @@ export async function restaurantRoutes(app) {
                     row.alignment = { vertical: 'middle' };
 
                     // Embed active Excel formulas for dynamic auto-calculation inside Excel
-                    const prCell = `D${rowIndex}`;
-                    const ppCell = `E${rowIndex}`;
-                    const spCell = `F${rowIndex}`;
+                    // Columns: A=ProductQR, B=ItemCode, C=SignatureName, D=MRP, E=PurchaseRate, F=ProfitPercent, G=SellingPrice
+                    const prCell = `E${rowIndex}`;
+                    const ppCell = `F${rowIndex}`;
+                    const spCell = `G${rowIndex}`;
                     row.getCell('sellingPrice').value = { formula: `IF(${prCell}>0,ROUND(${prCell}*(1+${ppCell}/100),2),${Number(item.price || 0)})`, result: Number(item.price || 0) };
                     row.getCell('profitPercent').value = { formula: `IF(AND(${prCell}>0,${spCell}>0),ROUND(((${spCell}-${prCell})/${prCell})*100,2),${latestMrp?.profitPercent || 0})`, result: Number(latestMrp?.profitPercent || 0) };
                 }

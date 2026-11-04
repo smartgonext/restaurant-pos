@@ -81,11 +81,19 @@ export default function MenuItems() {
   const bulkFileRef = useRef<HTMLInputElement>(null);
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkResult, setBulkResult] = useState<any | null>(null);
+  const [bulkAutoGenerateBarcodes, setBulkAutoGenerateBarcodes] = useState(false);
   const [showLibModal, setShowLibModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [modifierGroups, setModifierGroups] = useState<any[]>([]);
   const [selectedModifier, setSelectedModifier] = useState('');
   const [linking, setLinking] = useState(false);
+  
+  // Export Modal states
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportFilterTemplate, setExportFilterTemplate] = useState<'all' | 'non-kot' | 'kot'>('non-kot');
+  const [exportFilterCategory, setExportFilterCategory] = useState<string>('all');
+  const [exportFilterUnit, setExportFilterUnit] = useState<string>('all');
+  const [exportDownloading, setExportDownloading] = useState(false);
   
   // On page load, ensure filter is set to 'all' to show all items by default
   useEffect(() => {
@@ -161,6 +169,66 @@ export default function MenuItems() {
   const isKgUnitText = (unitText: string) => {
     const t = String(unitText || '').toLowerCase();
     return t.includes('kg') || t.includes('kilogram');
+  };
+
+  const availableUnits = useMemo(() => {
+    const unitSet = new Set<string>();
+    (invUnits || []).forEach((u: any) => {
+      if (u?.symbol) unitSet.add(u.symbol.toLowerCase());
+      if (u?.name) unitSet.add(u.name.toLowerCase());
+    });
+    (items || []).forEach((it: any) => {
+      if (it?.salesUnit) {
+        unitSet.add(it.salesUnit.trim().toLowerCase());
+        const match = it.salesUnit.match(/\(([^)]+)\)/);
+        if (match && match[1]) unitSet.add(match[1].toLowerCase());
+      }
+    });
+    return Array.from(unitSet).filter(Boolean);
+  }, [invUnits, items]);
+
+  const exportFilteredCount = useMemo(() => {
+    return (items || []).filter((it: any) => {
+      const isKot = Boolean(it?.category?.isKOTEnabled);
+      if (exportFilterTemplate === 'kot' && !isKot) return false;
+      if (exportFilterTemplate === 'non-kot' && isKot) return false;
+      if (exportFilterCategory !== 'all' && String(it.categoryId) !== exportFilterCategory) return false;
+      if (exportFilterUnit !== 'all') {
+        const u = String(it.salesUnit || it.inventoryItem?.unit?.symbol || it.inventoryItem?.unit?.name || '').toLowerCase();
+        if (!u.includes(exportFilterUnit.toLowerCase())) return false;
+      }
+      return true;
+    }).length;
+  }, [items, exportFilterTemplate, exportFilterCategory, exportFilterUnit]);
+
+  const handleDownloadExport = async () => {
+    const toastId = toast.loading('Generating filtered Excel export...');
+    setExportDownloading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('template', exportFilterTemplate);
+      if (exportFilterCategory !== 'all') {
+        params.set('categoryId', exportFilterCategory);
+      }
+      if (exportFilterUnit !== 'all') {
+        params.set('unit', exportFilterUnit);
+      }
+      const res = await api.get(`/restaurant/menu-items/export?${params.toString()}`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      const unitTag = exportFilterUnit !== 'all' ? `_${exportFilterUnit}` : '';
+      link.setAttribute('download', `${exportFilterTemplate}_items${unitTag}_${Date.now()}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      toast.success(`Exported ${exportFilteredCount} items successfully!`, { id: toastId });
+      setShowExportModal(false);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Export failed', { id: toastId });
+    } finally {
+      setExportDownloading(false);
+    }
   };
 
   const getMainPackSeed = (): PackOptionForm => {
@@ -271,15 +339,22 @@ export default function MenuItems() {
       const matchedInv = ((item as any).inventoryItem ?? (!isFoodCategory ? invItems?.find((it: any) => (it.name || '').toLowerCase().trim() === (item.name || '').toLowerCase().trim()) : undefined));
       const latestMrp = matchedInv?.inventoryMRPs?.[0];
 
+      const itemSelling = (item.price !== undefined && item.price !== null && item.price !== '') ? Number(item.price) : 0;
+      const mrpVal = latestMrp?.mrp ?? matchedInv?.inventoryMRPs?.[0]?.mrp;
+      const purchaseVal = (latestMrp?.purchaseRate != null && Number(latestMrp.purchaseRate) > 0) 
+        ? Number(latestMrp.purchaseRate) 
+        : (matchedInv?.costPerUnit != null && Number(matchedInv.costPerUnit) > 0 ? Number(matchedInv.costPerUnit) : 0);
+      const profitVal = latestMrp?.profitPercent != null && latestMrp.profitPercent !== ''
+        ? Number(latestMrp.profitPercent) 
+        : (purchaseVal > 0 && itemSelling > purchaseVal ? Math.round(((itemSelling - purchaseVal) / purchaseVal) * 100 * 100) / 100 : '');
+
       setEditingItem(item);
       setFormData({
         name: item.name,
         description: item.description || '',
-        // Prefer the item's saved selling price. Only fallback to latest MRP's sellingPrice/mrp
-        // when item.price is not available. This keeps Selling Price and MRP independent.
         price: (item.price !== undefined && item.price !== null)
           ? String(item.price)
-          : (latestMrp ? String(Number((latestMrp as any).sellingPrice ?? latestMrp.mrp ?? 0)) : ''),
+          : (mrpVal ? String(Number(mrpVal)) : ''),
         menuId: item.menuId || 0,
         categoryId: item.categoryId || 0,
         isVeg: item.isVeg,
@@ -298,9 +373,9 @@ export default function MenuItems() {
       });
       setPackOptions(normalizePackOptions(item.packOptions));
       setInvUnitId(matchedInv?.unitId ?? invUnits?.[0]?.id ?? null);
-      setMrp(!isFoodCategory && latestMrp ? String(Number(latestMrp.mrp ?? 0)) : '');
-      setPurchaseRate(!isFoodCategory && latestMrp ? String(Number(latestMrp.purchaseRate ?? 0)) : '');
-      setProfitPercent(!isFoodCategory && latestMrp ? String(Number(latestMrp.profitPercent ?? 0)) : '');
+      setMrp(!isFoodCategory && mrpVal != null && Number(mrpVal) > 0 ? String(Number(mrpVal)) : (itemSelling > 0 ? String(itemSelling) : ''));
+      setPurchaseRate(!isFoodCategory && purchaseVal > 0 ? String(purchaseVal) : '');
+      setProfitPercent(!isFoodCategory && profitVal !== '' ? String(profitVal) : '');
       setOpeningStock(!isFoodCategory && matchedInv?.currentStock != null ? String(Number(matchedInv.currentStock)) : '');
       setSelectedModifier('');
     } else {
@@ -520,7 +595,8 @@ export default function MenuItems() {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('template', bulkTemplate);
-      const res = await api.post('/restaurant/menu-items/bulk-upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      fd.append('autoGenerateBarcodes', String(bulkAutoGenerateBarcodes));
+      const res = await api.post(`/restaurant/menu-items/bulk-upload?autoGenerateBarcodes=${bulkAutoGenerateBarcodes}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const summary = res?.data?.data || null;
       setBulkResult(summary);
 
@@ -540,6 +616,9 @@ export default function MenuItems() {
 
       if (created + updated > 0) {
         refetch();
+        refetchInv();
+        queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+        queryClient.invalidateQueries({ queryKey: ['menu-items'] });
         setShowBulkModal(false);
       }
     } catch (err: any) {
@@ -1042,22 +1121,11 @@ export default function MenuItems() {
             <Button icon={<Upload className="w-4 h-4" />} onClick={() => setShowBulkModal(true)} variant="secondary">Bulk Excel</Button>
             <Button 
               icon={<Layers className="w-4 h-4" />} 
-              onClick={async () => {
-                const toastId = toast.loading('Generating Excel export...');
-                try {
-                  const tmpl = kotFilter === 'kot' ? 'kot' : 'non-kot';
-                  const res = await api.get(`/restaurant/menu-items/export?template=${tmpl}`, { responseType: 'blob' });
-                  const url = window.URL.createObjectURL(new Blob([res.data]));
-                  const link = document.createElement('a');
-                  link.href = url;
-                  link.setAttribute('download', `${tmpl}_menu_items_${Date.now()}.xlsx`);
-                  document.body.appendChild(link);
-                  link.click();
-                  link.remove();
-                  toast.success('Export downloaded!', { id: toastId });
-                } catch (err) {
-                  toast.error('Export failed', { id: toastId });
-                }
+              onClick={() => {
+                setExportFilterTemplate(kotFilter === 'kot' ? 'kot' : (kotFilter === 'non' ? 'non-kot' : 'all'));
+                setExportFilterCategory(selectedCategory || 'all');
+                setExportFilterUnit('all');
+                setShowExportModal(true);
               }} 
               variant="outline"
             >
@@ -1814,6 +1882,28 @@ export default function MenuItems() {
       {/* ImageLibraryModal embedded inline inside the Menu Items dialog */}
       <Modal open={showBulkModal} onClose={() => setShowBulkModal(false)} title="Bulk Upload Items" size="md">
         <div className="space-y-4 pt-2">
+          {/* AUTO-GENERATE BARCODES OPTION (DEFAULT OFF) */}
+          <div className="p-3 bg-bg-secondary rounded-xl border border-border/70 flex items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <label htmlFor="bulk-auto-barcodes" className="text-xs font-bold text-text-primary flex items-center gap-1.5 cursor-pointer">
+                <span>🏷️ Auto-Generate Sequential Barcodes</span>
+              </label>
+              <p className="text-[11px] text-text-muted">
+                (Default: OFF). If turned ON, items with empty barcode in Excel will automatically get continuous barcodes starting after your last existing barcode.
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+              <input 
+                id="bulk-auto-barcodes"
+                type="checkbox" 
+                checked={bulkAutoGenerateBarcodes} 
+                onChange={(e) => setBulkAutoGenerateBarcodes(e.target.checked)} 
+                className="sr-only peer"
+              />
+              <div className="w-10 h-6 bg-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+            </label>
+          </div>
+
           <div className="grid grid-cols-2 gap-2 items-center">
             <label className="text-sm font-bold">Template</label>
             <select className="glass-input h-10" value={bulkTemplate} onChange={(e) => setBulkTemplate(e.target.value as any)}>
@@ -1856,6 +1946,107 @@ export default function MenuItems() {
         menus={menus || []}
         onSuccess={() => refetch()}
       />
+
+      {/* EXPORT ITEMS FILTER MODAL */}
+      <Modal open={showExportModal} onClose={() => setShowExportModal(false)} title="Export Menu Items to Excel" size="md">
+        <div className="space-y-4 py-2">
+          <p className="text-xs text-text-muted">
+            Filter by Item Type, Category, or Sales Unit (e.g. kg, pc, liter) to export only matching items. The Excel file will include <b>Barcode, Item Code, Name, Rates, MRP, Unit, Category & Live Stock</b>.
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-bold text-text-secondary block mb-1.5 uppercase tracking-wide">
+                Filter by Type
+              </label>
+              <select 
+                className="glass-input h-10 w-full text-sm font-semibold"
+                value={exportFilterTemplate}
+                onChange={(e) => setExportFilterTemplate(e.target.value as any)}
+              >
+                <option value="non-kot">Non-KOT Items (Retail / Bakery)</option>
+                <option value="kot">KOT Items (Kitchen Dishes)</option>
+                <option value="all">All Items (Both KOT & Non-KOT)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-text-secondary block mb-1.5 uppercase tracking-wide">
+                Filter by Category
+              </label>
+              <select 
+                className="glass-input h-10 w-full text-sm font-semibold"
+                value={exportFilterCategory}
+                onChange={(e) => setExportFilterCategory(e.target.value)}
+              >
+                <option value="all">📁 All Categories</option>
+                {(categories || []).map((cat: any) => (
+                  <option key={cat.id} value={String(cat.id)}>
+                    {cat.name} {cat.isKOTEnabled ? '(KOT)' : '(Non-KOT)'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="text-xs font-bold text-text-secondary block mb-1.5 uppercase tracking-wide">
+                Filter by Unit (e.g. kg, pc, gm, liter)
+              </label>
+              <div className="flex items-center gap-2">
+                <select 
+                  className="glass-input h-10 flex-1 text-sm font-semibold"
+                  value={exportFilterUnit}
+                  onChange={(e) => setExportFilterUnit(e.target.value)}
+                >
+                  <option value="all">⚖️ All Units</option>
+                  {availableUnits.map((u) => (
+                    <option key={u} value={u}>
+                      {u.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+                {exportFilterUnit !== 'all' && (
+                  <Button variant="ghost" size="sm" onClick={() => setExportFilterUnit('all')}>
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="p-3 bg-bg-secondary rounded-xl border border-border/50 flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-xs font-bold">
+              <span className="text-text-muted uppercase">Matching Items:</span>
+              <span className="text-emerald-400 font-extrabold text-sm">{exportFilteredCount} items selected</span>
+            </div>
+            <div className="text-[11px] text-text-muted flex flex-wrap gap-1 mt-1">
+              <span className="px-1.5 py-0.5 rounded bg-bg-tertiary border border-border/40 font-mono text-[10px]">🏷️ Barcode</span>
+              <span className="px-1.5 py-0.5 rounded bg-bg-tertiary border border-border/40 font-mono text-[10px]">🔢 Item Code</span>
+              <span className="px-1.5 py-0.5 rounded bg-bg-tertiary border border-border/40 font-mono text-[10px]">📋 Name</span>
+              <span className="px-1.5 py-0.5 rounded bg-bg-tertiary border border-border/40 font-mono text-[10px]">📁 Category</span>
+              <span className="px-1.5 py-0.5 rounded bg-bg-tertiary border border-border/40 font-mono text-[10px]">⚖️ Unit</span>
+              <span className="px-1.5 py-0.5 rounded bg-bg-tertiary border border-border/40 font-mono text-[10px]">💰 Purchase Rate</span>
+              <span className="px-1.5 py-0.5 rounded bg-bg-tertiary border border-border/40 font-mono text-[10px]">🏷️ Selling Price</span>
+              <span className="px-1.5 py-0.5 rounded bg-bg-tertiary border border-border/40 font-mono text-[10px]">💵 MRP</span>
+              <span className="px-1.5 py-0.5 rounded bg-bg-tertiary border border-border/40 font-mono text-[10px]">📦 Opening Stock</span>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowExportModal(false)}>
+              Cancel
+            </Button>
+            <Button 
+              icon={<Layers className="w-4 h-4" />} 
+              onClick={handleDownloadExport}
+              disabled={exportDownloading || exportFilteredCount === 0}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold"
+            >
+              {exportDownloading ? 'Exporting...' : `Download Excel (${exportFilteredCount})`}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
