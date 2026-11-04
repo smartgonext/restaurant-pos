@@ -1083,6 +1083,109 @@ export default function BarcodeSettings() {
     return pairs;
   }, [flattenedLabels]);
 
+  // Reusable label preview card renderer
+  const renderPreviewCard = (item: PrintBatchItem, widthPx: number = 160, heightPx: number = 95) => (
+    <div 
+      style={{ width: `${widthPx}px`, height: `${heightPx}px` }}
+      className="bg-white text-black rounded-lg shadow-xl border border-slate-300 p-2 flex flex-col items-center justify-between text-center select-none overflow-hidden shrink-0"
+    >
+      {showStoreHeader && storeHeader && (
+        <p 
+          style={{ fontSize: `${Math.max(5.5, widthPx * 0.038)}px` }} 
+          className="print-header-text font-black uppercase text-[9px] tracking-wide text-slate-850 line-clamp-1 select-none m-0"
+        >
+          {storeHeader}
+        </p>
+      )}
+
+      {showItemName && (
+        <h4 
+          style={{ fontSize: `${Math.max(7, widthPx * 0.046)}px` }} 
+          className="print-title-text font-black text-[11px] text-black tracking-tight mt-0.5 leading-tight line-clamp-1 select-none m-0"
+        >
+          {item.name || 'STORE PRODUCT'}
+        </h4>
+      )}
+
+      <div className="print-barcode-container w-[90%] my-1 flex justify-center items-center">
+        {barcodeType === 'qr' ? (
+          <QRCodeSVG 
+            value={item.barcode || '000000'}
+            size={Math.min(heightPx * 0.30, 44)}
+            level="M"
+            includeMargin={false}
+          />
+        ) : (
+          <div className="w-full">
+            <BarcodeSVG 
+              value={item.barcode} 
+              width={widthPx * 0.8}
+              height={Math.min(heightPx * 0.20, 22)}
+            />
+          </div>
+        )}
+      </div>
+
+      {showBarcodeText && barcodeType === '1d' && item.barcode && (
+        <p 
+          style={{ fontSize: `${Math.max(5.5, widthPx * 0.034)}px` }} 
+          className="print-value-text text-[8px] font-black tracking-widest text-slate-700 leading-none select-none uppercase m-0"
+        >
+          {item.barcode}
+        </p>
+      )}
+
+      <table 
+        className="print-bottom-row w-[95%] mx-auto mt-auto border-0 border-collapse select-none"
+        style={{ width: '95%', marginTop: 'auto', border: 0, borderCollapse: 'collapse' }}
+      >
+        <tbody>
+          <tr>
+            <td 
+              className="print-date-col text-left align-bottom p-0"
+              style={{ textAlign: 'left', verticalAlign: 'bottom', padding: 0 }}
+            >
+              {((showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate) || 
+                (showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays) || 
+                (showExpDate && (item.includeExpDate ?? true) && item.expDate)) && (
+                <div className="flex flex-col text-left leading-tight">
+                  {showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate && (
+                    <span style={{ fontSize: `${Math.max(5, widthPx * 0.030)}px` }} className="print-date-text font-bold text-slate-800">
+                      Mfg: {formatItemDate(item.mfgDate, Boolean(showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays))}
+                    </span>
+                  )}
+                  {showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays && (
+                    <span style={{ fontSize: `${Math.max(5, widthPx * 0.030)}px` }} className="print-date-text font-bold text-slate-800">
+                      BB: {item.bestBeforeDays}d {item.expDate ? `(${formatItemDate(item.expDate, true)})` : ''}
+                    </span>
+                  )}
+                  {showExpDate && (item.includeExpDate ?? true) && item.expDate && !item.bestBeforeDays && (
+                    <span style={{ fontSize: `${Math.max(5, widthPx * 0.030)}px` }} className="print-date-text font-bold text-slate-800">
+                      Exp: {formatItemDate(item.expDate, false)}
+                    </span>
+                  )}
+                </div>
+              )}
+            </td>
+            <td 
+              className="print-price-col text-right align-bottom p-0 whitespace-nowrap"
+              style={{ textAlign: 'right', verticalAlign: 'bottom', padding: 0, whiteSpace: 'nowrap' }}
+            >
+              {showPrice && (
+                <span 
+                  style={{ fontSize: `${Math.max(8.5, widthPx * 0.052)}px` }} 
+                  className="print-price-text text-xs font-black text-black leading-none select-none"
+                >
+                  ₹{Number(item.price || 0).toFixed(2)}
+                </span>
+              )}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       {/* Dynamic Print-Media Style Overrides */}
@@ -2412,7 +2515,46 @@ export default function BarcodeSettings() {
                     <Printer className="w-10 h-10 text-text-muted opacity-25 mx-auto mb-2 animate-pulse" />
                     <p className="text-xs text-text-muted font-bold">Previews appear here when items are added.</p>
                   </div>
+                ) : is2Up ? (
+                  /* 2-UP TWIN ROLL PREVIEW: EXACT 1 ROW WITH 2 LABELS SIDE BY SIDE */
+                  labelPairs2Up.map(([leftItem, rightItem], pairIdx) => (
+                    <div key={`pair-preview-${pairIdx}`} className="w-full flex flex-col items-center gap-1.5 border-b border-border/20 last:border-b-0 pb-4 last:pb-0">
+                      <div className="w-full flex justify-between px-2 text-[9px] font-bold text-text-muted uppercase">
+                        <span className="text-blue-400 font-mono font-bold">Row #{pairIdx + 1} (Twin Roll: 2 Labels in 1 Row)</span>
+                        <span className="text-emerald-400 font-black">2 Across</span>
+                      </div>
+                      
+                      {/* One Horizontal Row with 2 Labels Side by Side */}
+                      <div className="w-full overflow-x-auto flex justify-center items-center gap-2 py-1 scrollbar-none bg-[#0a0c16]/50 p-2 rounded-xl border border-blue-500/20 shadow-inner">
+                        {/* Left Label in Row */}
+                        <div className="flex flex-col items-center">
+                          <span className="text-[8px] font-bold text-blue-400 uppercase mb-1">Left Label</span>
+                          {renderPreviewCard(leftItem, 160, 95)}
+                        </div>
+
+                        {/* Gap Line between twin labels */}
+                        <div className="w-1.5 h-20 bg-blue-500/25 border-l border-r border-blue-500/40 rounded-full flex items-center justify-center" title="Twin roll gap" />
+
+                        {/* Right Label in Row */}
+                        <div className="flex flex-col items-center">
+                          <span className="text-[8px] font-bold text-blue-400 uppercase mb-1">Right Label</span>
+                          {rightItem ? (
+                            renderPreviewCard(rightItem, 160, 95)
+                          ) : (
+                            <div 
+                              style={{ width: '160px', height: '95px' }}
+                              className="border-2 border-dashed border-border/40 rounded-lg flex flex-col items-center justify-center p-2 text-center bg-bg-tertiary/20 text-text-muted select-none"
+                            >
+                              <span className="text-[9px] font-bold uppercase tracking-wider text-text-muted">Blank Sticker</span>
+                              <span className="text-[8px] opacity-60 mt-0.5">(Odd count - left only)</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
                 ) : (
+                  /* 1-UP SINGLE ROLL PREVIEW: 1 LABEL PER ROW */
                   batchItems.map((item) => (
                     <div key={item.id} className="w-full flex flex-col items-center gap-1.5 border-b border-border/20 last:border-b-0 pb-4 last:pb-0">
                       <div className="w-full flex justify-between px-2 text-[9px] font-bold text-text-muted uppercase">
@@ -2421,107 +2563,7 @@ export default function BarcodeSettings() {
                       </div>
                       
                       <div className="w-full overflow-x-auto flex justify-center py-1 scrollbar-none">
-                        <div 
-                          style={{ 
-                            width: `${activePreset.widthPx}px`, 
-                            height: `${activePreset.heightPx}px`, 
-                          }}
-                          className="bg-white text-black rounded-lg shadow-2xl border border-slate-300 p-2.5 flex flex-col items-center justify-center text-center select-none overflow-hidden shrink-0"
-                        >
-                          {showStoreHeader && storeHeader && (
-                            <p 
-                              style={{ fontSize: `${Math.max(6, activePreset.widthPx * 0.038)}px` }} 
-                              className="print-header-text font-black uppercase text-[10px] tracking-wide text-slate-850 line-clamp-1 select-none"
-                            >
-                              {storeHeader}
-                            </p>
-                          )}
-
-                          {showItemName && (
-                            <h4 
-                              style={{ fontSize: `${Math.max(8, activePreset.widthPx * 0.048)}px` }} 
-                              className="print-title-text font-black text-xs text-black tracking-tight mt-0.5 leading-tight line-clamp-1 select-none"
-                            >
-                              {item.name || 'STORE PRODUCT'}
-                            </h4>
-                          )}
-
-                          <div className="print-barcode-container w-[90%] my-1.5 flex justify-center items-center">
-                            {barcodeType === 'qr' ? (
-                              <QRCodeSVG 
-                                value={item.barcode || '000000'}
-                                size={Math.min(activePreset.heightPx * 0.32, 50)}
-                                level="M"
-                                includeMargin={false}
-                              />
-                            ) : (
-                              <div className="w-full">
-                                <BarcodeSVG 
-                                  value={item.barcode} 
-                                  width={activePreset.widthPx * 0.8}
-                                  height={Math.min(activePreset.heightPx * 0.22, 24)}
-                                />
-                              </div>
-                            )}
-                          </div>
-
-                          {showBarcodeText && barcodeType === '1d' && item.barcode && (
-                            <p 
-                              style={{ fontSize: `${Math.max(6, activePreset.widthPx * 0.035)}px` }} 
-                              className="print-value-text text-[9px] font-black tracking-widest text-slate-700 leading-none select-none uppercase"
-                            >
-                              {item.barcode}
-                            </p>
-                          )}
-
-                          <table 
-                            className="print-bottom-row w-[94%] mx-auto mt-auto border-0 border-collapse select-none"
-                            style={{ width: '94%', marginTop: 'auto', border: 0, borderCollapse: 'collapse' }}
-                          >
-                            <tbody>
-                              <tr>
-                                <td 
-                                  className="print-date-col text-left align-bottom p-0"
-                                  style={{ textAlign: 'left', verticalAlign: 'bottom', padding: 0 }}
-                                >
-                                  {((showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate) || 
-                                    (showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays) || 
-                                    (showExpDate && (item.includeExpDate ?? true) && item.expDate)) && (
-                                    <div className="flex flex-col text-left leading-tight">
-                                      {showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate && (
-                                        <span style={{ fontSize: `${Math.max(5.5, activePreset.widthPx * 0.030)}px` }} className="print-date-text font-bold text-slate-800">
-                                          Mfg: {formatItemDate(item.mfgDate, Boolean(showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays))}
-                                        </span>
-                                      )}
-                                      {showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays && (
-                                        <span style={{ fontSize: `${Math.max(5.5, activePreset.widthPx * 0.030)}px` }} className="print-date-text font-bold text-slate-800">
-                                          BB: {item.bestBeforeDays}d {item.expDate ? `(${formatItemDate(item.expDate, true)})` : ''}
-                                        </span>
-                                      )}
-                                      {showExpDate && (item.includeExpDate ?? true) && item.expDate && !item.bestBeforeDays && (
-                                        <span style={{ fontSize: `${Math.max(5.5, activePreset.widthPx * 0.030)}px` }} className="print-date-text font-bold text-slate-800">
-                                          Exp: {formatItemDate(item.expDate, false)}
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
-                                </td>
-                                <td 
-                                  className="print-price-col text-right align-bottom p-0 whitespace-nowrap"
-                                  style={{ textAlign: 'right', verticalAlign: 'bottom', padding: 0, whiteSpace: 'nowrap' }}
-                                >
-                                  {showPrice && (
-                                    <span 
-                                      style={{ fontSize: `${Math.max(9, activePreset.widthPx * 0.055)}px` }} 
-                                      className="print-price-text text-sm font-black text-black leading-none select-none"
-                                    >
-                                      ₹{Number(item.price || 0).toFixed(2)}
-                                    </span>
-                                  )}
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table></div>
+                        {renderPreviewCard(item, activePreset.widthPx, activePreset.heightPx)}
                       </div>
                     </div>
                   ))
