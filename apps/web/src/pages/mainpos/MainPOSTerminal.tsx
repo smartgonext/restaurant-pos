@@ -1091,12 +1091,18 @@ export default function MainPOSTerminal() {
       toast.error('Valid Selling Price or MRP is required');
       return;
     }
+    const targetId = quickEditState.item?.id || quickEditState.item?.menuItemId;
+    if (!targetId) {
+      toast.error('Cannot update item: Missing product ID');
+      setQuickEditState(prev => prev ? ({ ...prev, isSaving: false }) : null);
+      return;
+    }
     setQuickEditState(prev => prev ? ({ ...prev, isSaving: true }) : null);
     try {
-      const res = await restaurantApi.post(`/restaurant/menu-items/${quickEditState.item.id}/quick-edit`, {
+      const res = await restaurantApi.post(`/restaurant/menu-items/${targetId}/quick-edit`, {
         name: quickEditState.name.trim(),
         categoryId: quickEditState.categoryId ? Number(quickEditState.categoryId) : undefined,
-        productQR: quickEditState.productQR.trim() || undefined,
+        productQR: quickEditState.productQR.trim() !== '' ? quickEditState.productQR.trim() : '',
         salesUnit: quickEditState.salesUnit || undefined,
         mrp: Number(quickEditState.mrp || 0),
         purchaseRate: Number(quickEditState.purchaseRate || 0),
@@ -2319,7 +2325,7 @@ export default function MainPOSTerminal() {
         return true;
       }
       toast.error(`Barcode "${code}" not found in catalog`);
-      handleOpenInstantAdd(code);
+      setSearch('');
       return false;
     }
     return false;
@@ -3815,7 +3821,7 @@ export default function MainPOSTerminal() {
                             <button
                               onClick={() => {
                                 setOptionsModalTarget({
-                                  item: mi || { name: item.displayName || item.name, price: item.price },
+                                  item: mi || { id: item.menuItemId, name: item.displayName || item.name, price: item.price },
                                   cartItemId: item.id,
                                   existingQty: item.quantity,
                                   existingIsParcel: (item as any).isParcel || item.displayName?.includes('[PARCEL]'),

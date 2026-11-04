@@ -2385,12 +2385,13 @@ export async function restaurantRoutes(app) {
                         currentStock: 0
                     }
                 });
-                await prisma.inventoryMRP.create({
+                await prisma.inventoryItemMRP.create({
                     data: {
                         inventoryItemId: invItem.id,
                         mrp: numMrp,
                         purchaseRate: numPurchase,
-                        profitPercent
+                        profitPercent,
+                        isActive: true
                     }
                 });
                 await prisma.menuItem.update({
@@ -2409,84 +2410,139 @@ export async function restaurantRoutes(app) {
 
     // ── On-The-Spot Quick Edit from MainPOS Terminal ──
     app.post('/menu-items/:id/quick-edit', async (request, reply) => {
-        const restaurantId = request.restaurantId;
-        const itemId = Number(request.params.id);
-        const { name, price, mrp, purchaseRate, categoryId, productQR, salesUnit } = request.body || {};
-        
-        const existing = await prisma.menuItem.findFirst({
-            where: { id: itemId, restaurantId },
-            include: { inventoryItem: true }
-        });
-        if (!existing) {
-            return reply.status(404).send({ success: false, error: 'Item not found' });
-        }
+        try {
+            const restaurantId = request.restaurantId;
+            const itemId = Number(request.params.id);
+            if (!itemId || isNaN(itemId)) {
+                return reply.status(400).send({ success: false, error: 'Valid item ID is required' });
+            }
+            const { name, price, mrp, purchaseRate, categoryId, productQR, salesUnit } = request.body || {};
+            
+            const existing = await prisma.menuItem.findFirst({
+                where: { id: itemId, restaurantId },
+                include: { inventoryItem: true }
+            });
+            if (!existing) {
+                return reply.status(404).send({ success: false, error: 'Item not found' });
+            }
 
-        const cleanName = name ? String(name).trim() : existing.name;
-        const numPrice = Number(price) > 0 ? Number(price) : Number(existing.price || 0);
-        const numMrp = Number(mrp) > 0 ? Number(mrp) : numPrice;
-        const numPurchase = Number(purchaseRate) >= 0 ? Number(purchaseRate) : 0;
-        const profitPercent = numPurchase > 0 && numPrice > numPurchase ? Number((((numPrice - numPurchase) / numPurchase) * 100).toFixed(2)) : 0;
-        
-        let finalBarcode = productQR !== undefined ? String(productQR || '').trim() : existing.productQR;
-        if (!finalBarcode && productQR === 'auto') {
-            finalBarcode = await getNextSequentialBarcode(restaurantId);
-        }
+            const cleanName = name ? String(name).trim() : existing.name;
+            const numPrice = Number(price) > 0 ? Number(price) : Number(existing.price || 0);
+            const numMrp = Number(mrp) > 0 ? Number(mrp) : numPrice;
+            const numPurchase = Number(purchaseRate) >= 0 ? Number(purchaseRate) : 0;
+            const profitPercent = numPurchase > 0 && numPrice > numPurchase ? Number((((numPrice - numPurchase) / numPurchase) * 100).toFixed(2)) : 0;
+            
+            let finalBarcode = productQR !== undefined ? String(productQR || '').trim() : existing.productQR;
+            if (!finalBarcode && productQR === 'auto') {
+                finalBarcode = await getNextSequentialBarcode(restaurantId);
+            }
 
-        const updateData = {
-            name: cleanName,
-            price: numPrice,
-            productQR: finalBarcode || null,
-        };
-        if (categoryId) updateData.categoryId = Number(categoryId);
-        if (salesUnit !== undefined) updateData.salesUnit = salesUnit || null;
-
-        const updated = await prisma.menuItem.update({
-            where: { id: itemId },
-            data: updateData
-        });
-
-        // Update linked inventory item and MRP if exists
-        const invItemId = existing.inventoryItemId || updated.inventoryItemId;
-        if (invItemId) {
-            try {
-                const invUpdate = { name: cleanName };
-                if (numPurchase > 0) invUpdate.costPerUnit = numPurchase;
-                if (finalBarcode) invUpdate.barcode = finalBarcode;
-                await prisma.inventoryItem.update({
-                    where: { id: invItemId },
-                    data: invUpdate
+            // Check if finalBarcode already belongs to another menuItem
+            if (finalBarcode) {
+                const dupMenuItem = await prisma.menuItem.findFirst({
+                    where: {
+                        productQR: finalBarcode,
+                        id: { not: itemId }
+                    }
                 });
-
-                const existingMrp = await prisma.inventoryMRP.findFirst({
-                    where: { inventoryItemId: invItemId },
-                    orderBy: { id: 'desc' }
-                });
-                if (existingMrp) {
-                    await prisma.inventoryMRP.update({
-                        where: { id: existingMrp.id },
-                        data: {
-                            mrp: numMrp,
-                            purchaseRate: numPurchase,
-                            profitPercent
-                        }
-                    });
-                } else if (numMrp > 0 || numPurchase > 0) {
-                    await prisma.inventoryMRP.create({
-                        data: {
-                            inventoryItemId: invItemId,
-                            mrp: numMrp,
-                            purchaseRate: numPurchase,
-                            profitPercent
-                        }
+                if (dupMenuItem) {
+                    return reply.status(400).send({
+                        success: false,
+                        error: `Barcode "${finalBarcode}" is already assigned to "${dupMenuItem.name}"`
                     });
                 }
-            } catch (invErr) {
-                app.log?.warn?.({ err: invErr?.message }, 'Failed to update linked inventory item');
             }
-        }
 
-        emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'quick_edited', item: updated });
-        return { success: true, data: updated };
+            const updateData = {
+                name: cleanName,
+                price: numPrice,
+                productQR: finalBarcode || null,
+            };
+            if (categoryId) updateData.categoryId = Number(categoryId);
+            if (salesUnit !== undefined) updateData.salesUnit = salesUnit || null;
+
+            const updated = await prisma.menuItem.update({
+                where: { id: itemId },
+                data: updateData
+            });
+
+            // Update linked inventory item and MRP if exists
+            const invItemId = existing.inventoryItemId || updated.inventoryItemId;
+            if (invItemId) {
+                try {
+                    const invUpdate = { name: cleanName };
+                    if (numPurchase > 0) invUpdate.costPerUnit = numPurchase;
+                    if (finalBarcode) {
+                        const dupInv = await prisma.inventoryItem.findFirst({
+                            where: {
+                                barcode: finalBarcode,
+                                id: { not: invItemId }
+                            }
+                        });
+                        if (!dupInv) {
+                            invUpdate.barcode = finalBarcode;
+                        }
+                    } else if (finalBarcode === null || finalBarcode === '') {
+                        invUpdate.barcode = null;
+                    }
+                    await prisma.inventoryItem.update({
+                        where: { id: invItemId },
+                        data: invUpdate
+                    });
+
+                    const existingMrp = await prisma.inventoryItemMRP.findFirst({
+                        where: { inventoryItemId: invItemId },
+                        orderBy: { id: 'desc' }
+                    });
+                    if (existingMrp) {
+                        await prisma.inventoryItemMRP.update({
+                            where: { id: existingMrp.id },
+                            data: {
+                                mrp: numMrp,
+                                purchaseRate: numPurchase,
+                                profitPercent,
+                                isActive: true
+                            }
+                        });
+                    } else if (numMrp > 0 || numPurchase > 0) {
+                        await prisma.inventoryItemMRP.create({
+                            data: {
+                                inventoryItemId: invItemId,
+                                mrp: numMrp,
+                                purchaseRate: numPurchase,
+                                profitPercent,
+                                isActive: true
+                            }
+                        });
+                    }
+                } catch (invErr) {
+                    app.log?.warn?.({ err: invErr?.message }, 'Failed to update linked inventory item');
+                }
+            }
+
+            const fullUpdated = await prisma.menuItem.findFirst({
+                where: { id: itemId, restaurantId },
+                include: {
+                    category: { select: { id: true, name: true, isKOTEnabled: true } },
+                    inventoryItem: {
+                        include: {
+                            inventoryMRPs: { orderBy: { id: 'desc' }, take: 5 },
+                            unit: { select: { name: true, symbol: true } }
+                        }
+                    }
+                }
+            });
+
+            emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'quick_edited', item: fullUpdated || updated });
+            return { success: true, data: fullUpdated || updated };
+        } catch (err) {
+            app.log?.error?.(err, 'Quick edit failed');
+            let userMsg = err?.message || 'Failed to update item';
+            if (err?.code === 'P2002') {
+                userMsg = 'This barcode is already assigned to another item. Please choose a different barcode.';
+            }
+            return reply.status(500).send({ success: false, error: userMsg });
+        }
     });
 
     // ── Get Recent Instant POS Items (for Admin Dashboard) ──
@@ -3168,26 +3224,28 @@ export async function restaurantRoutes(app) {
                                 const effectivePurchase = purchaseRate > 0 ? purchaseRate : (invItem.costPerUnit || 0);
                                 const effectiveProfit = profitPercent > 0 ? profitPercent : (effectivePurchase > 0 && effectiveMrp > effectivePurchase ? Number((((effectiveMrp - effectivePurchase) / effectivePurchase) * 100).toFixed(2)) : 0);
 
-                                const existingMrp = await prisma.inventoryMRP.findFirst({
+                                const existingMrp = await prisma.inventoryItemMRP.findFirst({
                                     where: { inventoryItemId: invItem.id },
                                     orderBy: { id: 'desc' }
                                 });
                                 if (existingMrp) {
-                                    await prisma.inventoryMRP.update({
+                                    await prisma.inventoryItemMRP.update({
                                         where: { id: existingMrp.id },
                                         data: {
                                             mrp: effectiveMrp,
                                             purchaseRate: effectivePurchase,
-                                            profitPercent: effectiveProfit
+                                            profitPercent: effectiveProfit,
+                                            isActive: true
                                         }
                                     });
                                 } else {
-                                    await prisma.inventoryMRP.create({
+                                    await prisma.inventoryItemMRP.create({
                                         data: {
                                             inventoryItemId: invItem.id,
                                             mrp: effectiveMrp,
                                             purchaseRate: effectivePurchase,
-                                            profitPercent: effectiveProfit
+                                            profitPercent: effectiveProfit,
+                                            isActive: true
                                         }
                                     });
                                 }
