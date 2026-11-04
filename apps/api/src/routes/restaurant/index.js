@@ -2286,126 +2286,149 @@ export async function restaurantRoutes(app) {
 
     // ── Instant Item Add from MainPOS Terminal ──
     app.post('/menu-items/instant-add', async (request, reply) => {
-        const restaurantId = request.restaurantId;
-        const { name, price, mrp, purchaseRate, categoryId, productQR, salesUnit } = request.body || {};
-        if (!name || String(name).trim().length === 0) {
-            return reply.status(400).send({ success: false, error: 'Product name is required' });
-        }
-        const cleanName = String(name).trim();
-        const numPrice = Number(price) > 0 ? Number(price) : (Number(mrp) > 0 ? Number(mrp) : 0);
-        if (numPrice <= 0) {
-            return reply.status(400).send({ success: false, error: 'Valid selling price or MRP is required' });
-        }
-        const numMrp = Number(mrp) > 0 ? Number(mrp) : numPrice;
-        const numPurchase = Number(purchaseRate) > 0 ? Number(purchaseRate) : 0;
-        const profitPercent = numPurchase > 0 && numPrice > numPurchase ? Number((((numPrice - numPurchase) / numPurchase) * 100).toFixed(2)) : 0;
-
-        // Resolve Barcode
-        let finalBarcode = String(productQR || '').trim();
-        if (!finalBarcode) {
-            finalBarcode = await getNextSequentialBarcode(restaurantId);
-        }
-
-        // Resolve Category
-        let targetCatId = categoryId ? Number(categoryId) : null;
-        if (!targetCatId) {
-            const firstCat = await prisma.itemCategory.findFirst({
-                where: { restaurantId },
-                orderBy: { sortOrder: 'asc' }
-            });
-            targetCatId = firstCat?.id;
-        }
-
-        const category = targetCatId ? await prisma.itemCategory.findFirst({ where: { id: targetCatId, restaurantId } }) : null;
-        const isNonKot = category ? !resolveCategoryKOT(category) : true;
-
-        // Resolve Menu
-        const firstMenu = await prisma.menu.findFirst({ where: { restaurantId }, orderBy: { id: 'asc' } });
-
-        // Create MenuItem
-        const menuItem = await prisma.menuItem.create({
-            data: {
-                restaurantId,
-                name: cleanName,
-                price: numPrice,
-                productQR: finalBarcode,
-                categoryId: targetCatId || undefined,
-                menuId: firstMenu?.id || undefined,
-                salesUnit: isNonKot ? (salesUnit || 'Piece (pc)') : null,
-                description: '⚡ Instant Add from POS',
-                isAutoImage: true,
-                isVeg: true,
-                isAvailable: true,
-                stockWarningThreshold: isNonKot ? 5 : undefined
+        let finalBarcode = '';
+        try {
+            const restaurantId = request.restaurantId;
+            const { name, price, mrp, purchaseRate, categoryId, productQR, salesUnit } = request.body || {};
+            if (!name || String(name).trim().length === 0) {
+                return reply.status(400).send({ success: false, error: 'Product name is required' });
             }
-        });
+            const cleanName = String(name).trim();
+            const numPrice = Number(price) > 0 ? Number(price) : (Number(mrp) > 0 ? Number(mrp) : 0);
+            if (numPrice <= 0) {
+                return reply.status(400).send({ success: false, error: 'Valid selling price or MRP is required' });
+            }
+            const numMrp = Number(mrp) > 0 ? Number(mrp) : numPrice;
+            const numPurchase = Number(purchaseRate) > 0 ? Number(purchaseRate) : 0;
+            const profitPercent = numPurchase > 0 && numPrice > numPurchase ? Number((((numPrice - numPurchase) / numPurchase) * 100).toFixed(2)) : 0;
 
-        // Create or Link Inventory Item if Non-KOT
-        if (isNonKot) {
-            try {
-                let unitSymbol = salesUnit || 'pc';
-                let unitName = salesUnit || 'Piece';
-                if (salesUnit) {
-                    const parts = salesUnit.split(' ');
-                    if (parts.length > 0) {
-                        unitName = parts[0];
-                        const matchSym = salesUnit.match(/\(([^)]+)\)/);
-                        if (matchSym && matchSym[1]) unitSymbol = matchSym[1];
-                        else unitSymbol = parts[1] || parts[0].toLowerCase().slice(0, 3);
-                    }
-                }
-                let invUnit = await prisma.inventoryUnit.findFirst({
-                    where: { restaurantId, OR: [{ name: unitName }, { symbol: unitSymbol }] }
+            // Resolve Barcode
+            finalBarcode = String(productQR || '').trim();
+            if (!finalBarcode) {
+                finalBarcode = await getNextSequentialBarcode(restaurantId);
+            }
+
+            // Check if finalBarcode already belongs to an existing menuItem
+            if (finalBarcode) {
+                const existingItem = await prisma.menuItem.findFirst({
+                    where: { productQR: finalBarcode }
                 });
-                if (!invUnit) {
-                    invUnit = await prisma.inventoryUnit.create({
-                        data: { restaurantId, name: unitName, symbol: unitSymbol }
+                if (existingItem) {
+                    return reply.status(400).send({
+                        success: false,
+                        error: `Barcode "${finalBarcode}" is already assigned to "${existingItem.name}"`
                     });
                 }
-                let invCat = null;
-                if (category?.name) {
-                    invCat = await prisma.inventoryItemCategory.findFirst({
-                        where: { restaurantId, name: category.name }
+            }
+
+            // Resolve Category
+            let targetCatId = categoryId ? Number(categoryId) : null;
+            if (!targetCatId) {
+                const firstCat = await prisma.itemCategory.findFirst({
+                    where: { restaurantId },
+                    orderBy: { sortOrder: 'asc' }
+                });
+                targetCatId = firstCat?.id;
+            }
+
+            const category = targetCatId ? await prisma.itemCategory.findFirst({ where: { id: targetCatId, restaurantId } }) : null;
+            const isNonKot = category ? !resolveCategoryKOT(category) : true;
+
+            // Resolve Menu
+            const firstMenu = await prisma.menu.findFirst({ where: { restaurantId }, orderBy: { id: 'asc' } });
+
+            // Create MenuItem
+            const menuItem = await prisma.menuItem.create({
+                data: {
+                    restaurantId,
+                    name: cleanName,
+                    price: numPrice,
+                    productQR: finalBarcode,
+                    categoryId: targetCatId || undefined,
+                    menuId: firstMenu?.id || undefined,
+                    salesUnit: isNonKot ? (salesUnit || 'Piece (pc)') : null,
+                    description: '⚡ Instant Add from POS',
+                    isAutoImage: true,
+                    isVeg: true,
+                    isAvailable: true,
+                    stockWarningThreshold: isNonKot ? 5 : undefined
+                }
+            });
+
+            // Create or Link Inventory Item if Non-KOT
+            if (isNonKot) {
+                try {
+                    let unitSymbol = salesUnit || 'pc';
+                    let unitName = salesUnit || 'Piece';
+                    if (salesUnit) {
+                        const parts = salesUnit.split(' ');
+                        if (parts.length > 0) {
+                            unitName = parts[0];
+                            const matchSym = salesUnit.match(/\(([^)]+)\)/);
+                            if (matchSym && matchSym[1]) unitSymbol = matchSym[1];
+                            else unitSymbol = parts[1] || parts[0].toLowerCase().slice(0, 3);
+                        }
+                    }
+                    let invUnit = await prisma.inventoryUnit.findFirst({
+                        where: { restaurantId, OR: [{ name: unitName }, { symbol: unitSymbol }] }
                     });
-                    if (!invCat) {
-                        invCat = await prisma.inventoryItemCategory.create({
-                            data: { restaurantId, name: category.name }
+                    if (!invUnit) {
+                        invUnit = await prisma.inventoryUnit.create({
+                            data: { restaurantId, name: unitName, symbol: unitSymbol }
                         });
                     }
+                    let invCat = null;
+                    if (category?.name) {
+                        invCat = await prisma.inventoryItemCategory.findFirst({
+                            where: { restaurantId, name: category.name }
+                        });
+                        if (!invCat) {
+                            invCat = await prisma.inventoryItemCategory.create({
+                                data: { restaurantId, name: category.name }
+                            });
+                        }
+                    }
+                    let invItem = await prisma.inventoryItem.create({
+                        data: {
+                            restaurantId,
+                            categoryId: invCat?.id || undefined,
+                            unitId: invUnit.id,
+                            name: cleanName,
+                            costPerUnit: numPurchase,
+                            barcode: finalBarcode,
+                            thresholdQty: 5,
+                            currentStock: 0
+                        }
+                    });
+                    await prisma.inventoryItemMRP.create({
+                        data: {
+                            inventoryItemId: invItem.id,
+                            mrp: numMrp,
+                            purchaseRate: numPurchase,
+                            profitPercent,
+                            isActive: true
+                        }
+                    });
+                    await prisma.menuItem.update({
+                        where: { id: menuItem.id },
+                        data: { inventoryItemId: invItem.id }
+                    });
+                    menuItem.inventoryItem = invItem;
+                } catch (invErr) {
+                    app.log?.warn?.({ err: invErr?.message }, 'Failed to link inventory for instant item');
                 }
-                let invItem = await prisma.inventoryItem.create({
-                    data: {
-                        restaurantId,
-                        categoryId: invCat?.id || undefined,
-                        unitId: invUnit.id,
-                        name: cleanName,
-                        costPerUnit: numPurchase,
-                        barcode: finalBarcode,
-                        thresholdQty: 5,
-                        currentStock: 0
-                    }
-                });
-                await prisma.inventoryItemMRP.create({
-                    data: {
-                        inventoryItemId: invItem.id,
-                        mrp: numMrp,
-                        purchaseRate: numPurchase,
-                        profitPercent,
-                        isActive: true
-                    }
-                });
-                await prisma.menuItem.update({
-                    where: { id: menuItem.id },
-                    data: { inventoryItemId: invItem.id }
-                });
-                menuItem.inventoryItem = invItem;
-            } catch (invErr) {
-                app.log?.warn?.({ err: invErr?.message }, 'Failed to link inventory for instant item');
             }
-        }
 
-        emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'instant_added', item: menuItem });
-        return { success: true, data: menuItem };
+            emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'instant_added', item: menuItem });
+            return { success: true, data: menuItem };
+        } catch (err) {
+            app.log?.error?.(err, 'Failed to instant add item');
+            let userMsg = err?.message || 'Failed to instant add item';
+            if (err?.code === 'P2002') {
+                userMsg = `Barcode "${finalBarcode}" is already in use by another item. Please choose a different barcode.`;
+            }
+            return reply.status(500).send({ success: false, error: userMsg });
+        }
     });
 
     // ── On-The-Spot Quick Edit from MainPOS Terminal ──

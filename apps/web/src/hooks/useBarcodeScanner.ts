@@ -88,7 +88,7 @@ export function useBarcodeScanner(onScan: (result: ScanResult) => void, enabled 
       const now = Date.now();
 
       // Reset buffer if too much time passed since last key (scanner timeout)
-      if (now - state.lastScanTime > 100) {
+      if (now - state.lastScanTime > 250) {
         state.buffer = '';
       }
 

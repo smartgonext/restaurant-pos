@@ -172,5 +172,5 @@ export function isKgMeasuredItem(salesUnit?: string | null): boolean {
  * Returns delay in ms before considering a scan complete
  * Supports rapid consecutive scans without requiring manual input
  */
-export const BARCODE_SCAN_TIMEOUT = 100; // ms - time to wait for next character in scan
+export const BARCODE_SCAN_TIMEOUT = 250; // ms - time to wait for next character in scan
 export const SCAN_COMPLETION_DEBOUNCE = 50; // ms - debounce before processing complete scan

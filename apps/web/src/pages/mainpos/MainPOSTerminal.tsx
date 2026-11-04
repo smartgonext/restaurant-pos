@@ -1206,7 +1206,10 @@ export default function MainPOSTerminal() {
     }
   };
 
+  const isSavingInstantRef = useRef(false);
+
   const handleSaveInstantAdd = async () => {
+    if (isSavingInstantRef.current || instantAddState.isSaving) return;
     if (!instantAddState.name.trim()) {
       toast.error('Product name is required');
       instantNameInputRef.current?.focus();
@@ -1220,6 +1223,7 @@ export default function MainPOSTerminal() {
       instantSellingInputRef.current?.focus();
       return;
     }
+    isSavingInstantRef.current = true;
     setInstantAddState(prev => ({ ...prev, isSaving: true }));
     try {
       const res = await restaurantApi.post('/restaurant/menu-items/instant-add', {
@@ -1247,6 +1251,8 @@ export default function MainPOSTerminal() {
     } catch (err: any) {
       toast.error(err?.response?.data?.error || 'Failed to instant add item');
       setInstantAddState(prev => ({ ...prev, isSaving: false }));
+    } finally {
+      isSavingInstantRef.current = false;
     }
   };
   const displayWindowRef = useRef<Window | null>(null);
@@ -2308,10 +2314,39 @@ export default function MainPOSTerminal() {
       return false;
     });
 
-    if (itemMatch) {
-      handleAddToCart(itemMatch);
+    let finalItem = itemMatch;
+    // 4b. Smart Fallback for 12/13 digit EAN barcodes (e.g. 906010367725 <-> 8906010367725)
+    // ONLY executed if exact match was not found AND code is 12 or 13 digits!
+    // Never affects short barcodes like 0001, 0002, 101, etc.
+    if (!finalItem && /^\d{12,13}$/.test(code)) {
+      const altCode = (code.length === 12 && code.startsWith('90'))
+        ? `8${code}`
+        : (code.length === 13 && code.startsWith('890'))
+          ? code.slice(1)
+          : null;
+      if (altCode) {
+        const altClean = altCode.toLowerCase();
+        finalItem = allItems.find(i => {
+          const qr = String(i.productQR || '').trim().toLowerCase();
+          const bc = String(i.inventoryItem?.barcode || '').trim().toLowerCase();
+          const sku = String(i.inventoryItem?.sku || '').trim().toLowerCase();
+          if (qr && qr === altClean) return true;
+          if (bc && bc === altClean) return true;
+          if (sku && sku === altClean) return true;
+          if (Array.isArray(i.inventoryItem?.inventoryMRPs)) {
+            if (i.inventoryItem.inventoryMRPs.some((m: any) => String(m.barcode || '').trim().toLowerCase() === altClean)) {
+              return true;
+            }
+          }
+          return false;
+        });
+      }
+    }
+
+    if (finalItem) {
+      handleAddToCart(finalItem);
       setSearch('');
-      toast.success(`Scanned: ${itemMatch.name}`, { duration: 800, icon: '🏷️' });
+      toast.success(`Scanned: ${finalItem.name}`, { duration: 800, icon: '🏷️' });
       return true;
     } else if (filteredItems.length === 1 && search.trim().toLowerCase() === cleanCode) {
       handleAddToCart(filteredItems[0]);
@@ -4437,7 +4472,7 @@ export default function MainPOSTerminal() {
 
       {/* ── ON-THE-SPOT QUICK PRODUCT EDIT MODAL ── */}
       {quickEditState && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+        <div data-enter-ignore="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className={cn(
             "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
             isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
@@ -4672,7 +4707,7 @@ export default function MainPOSTerminal() {
 
       {/* ── ⚡ INSTANT ITEM ADD MODAL (KEYBOARD OPTIMIZED) ── */}
       {instantAddState.isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+        <div data-enter-ignore="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className={cn(
             "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
             isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"

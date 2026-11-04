@@ -144,7 +144,7 @@ export function useWeightedBarcodeScanner(
           clearTimeout(debounceRef.current);
         }
 
-        // Auto-complete scan if no more input arrives for 150ms
+        // Auto-complete scan if no more input arrives for 200ms
         debounceRef.current = setTimeout(() => {
           if (state.buffer.length > 1) {
             setIsScanActive(false);

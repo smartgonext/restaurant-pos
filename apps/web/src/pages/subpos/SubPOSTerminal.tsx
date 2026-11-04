@@ -1025,10 +1025,39 @@ export default function SubPOSTerminal() {
       }
       return false;
     });
-    if (exactMatch) {
-      handleAddToCart(exactMatch);
+    let finalMatch = exactMatch;
+    // 4b. Smart Fallback for 12/13 digit EAN barcodes (e.g. 906010367725 <-> 8906010367725)
+    // ONLY executed if exact match was not found AND code is 12 or 13 digits!
+    // Never affects short barcodes like 0001, 0002, 101, etc.
+    if (!finalMatch && /^\d{12,13}$/.test(code)) {
+      const altCode = (code.length === 12 && code.startsWith('90'))
+        ? `8${code}`
+        : (code.length === 13 && code.startsWith('890'))
+          ? code.slice(1)
+          : null;
+      if (altCode) {
+        const altClean = altCode.toLowerCase();
+        finalMatch = allItems.find(i => {
+          const qr = String(i.productQR || '').trim().toLowerCase();
+          const bc = String(i.inventoryItem?.barcode || '').trim().toLowerCase();
+          const sku = String(i.inventoryItem?.sku || '').trim().toLowerCase();
+          if (qr && qr === altClean) return true;
+          if (bc && bc === altClean) return true;
+          if (sku && sku === altClean) return true;
+          if (Array.isArray(i.inventoryItem?.inventoryMRPs)) {
+            if (i.inventoryItem.inventoryMRPs.some((m: any) => String(m.barcode || '').trim().toLowerCase() === altClean)) {
+              return true;
+            }
+          }
+          return false;
+        });
+      }
+    }
+
+    if (finalMatch) {
+      handleAddToCart(finalMatch);
       setSearchQuery('');
-      toast.success(`Scanned: ${exactMatch.name}`, { duration: 800, icon: '🏷️' });
+      toast.success(`Scanned: ${finalMatch.name}`, { duration: 800, icon: '🏷️' });
       return true;
     }
 
