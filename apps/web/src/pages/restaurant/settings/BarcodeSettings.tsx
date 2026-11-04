@@ -152,22 +152,40 @@ interface LabelPreset {
 
 const LABEL_PRESETS: LabelPreset[] = [
   { 
+    id: 'retail_standard', 
+    name: '50 x 25 mm (Standard 2"x1")', 
+    widthMm: 50, 
+    heightMm: 25, 
+    widthPx: 250, 
+    heightPx: 140, 
+    description: '50 x 25 mm — most common retail pricing label (supports 1-Up & 2-Up).' 
+  },
+  { 
+    id: 'compact_38x25', 
+    name: '38 x 25 mm (Compact 1.5"x1")', 
+    widthMm: 38, 
+    heightMm: 25, 
+    widthPx: 210, 
+    heightPx: 140, 
+    description: '38 x 25 mm — popular 2-Up twin roll size (80mm web width).' 
+  },
+  { 
+    id: 'compact_35x25', 
+    name: '35 x 25 mm (Mini 1.4"x1")', 
+    widthMm: 35, 
+    heightMm: 25, 
+    widthPx: 195, 
+    heightPx: 140, 
+    description: '35 x 25 mm — popular 2-Up twin roll size (72mm web width).' 
+  },
+  { 
     id: 'jewelry', 
-    name: 'Compact Shelf Tag', 
+    name: '30 x 15 mm (Compact Shelf Tag)', 
     widthMm: 30, 
     heightMm: 15, 
     widthPx: 165, 
     heightPx: 90, 
     description: '30 x 15 mm — ideal for compact items or shelf edge pricing tags.' 
-  },
-  { 
-    id: 'retail_standard', 
-    name: 'Standard Retail Tag', 
-    widthMm: 50, 
-    heightMm: 25, 
-    widthPx: 250, 
-    heightPx: 140, 
-    description: '50 x 25 mm (2" x 1") — most common retail pricing label.' 
   },
   { 
     id: 'medium_product', 
@@ -375,6 +393,12 @@ export default function BarcodeSettings() {
   
   const [barcodeType, setBarcodeType] = useState<'1d' | 'qr'>('1d');
   const [presetId, setPresetId] = useState<string>('retail_standard');
+  const [is2Up, setIs2Up] = useState<boolean>(() => {
+    try { return localStorage.getItem('barcode_is_2up') === 'true'; } catch { return false; }
+  });
+  const [gapMm, setGapMm] = useState<number>(() => {
+    try { return Number(localStorage.getItem('barcode_2up_gap') || 2); } catch { return 2; }
+  });
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const { data: restaurantSettings } = useQuery({
@@ -865,14 +889,15 @@ export default function BarcodeSettings() {
     }
 
     const labelsHtml = container.innerHTML;
+    const printPageWidthMm = is2Up ? (activePreset.widthMm * 2 + gapMm) : activePreset.widthMm;
     const printDoc = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Barcode Price Labels</title>
+  <title>Barcode Price Labels ${is2Up ? '(2-Up Twin Roll)' : ''}</title>
   <style>
     @page {
-      size: ${activePreset.widthMm}mm ${activePreset.heightMm}mm;
+      size: ${printPageWidthMm}mm ${activePreset.heightMm}mm;
       margin: 0;
     }
     * {
@@ -883,81 +908,136 @@ export default function BarcodeSettings() {
     html, body {
       margin: 0;
       padding: 0;
-      width: 100%;
+      width: ${printPageWidthMm}mm;
       background: #ffffff;
       color: #000000;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     }
-    .print-single-label {
-      width: ${activePreset.widthMm}mm;
-      height: ${activePreset.heightMm}mm;
-      max-width: ${activePreset.widthMm}mm;
-      max-height: ${activePreset.heightMm}mm;
-      padding: 1.5mm 1mm;
-      margin: 0;
-      box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: space-between;
-      text-align: center;
+    .print-row-2up {
+      width: ${printPageWidthMm}mm !important;
+      height: ${activePreset.heightMm}mm !important;
+      max-width: ${printPageWidthMm}mm !important;
+      max-height: ${activePreset.heightMm}mm !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      display: flex !important;
+      flex-direction: row !important;
+      justify-content: space-between !important;
+      align-items: center !important;
       page-break-inside: avoid !important;
       break-inside: avoid !important;
       page-break-after: always !important;
       break-after: page !important;
-      overflow: hidden;
-      background: #ffffff;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      background: #ffffff !important;
+    }
+    .print-single-label {
+      width: ${activePreset.widthMm}mm !important;
+      height: ${activePreset.heightMm}mm !important;
+      max-width: ${activePreset.widthMm}mm !important;
+      max-height: ${activePreset.heightMm}mm !important;
+      padding: 1.2mm 1.5mm 0.8mm 1.5mm !important;
+      margin: 0 !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: flex-start !important;
+      text-align: center !important;
+      overflow: hidden !important;
+      background: #ffffff !important;
+      color: #000000 !important;
+      ${!is2Up ? 'page-break-inside: avoid !important; break-inside: avoid !important; page-break-after: always !important; break-after: page !important;' : ''}
+    }
+    .print-empty-slot {
+      visibility: hidden !important;
+      opacity: 0 !important;
+      border: none !important;
     }
     .print-header-text {
-      font-size: ${Math.max(6.5, activePreset.widthMm * 0.13)}pt;
-      line-height: 1.15;
-      font-weight: 800;
-      text-transform: uppercase;
-      color: #000000;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 98%;
-      margin: 0;
+      font-size: 7pt !important;
+      line-height: 1.15 !important;
+      font-weight: 800 !important;
+      text-transform: uppercase !important;
+      color: #000000 !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      max-width: 98% !important;
+      margin: 0 0 0.3mm 0 !important;
+      display: block !important;
     }
     .print-title-text {
-      font-size: ${Math.max(8.5, activePreset.widthMm * 0.17)}pt;
-      line-height: 1.15;
-      font-weight: 900;
-      color: #000000;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 98%;
-      margin: 0;
+      font-size: 8.5pt !important;
+      line-height: 1.15 !important;
+      font-weight: 900 !important;
+      color: #000000 !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      max-width: 98% !important;
+      margin: 0 0 0.4mm 0 !important;
+      display: block !important;
     }
     .print-barcode-container {
-      width: 90%;
-      margin: 1mm auto;
-      display: flex;
-      justify-content: center;
-      align-items: center;
+      width: 88% !important;
+      margin: 0.4mm auto !important;
+      display: flex !important;
+      justify-content: center !important;
+      align-items: center !important;
     }
     .print-barcode-container svg {
-      display: block;
-      margin: 0 auto;
-      max-width: 100%;
-      height: auto;
+      display: block !important;
+      margin: 0 auto !important;
+      width: 100% !important;
+      height: 5.5mm !important;
+      max-height: 6mm !important;
     }
     .print-value-text {
-      font-size: ${Math.max(6.5, activePreset.widthMm * 0.13)}pt;
-      letter-spacing: 1px;
-      font-weight: bold;
-      color: #000000;
-      line-height: 1.1;
-      margin: 0;
+      font-size: 6.5pt !important;
+      letter-spacing: 0.8px !important;
+      font-weight: 800 !important;
+      color: #000000 !important;
+      line-height: 1.1 !important;
+      margin: 0.2mm 0 0 0 !important;
+      text-transform: uppercase !important;
+      display: block !important;
+    }
+    .print-bottom-row {
+      width: 96% !important;
+      margin-top: auto !important;
+      border: 0 !important;
+      border-collapse: collapse !important;
+      padding: 0 !important;
+    }
+    .print-date-col {
+      text-align: left !important;
+      vertical-align: bottom !important;
+      padding: 0 !important;
+      line-height: 1.1 !important;
+    }
+    .print-date-text {
+      font-size: 6.5pt !important;
+      font-weight: 700 !important;
+      line-height: 1.1 !important;
+      color: #000000 !important;
+      white-space: nowrap !important;
+      display: block !important;
+    }
+    .print-price-col {
+      text-align: right !important;
+      vertical-align: bottom !important;
+      padding: 0 !important;
+      white-space: nowrap !important;
     }
     .print-price-text {
-      font-size: ${Math.max(10, activePreset.widthMm * 0.20)}pt;
-      font-weight: 900;
-      color: #000000;
-      line-height: 1.1;
-      margin: 0;
+      font-size: 11pt !important;
+      font-weight: 900 !important;
+      color: #000000 !important;
+      line-height: 1 !important;
+      margin: 0 !important;
+      white-space: nowrap !important;
     }
   </style>
 </head>
@@ -983,13 +1063,34 @@ export default function BarcodeSettings() {
   // Calculate totals
   const totalLabelsToPrint = batchItems.reduce((acc, item) => acc + item.quantity, 0);
 
+  // Flattened array of individual labels
+  const flattenedLabels = useMemo(() => {
+    const list: PrintBatchItem[] = [];
+    batchItems.forEach((item) => {
+      for (let i = 0; i < item.quantity; i++) {
+        list.push(item);
+      }
+    });
+    return list;
+  }, [batchItems]);
+
+  // Group into pairs of 2 for 2-Up (Twin Roll) printing
+  const labelPairs2Up = useMemo(() => {
+    const pairs: Array<[PrintBatchItem, PrintBatchItem | null]> = [];
+    for (let i = 0; i < flattenedLabels.length; i += 2) {
+      pairs.push([flattenedLabels[i], flattenedLabels[i + 1] || null]);
+    }
+    return pairs;
+  }, [flattenedLabels]);
+
   return (
     <div className="space-y-6">
       {/* Dynamic Print-Media Style Overrides */}
       <style>{`
         @media print {
           @page {
-            margin: 2mm 0 0 0;
+            size: ${is2Up ? (activePreset.widthMm * 2 + gapMm) : activePreset.widthMm}mm ${activePreset.heightMm}mm !important;
+            margin: 0 !important;
           }
           /* Hide everything in UI */
           body * {
@@ -1011,10 +1112,28 @@ export default function BarcodeSettings() {
             color: black !important;
             display: block !important;
           }
+          .print-row-2up {
+            width: ${is2Up ? (activePreset.widthMm * 2 + gapMm) : activePreset.widthMm}mm !important;
+            height: ${activePreset.heightMm}mm !important;
+            max-width: ${is2Up ? (activePreset.widthMm * 2 + gapMm) : activePreset.widthMm}mm !important;
+            max-height: ${activePreset.heightMm}mm !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            display: flex !important;
+            flex-direction: row !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            page-break-after: always !important;
+            break-after: page !important;
+            box-sizing: border-box !important;
+            overflow: hidden !important;
+            background: white !important;
+          }
           .print-single-label {
             margin: 0 !important;
-            padding: 1.5mm 1.5mm 1mm 1.5mm !important;
-            justify-content: space-between !important;
+            padding: 1.2mm 1.5mm 0.8mm 1.5mm !important;
             border: none !important;
             box-shadow: none !important;
             background: white !important;
@@ -1025,63 +1144,100 @@ export default function BarcodeSettings() {
             justify-content: flex-start !important;
             text-align: center !important;
             box-sizing: border-box !important;
-            
-            /* Physical label sizing presets */
             width: ${activePreset.widthMm}mm !important;
             height: ${activePreset.heightMm}mm !important;
             max-width: ${activePreset.widthMm}mm !important;
             max-height: ${activePreset.heightMm}mm !important;
             overflow: hidden !important;
-            
-            /* Clean thermal cutter support */
-            page-break-inside: avoid !important;
-            break-after: page !important;
-            page-break-after: always !important;
+            ${!is2Up ? 'page-break-inside: avoid !important; break-after: page !important; page-break-after: always !important;' : ''}
           }
-          /* Print sizing scaling overrides */
+          .print-empty-slot {
+            visibility: hidden !important;
+            opacity: 0 !important;
+          }
           .print-header-text {
-            font-size: ${Math.max(6.5, activePreset.widthMm * 0.13)}pt !important;
-            line-height: 1.25 !important;
+            font-size: 7pt !important;
+            line-height: 1.15 !important;
             font-weight: 800 !important;
             text-transform: uppercase !important;
             color: black !important;
-            margin-bottom: 1px !important;
+            margin: 0 0 0.3mm 0 !important;
             white-space: nowrap !important;
             overflow: hidden !important;
             text-overflow: ellipsis !important;
-            max-width: 95% !important;
+            max-width: 98% !important;
             display: block !important;
           }
           .print-title-text {
-            font-size: ${Math.max(8.5, activePreset.widthMm * 0.17)}pt !important;
-            line-height: 1.25 !important;
+            font-size: 8.5pt !important;
+            line-height: 1.15 !important;
             font-weight: 900 !important;
             color: black !important;
-            margin-bottom: 2px !important;
+            margin: 0 0 0.4mm 0 !important;
             white-space: nowrap !important;
             overflow: hidden !important;
             text-overflow: ellipsis !important;
-            max-width: 95% !important;
+            max-width: 98% !important;
             display: block !important;
           }
           .print-barcode-container {
-            width: 85% !important;
-            margin: 2px 0 !important;
+            width: 88% !important;
+            margin: 0.4mm auto !important;
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+          }
+          .print-barcode-container svg {
+            display: block !important;
+            margin: 0 auto !important;
+            width: 100% !important;
+            height: 5.5mm !important;
+            max-height: 6mm !important;
           }
           .print-value-text {
-            font-size: ${Math.max(6.5, activePreset.widthMm * 0.13)}pt !important;
-            letter-spacing: 1px !important;
-            font-weight: bold !important;
+            font-size: 6.5pt !important;
+            letter-spacing: 0.8px !important;
+            font-weight: 800 !important;
             color: black !important;
-            margin-top: 1px !important;
-            line-height: 1.2 !important;
+            margin: 0.2mm 0 0 0 !important;
+            line-height: 1.1 !important;
+            text-transform: uppercase !important;
+            display: block !important;
+          }
+          .print-bottom-row {
+            width: 96% !important;
+            margin-top: auto !important;
+            border: 0 !important;
+            border-collapse: collapse !important;
+            padding: 0 !important;
+          }
+          .print-date-col {
+            text-align: left !important;
+            vertical-align: bottom !important;
+            padding: 0 !important;
+            line-height: 1.1 !important;
+          }
+          .print-date-text {
+            font-size: 6.5pt !important;
+            font-weight: 700 !important;
+            line-height: 1.1 !important;
+            color: black !important;
+            white-space: nowrap !important;
+            display: block !important;
+          }
+          .print-price-col {
+            text-align: right !important;
+            vertical-align: bottom !important;
+            padding: 0 !important;
+            white-space: nowrap !important;
           }
           .print-price-text {
-            font-size: ${Math.max(10, activePreset.widthMm * 0.20)}pt !important;
+            font-size: 11pt !important;
             font-weight: 900 !important;
             color: black !important;
-            margin-top: 2px !important;
-            line-height: 1.2 !important;
+            margin: 0 !important;
+            line-height: 1 !important;
+            white-space: nowrap !important;
           }
         }
       `}</style>
@@ -1091,220 +1247,684 @@ export default function BarcodeSettings() {
         id="barcode-label-print-zone-container" 
         style={{ position: 'fixed', left: '-9999px', top: '-9999px', width: '1px', height: '1px', overflow: 'hidden' }}
       >
-        {batchItems.map((item) => 
-          Array.from({ length: item.quantity }).map((_, repeatIdx) => (
+        {is2Up ? (
+          /* 2-UP TWIN ROLL: Pairs of 2 labels across */
+          labelPairs2Up.map(([leftItem, rightItem], pairIdx) => (
             <div 
-              key={`${item.id}-${repeatIdx}`} 
-              className="print-single-label"
+              key={`pair-${pairIdx}`}
+              className="print-row-2up"
               style={{
-                width: `${activePreset.widthMm}mm`,
+                width: `${activePreset.widthMm * 2 + gapMm}mm`,
                 height: `${activePreset.heightMm}mm`,
-                maxWidth: `${activePreset.widthMm}mm`,
+                maxWidth: `${activePreset.widthMm * 2 + gapMm}mm`,
                 maxHeight: `${activePreset.heightMm}mm`,
-                padding: '1.2mm 1.5mm 0.8mm 1.5mm',
                 margin: 0,
+                padding: 0,
                 boxSizing: 'border-box',
                 display: 'flex',
-                flexDirection: 'column',
+                flexDirection: 'row',
+                justifyContent: 'space-between',
                 alignItems: 'center',
-                justifyContent: 'flex-start',
-                textAlign: 'center',
-                overflow: 'hidden',
                 background: '#ffffff',
-                color: '#000000',
+                overflow: 'hidden'
               }}
             >
-              {/* Header */}
-              {showStoreHeader && storeHeader && (
-                <span 
-                  className="print-header-text"
-                  style={{
-                    fontSize: '7pt',
-                    fontWeight: 800,
-                    textTransform: 'uppercase',
-                    lineHeight: 1.15,
-                    margin: '0 0 0.3mm 0',
-                    maxWidth: '98%',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    color: '#000000',
-                    display: 'block'
-                  }}
-                >
-                  {storeHeader}
-                </span>
-              )}
-
-              {/* Product Name */}
-              {showItemName && (
-                <span 
-                  className="print-title-text"
-                  style={{
-                    fontSize: '8.5pt',
-                    fontWeight: 900,
-                    lineHeight: 1.15,
-                    margin: '0 0 0.4mm 0',
-                    maxWidth: '98%',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    color: '#000000',
-                    display: 'block'
-                  }}
-                >
-                  {item.name || 'STORE PRODUCT'}
-                </span>
-              )}
-
-              {/* Graphic */}
+              
               <div 
-                className="print-barcode-container"
+                key={`left-${pairIdx}`} 
+                className="print-single-label"
                 style={{
-                  width: '88%',
-                  margin: '0.4mm auto',
+                  width: `${activePreset.widthMm}mm`,
+                  height: `${activePreset.heightMm}mm`,
+                  maxWidth: `${activePreset.widthMm}mm`,
+                  maxHeight: `${activePreset.heightMm}mm`,
+                  padding: '1.2mm 1.5mm 0.8mm 1.5mm',
+                  margin: 0,
+                  boxSizing: 'border-box',
                   display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center'
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'flex-start',
+                  textAlign: 'center',
+                  overflow: 'hidden',
+                  background: '#ffffff',
+                  color: '#000000',
                 }}
               >
-                {barcodeType === 'qr' ? (
-                  <QRCodeSVG 
-                    value={item.barcode || '000000'}
-                    size={Math.min(activePreset.heightPx * 0.32, 50)}
-                    level="M"
-                    includeMargin={false}
-                  />
-                ) : (
-                  <div className="w-full">
-                    <BarcodeSVG 
-                      value={item.barcode} 
-                      width={activePreset.widthPx * 0.8}
-                      height={18}
-                    />
-                  </div>
+                {/* Header */}
+                {showStoreHeader && storeHeader && (
+                  <span 
+                    className="print-header-text"
+                    style={{
+                      fontSize: '7pt',
+                      fontWeight: 800,
+                      textTransform: 'uppercase',
+                      lineHeight: 1.15,
+                      margin: '0 0 0.3mm 0',
+                      maxWidth: '98%',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: '#000000',
+                      display: 'block'
+                    }}
+                  >
+                    {storeHeader}
+                  </span>
                 )}
-              </div>
 
-              {/* Readability value */}
-              {showBarcodeText && barcodeType === '1d' && item.barcode && (
-                <span 
-                  className="print-value-text"
+                {/* Product Name */}
+                {showItemName && (
+                  <span 
+                    className="print-title-text"
+                    style={{
+                      fontSize: '8.5pt',
+                      fontWeight: 900,
+                      lineHeight: 1.15,
+                      margin: '0 0 0.4mm 0',
+                      maxWidth: '98%',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: '#000000',
+                      display: 'block'
+                    }}
+                  >
+                    {leftItem.name || 'STORE PRODUCT'}
+                  </span>
+                )}
+
+                {/* Graphic */}
+                <div 
+                  className="print-barcode-container"
                   style={{
-                    fontSize: '6.5pt',
-                    fontWeight: 800,
-                    letterSpacing: '0.8px',
-                    lineHeight: 1.1,
-                    margin: '0.2mm 0 0 0',
-                    color: '#000000',
-                    textTransform: 'uppercase',
-                    display: 'block'
+                    width: '88%',
+                    margin: '0.4mm auto',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center'
                   }}
                 >
-                  {item.barcode}
-                </span>
-              )}
+                  {barcodeType === 'qr' ? (
+                    <QRCodeSVG 
+                      value={leftItem.barcode || '000000'}
+                      size={Math.min(activePreset.heightPx * 0.32, 50)}
+                      level="M"
+                      includeMargin={false}
+                    />
+                  ) : (
+                    <div className="w-full">
+                      <BarcodeSVG 
+                        value={leftItem.barcode} 
+                        width={activePreset.widthPx * 0.8}
+                        height={18}
+                      />
+                    </div>
+                  )}
+                </div>
 
-              {/* Bottom Row: 2-Column Table (Date Left, Price Right) - GUARANTEED NEVER TO STACK */}
-              <table 
-                className="print-bottom-row"
+                {/* Readability value */}
+                {showBarcodeText && barcodeType === '1d' && leftItem.barcode && (
+                  <span 
+                    className="print-value-text"
+                    style={{
+                      fontSize: '6.5pt',
+                      fontWeight: 800,
+                      letterSpacing: '0.8px',
+                      lineHeight: 1.1,
+                      margin: '0.2mm 0 0 0',
+                      color: '#000000',
+                      textTransform: 'uppercase',
+                      display: 'block'
+                    }}
+                  >
+                    {leftItem.barcode}
+                  </span>
+                )}
+
+                {/* Bottom Row: 2-Column Table (Date Left, Price Right) */}
+                <table 
+                  className="print-bottom-row"
+                  style={{
+                    width: '96%',
+                    marginTop: 'auto',
+                    border: 0,
+                    borderCollapse: 'collapse',
+                    padding: 0
+                  }}
+                >
+                  <tbody>
+                    <tr>
+                      <td 
+                        className="print-date-col"
+                        style={{
+                          textAlign: 'left',
+                          verticalAlign: 'bottom',
+                          padding: 0,
+                          lineHeight: 1.1
+                        }}
+                      >
+                        {((showMfgDate && (leftItem.includeMfgDate ?? true) && leftItem.mfgDate) || 
+                          (showBestBefore && (leftItem.includeBestBefore ?? true) && leftItem.bestBeforeDays) || 
+                          (showExpDate && (leftItem.includeExpDate ?? true) && leftItem.expDate)) && (
+                          <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', lineHeight: 1.1 }}>
+                            {showMfgDate && (leftItem.includeMfgDate ?? true) && leftItem.mfgDate && (
+                              <span 
+                                className="print-date-text"
+                                style={{
+                                  fontSize: '6.5pt',
+                                  fontWeight: 700,
+                                  color: '#000000',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: 1.1
+                                }}
+                              >
+                                Mfg: {formatItemDate(leftItem.mfgDate, Boolean(showBestBefore && (leftItem.includeBestBefore ?? true) && leftItem.bestBeforeDays))}
+                              </span>
+                            )}
+                            {showBestBefore && (leftItem.includeBestBefore ?? true) && leftItem.bestBeforeDays && (
+                              <span 
+                                className="print-date-text"
+                                style={{
+                                  fontSize: '6.5pt',
+                                  fontWeight: 700,
+                                  color: '#000000',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: 1.1
+                                }}
+                              >
+                                BB: {leftItem.bestBeforeDays}d {leftItem.expDate ? `(${formatItemDate(leftItem.expDate, true)})` : ''}
+                              </span>
+                            )}
+                            {showExpDate && (leftItem.includeExpDate ?? true) && leftItem.expDate && !leftItem.bestBeforeDays && (
+                              <span 
+                                className="print-date-text"
+                                style={{
+                                  fontSize: '6.5pt',
+                                  fontWeight: 700,
+                                  color: '#000000',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: 1.1
+                                }}
+                              >
+                                Exp: {formatItemDate(leftItem.expDate, false)}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td 
+                        className="print-price-col"
+                        style={{
+                          textAlign: 'right',
+                          verticalAlign: 'bottom',
+                          padding: 0,
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {showPrice && (
+                          <span 
+                            className="print-price-text"
+                            style={{
+                              fontSize: '11pt',
+                              fontWeight: 900,
+                              color: '#000000',
+                              lineHeight: 1,
+                              margin: 0,
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            ₹{Number(leftItem.price || 0).toFixed(2)}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              {rightItem ? (
+                
+              <div 
+                key={`right-${pairIdx}`} 
+                className="print-single-label"
                 style={{
-                  width: '96%',
-                  marginTop: 'auto',
-                  border: 0,
-                  borderCollapse: 'collapse',
-                  padding: 0
+                  width: `${activePreset.widthMm}mm`,
+                  height: `${activePreset.heightMm}mm`,
+                  maxWidth: `${activePreset.widthMm}mm`,
+                  maxHeight: `${activePreset.heightMm}mm`,
+                  padding: '1.2mm 1.5mm 0.8mm 1.5mm',
+                  margin: 0,
+                  boxSizing: 'border-box',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'flex-start',
+                  textAlign: 'center',
+                  overflow: 'hidden',
+                  background: '#ffffff',
+                  color: '#000000',
                 }}
               >
-                <tbody>
-                  <tr>
-                    <td 
-                      className="print-date-col"
-                      style={{
-                        textAlign: 'left',
-                        verticalAlign: 'bottom',
-                        padding: 0,
-                        lineHeight: 1.1
-                      }}
-                    >
-                      {((showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate) || 
-                        (showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays) || 
-                        (showExpDate && (item.includeExpDate ?? true) && item.expDate)) && (
-                        <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', lineHeight: 1.1 }}>
-                          {showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate && (
-                            <span 
-                              className="print-date-text"
-                              style={{
-                                fontSize: '6.5pt',
-                                fontWeight: 700,
-                                color: '#000000',
-                                whiteSpace: 'nowrap',
-                                lineHeight: 1.1
-                              }}
-                            >
-                              Mfg: {formatItemDate(item.mfgDate, Boolean(showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays))}
-                            </span>
-                          )}
-                          {showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays && (
-                            <span 
-                              className="print-date-text"
-                              style={{
-                                fontSize: '6.5pt',
-                                fontWeight: 700,
-                                color: '#000000',
-                                whiteSpace: 'nowrap',
-                                lineHeight: 1.1
-                              }}
-                            >
-                              BB: {item.bestBeforeDays}d {item.expDate ? `(${formatItemDate(item.expDate, true)})` : ''}
-                            </span>
-                          )}
-                          {showExpDate && (item.includeExpDate ?? true) && item.expDate && !item.bestBeforeDays && (
-                            <span 
-                              className="print-date-text"
-                              style={{
-                                fontSize: '6.5pt',
-                                fontWeight: 700,
-                                color: '#000000',
-                                whiteSpace: 'nowrap',
-                                lineHeight: 1.1
-                              }}
-                            >
-                              Exp: {formatItemDate(item.expDate, false)}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    <td 
-                      className="print-price-col"
-                      style={{
-                        textAlign: 'right',
-                        verticalAlign: 'bottom',
-                        padding: 0,
-                        whiteSpace: 'nowrap'
-                      }}
-                    >
-                      {showPrice && (
-                        <span 
-                          className="print-price-text"
-                          style={{
-                            fontSize: '11pt',
-                            fontWeight: 900,
-                            color: '#000000',
-                            lineHeight: 1,
-                            margin: 0,
-                            whiteSpace: 'nowrap'
-                          }}
-                        >
-                          ₹{Number(item.price || 0).toFixed(2)}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                {/* Header */}
+                {showStoreHeader && storeHeader && (
+                  <span 
+                    className="print-header-text"
+                    style={{
+                      fontSize: '7pt',
+                      fontWeight: 800,
+                      textTransform: 'uppercase',
+                      lineHeight: 1.15,
+                      margin: '0 0 0.3mm 0',
+                      maxWidth: '98%',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: '#000000',
+                      display: 'block'
+                    }}
+                  >
+                    {storeHeader}
+                  </span>
+                )}
+
+                {/* Product Name */}
+                {showItemName && (
+                  <span 
+                    className="print-title-text"
+                    style={{
+                      fontSize: '8.5pt',
+                      fontWeight: 900,
+                      lineHeight: 1.15,
+                      margin: '0 0 0.4mm 0',
+                      maxWidth: '98%',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: '#000000',
+                      display: 'block'
+                    }}
+                  >
+                    {rightItem.name || 'STORE PRODUCT'}
+                  </span>
+                )}
+
+                {/* Graphic */}
+                <div 
+                  className="print-barcode-container"
+                  style={{
+                    width: '88%',
+                    margin: '0.4mm auto',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center'
+                  }}
+                >
+                  {barcodeType === 'qr' ? (
+                    <QRCodeSVG 
+                      value={rightItem.barcode || '000000'}
+                      size={Math.min(activePreset.heightPx * 0.32, 50)}
+                      level="M"
+                      includeMargin={false}
+                    />
+                  ) : (
+                    <div className="w-full">
+                      <BarcodeSVG 
+                        value={rightItem.barcode} 
+                        width={activePreset.widthPx * 0.8}
+                        height={18}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Readability value */}
+                {showBarcodeText && barcodeType === '1d' && rightItem.barcode && (
+                  <span 
+                    className="print-value-text"
+                    style={{
+                      fontSize: '6.5pt',
+                      fontWeight: 800,
+                      letterSpacing: '0.8px',
+                      lineHeight: 1.1,
+                      margin: '0.2mm 0 0 0',
+                      color: '#000000',
+                      textTransform: 'uppercase',
+                      display: 'block'
+                    }}
+                  >
+                    {rightItem.barcode}
+                  </span>
+                )}
+
+                {/* Bottom Row: 2-Column Table (Date Left, Price Right) */}
+                <table 
+                  className="print-bottom-row"
+                  style={{
+                    width: '96%',
+                    marginTop: 'auto',
+                    border: 0,
+                    borderCollapse: 'collapse',
+                    padding: 0
+                  }}
+                >
+                  <tbody>
+                    <tr>
+                      <td 
+                        className="print-date-col"
+                        style={{
+                          textAlign: 'left',
+                          verticalAlign: 'bottom',
+                          padding: 0,
+                          lineHeight: 1.1
+                        }}
+                      >
+                        {((showMfgDate && (rightItem.includeMfgDate ?? true) && rightItem.mfgDate) || 
+                          (showBestBefore && (rightItem.includeBestBefore ?? true) && rightItem.bestBeforeDays) || 
+                          (showExpDate && (rightItem.includeExpDate ?? true) && rightItem.expDate)) && (
+                          <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', lineHeight: 1.1 }}>
+                            {showMfgDate && (rightItem.includeMfgDate ?? true) && rightItem.mfgDate && (
+                              <span 
+                                className="print-date-text"
+                                style={{
+                                  fontSize: '6.5pt',
+                                  fontWeight: 700,
+                                  color: '#000000',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: 1.1
+                                }}
+                              >
+                                Mfg: {formatItemDate(rightItem.mfgDate, Boolean(showBestBefore && (rightItem.includeBestBefore ?? true) && rightItem.bestBeforeDays))}
+                              </span>
+                            )}
+                            {showBestBefore && (rightItem.includeBestBefore ?? true) && rightItem.bestBeforeDays && (
+                              <span 
+                                className="print-date-text"
+                                style={{
+                                  fontSize: '6.5pt',
+                                  fontWeight: 700,
+                                  color: '#000000',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: 1.1
+                                }}
+                              >
+                                BB: {rightItem.bestBeforeDays}d {rightItem.expDate ? `(${formatItemDate(rightItem.expDate, true)})` : ''}
+                              </span>
+                            )}
+                            {showExpDate && (rightItem.includeExpDate ?? true) && rightItem.expDate && !rightItem.bestBeforeDays && (
+                              <span 
+                                className="print-date-text"
+                                style={{
+                                  fontSize: '6.5pt',
+                                  fontWeight: 700,
+                                  color: '#000000',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: 1.1
+                                }}
+                              >
+                                Exp: {formatItemDate(rightItem.expDate, false)}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td 
+                        className="print-price-col"
+                        style={{
+                          textAlign: 'right',
+                          verticalAlign: 'bottom',
+                          padding: 0,
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {showPrice && (
+                          <span 
+                            className="print-price-text"
+                            style={{
+                              fontSize: '11pt',
+                              fontWeight: 900,
+                              color: '#000000',
+                              lineHeight: 1,
+                              margin: 0,
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            ₹{Number(rightItem.price || 0).toFixed(2)}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              ) : (
+                <div 
+                  className="print-single-label print-empty-slot"
+                  style={{
+                    width: `${activePreset.widthMm}mm`,
+                    height: `${activePreset.heightMm}mm`,
+                    visibility: 'hidden',
+                    opacity: 0
+                  }}
+                />
+              )}
             </div>
+          ))
+        ) : (
+          /* 1-UP SINGLE ROLL: 1 label per page */
+          flattenedLabels.map((item, idx) => (
+            
+              <div 
+                key={`single-${idx}`} 
+                className="print-single-label"
+                style={{
+                  width: `${activePreset.widthMm}mm`,
+                  height: `${activePreset.heightMm}mm`,
+                  maxWidth: `${activePreset.widthMm}mm`,
+                  maxHeight: `${activePreset.heightMm}mm`,
+                  padding: '1.2mm 1.5mm 0.8mm 1.5mm',
+                  margin: 0,
+                  boxSizing: 'border-box',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'flex-start',
+                  textAlign: 'center',
+                  overflow: 'hidden',
+                  background: '#ffffff',
+                  color: '#000000',
+                }}
+              >
+                {/* Header */}
+                {showStoreHeader && storeHeader && (
+                  <span 
+                    className="print-header-text"
+                    style={{
+                      fontSize: '7pt',
+                      fontWeight: 800,
+                      textTransform: 'uppercase',
+                      lineHeight: 1.15,
+                      margin: '0 0 0.3mm 0',
+                      maxWidth: '98%',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: '#000000',
+                      display: 'block'
+                    }}
+                  >
+                    {storeHeader}
+                  </span>
+                )}
+
+                {/* Product Name */}
+                {showItemName && (
+                  <span 
+                    className="print-title-text"
+                    style={{
+                      fontSize: '8.5pt',
+                      fontWeight: 900,
+                      lineHeight: 1.15,
+                      margin: '0 0 0.4mm 0',
+                      maxWidth: '98%',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: '#000000',
+                      display: 'block'
+                    }}
+                  >
+                    {item.name || 'STORE PRODUCT'}
+                  </span>
+                )}
+
+                {/* Graphic */}
+                <div 
+                  className="print-barcode-container"
+                  style={{
+                    width: '88%',
+                    margin: '0.4mm auto',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center'
+                  }}
+                >
+                  {barcodeType === 'qr' ? (
+                    <QRCodeSVG 
+                      value={item.barcode || '000000'}
+                      size={Math.min(activePreset.heightPx * 0.32, 50)}
+                      level="M"
+                      includeMargin={false}
+                    />
+                  ) : (
+                    <div className="w-full">
+                      <BarcodeSVG 
+                        value={item.barcode} 
+                        width={activePreset.widthPx * 0.8}
+                        height={18}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Readability value */}
+                {showBarcodeText && barcodeType === '1d' && item.barcode && (
+                  <span 
+                    className="print-value-text"
+                    style={{
+                      fontSize: '6.5pt',
+                      fontWeight: 800,
+                      letterSpacing: '0.8px',
+                      lineHeight: 1.1,
+                      margin: '0.2mm 0 0 0',
+                      color: '#000000',
+                      textTransform: 'uppercase',
+                      display: 'block'
+                    }}
+                  >
+                    {item.barcode}
+                  </span>
+                )}
+
+                {/* Bottom Row: 2-Column Table (Date Left, Price Right) */}
+                <table 
+                  className="print-bottom-row"
+                  style={{
+                    width: '96%',
+                    marginTop: 'auto',
+                    border: 0,
+                    borderCollapse: 'collapse',
+                    padding: 0
+                  }}
+                >
+                  <tbody>
+                    <tr>
+                      <td 
+                        className="print-date-col"
+                        style={{
+                          textAlign: 'left',
+                          verticalAlign: 'bottom',
+                          padding: 0,
+                          lineHeight: 1.1
+                        }}
+                      >
+                        {((showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate) || 
+                          (showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays) || 
+                          (showExpDate && (item.includeExpDate ?? true) && item.expDate)) && (
+                          <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', lineHeight: 1.1 }}>
+                            {showMfgDate && (item.includeMfgDate ?? true) && item.mfgDate && (
+                              <span 
+                                className="print-date-text"
+                                style={{
+                                  fontSize: '6.5pt',
+                                  fontWeight: 700,
+                                  color: '#000000',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: 1.1
+                                }}
+                              >
+                                Mfg: {formatItemDate(item.mfgDate, Boolean(showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays))}
+                              </span>
+                            )}
+                            {showBestBefore && (item.includeBestBefore ?? true) && item.bestBeforeDays && (
+                              <span 
+                                className="print-date-text"
+                                style={{
+                                  fontSize: '6.5pt',
+                                  fontWeight: 700,
+                                  color: '#000000',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: 1.1
+                                }}
+                              >
+                                BB: {item.bestBeforeDays}d {item.expDate ? `(${formatItemDate(item.expDate, true)})` : ''}
+                              </span>
+                            )}
+                            {showExpDate && (item.includeExpDate ?? true) && item.expDate && !item.bestBeforeDays && (
+                              <span 
+                                className="print-date-text"
+                                style={{
+                                  fontSize: '6.5pt',
+                                  fontWeight: 700,
+                                  color: '#000000',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: 1.1
+                                }}
+                              >
+                                Exp: {formatItemDate(item.expDate, false)}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td 
+                        className="print-price-col"
+                        style={{
+                          textAlign: 'right',
+                          verticalAlign: 'bottom',
+                          padding: 0,
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {showPrice && (
+                          <span 
+                            className="print-price-text"
+                            style={{
+                              fontSize: '11pt',
+                              fontWeight: 900,
+                              color: '#000000',
+                              lineHeight: 1,
+                              margin: 0,
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            ₹{Number(item.price || 0).toFixed(2)}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
           ))
         )}
       </div>
@@ -1629,6 +2249,66 @@ export default function BarcodeSettings() {
                 </div>
               </div>
 
+              {/* 1-Up Single vs 2-Up Twin Roll Layout Switcher */}
+              <div className="pt-3 border-t border-border/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-text-muted uppercase flex items-center gap-1.5">
+                    <Layers size={13} className="text-blue-400" />
+                    Roll Column Layout (1-Up vs 2-Up)
+                  </label>
+                  <span className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">
+                    {is2Up ? `2-Up (${activePreset.widthMm * 2 + gapMm}mm Web Width)` : `1-Up (${activePreset.widthMm}mm Web Width)`}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 h-10">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIs2Up(false);
+                      try { localStorage.setItem('barcode_is_2up', 'false'); } catch {}
+                    }}
+                    className={`flex items-center justify-center gap-1.5 rounded-lg border text-xs font-black uppercase transition-all ${!is2Up ? 'border-blue-500/50 bg-blue-500/10 text-blue-400 shadow-sm' : 'border-border/50 text-text-muted hover:text-text-primary bg-bg-tertiary/40'}`}
+                  >
+                    <Tag size={14} /> 1-Up (Single Roll)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIs2Up(true);
+                      try { localStorage.setItem('barcode_is_2up', 'true'); } catch {}
+                    }}
+                    className={`flex items-center justify-center gap-1.5 rounded-lg border text-xs font-black uppercase transition-all ${is2Up ? 'border-blue-500/50 bg-blue-500/10 text-blue-400 shadow-sm' : 'border-border/50 text-text-muted hover:text-text-primary bg-bg-tertiary/40'}`}
+                  >
+                    <Layers size={14} /> 2-Up (Twin Roll / 2 Across)
+                  </button>
+                </div>
+
+                {is2Up && (
+                  <div className="flex items-center justify-between px-3 py-2 bg-blue-500/10 border border-blue-500/20 rounded-xl text-xs animate-in fade-in duration-150">
+                    <span className="text-text-muted font-bold">Gap Between Twin Labels:</span>
+                    <div className="flex items-center gap-1.5">
+                      {[1, 2, 3, 4].map((g) => (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => {
+                            setGapMm(g);
+                            try { localStorage.setItem('barcode_2up_gap', String(g)); } catch {}
+                          }}
+                          className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all ${gapMm === g ? 'bg-blue-600 text-white shadow-sm' : 'bg-bg-secondary text-text-muted hover:text-text-primary border border-border/40'}`}
+                        >
+                          {g}mm
+                        </button>
+                      ))}
+                      <span className="text-[10px] text-blue-300 font-mono font-bold ml-1">
+                        (= {activePreset.widthMm * 2 + gapMm}mm total web)
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Company / Store Header Input */}
               <div className="pt-3 border-t border-border/30 space-y-2">
                 <div className="flex items-center justify-between">
@@ -1722,7 +2402,7 @@ export default function BarcodeSettings() {
               <div className="w-full flex items-center justify-between border-b border-border/30 pb-3 mb-4 shrink-0">
                 <span className="text-xs font-bold uppercase text-text-muted tracking-wider">Live Printed Batch Previews</span>
                 <span className="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded font-black tracking-wider uppercase">
-                  {activePreset.widthMm} x {activePreset.heightMm} mm
+                  {is2Up ? `2-Up (${activePreset.widthMm * 2 + gapMm}x${activePreset.heightMm} mm)` : `1-Up (${activePreset.widthMm}x${activePreset.heightMm} mm)`}
                 </span>
               </div>
 
