@@ -2516,6 +2516,20 @@ export async function restaurantRoutes(app) {
     // ── Bulk upload menu items (Excel/CSV) ──
     app.post('/menu-items/bulk-upload', async (request, reply) => {
         const restaurantId = request.restaurantId;
+        const parseBool = (value, fallback = false) => {
+            if (value === undefined || value === null || String(value).trim() === '')
+                return fallback;
+            const txt = String(value).trim().toLowerCase();
+            if (['true', '1', 'yes', 'y'].includes(txt))
+                return true;
+            if (['false', '0', 'no', 'n'].includes(txt))
+                return false;
+            return fallback;
+        };
+        const parseNum = (value, fallback = 0) => {
+            const n = Number(value);
+            return Number.isFinite(n) ? n : fallback;
+        };
         try {
             if (!request.headers['content-type']?.includes('multipart/form-data')) {
                 return reply.code(400).send({ success: false, error: 'Expected multipart/form-data' });
@@ -2741,20 +2755,6 @@ export async function restaurantRoutes(app) {
                 if (!best || bestScore < 15)
                     return null;
                 return `/static/${best}`;
-            };
-            const parseBool = (value, fallback = false) => {
-                if (value === undefined || value === null || String(value).trim() === '')
-                    return fallback;
-                const txt = String(value).trim().toLowerCase();
-                if (['true', '1', 'yes', 'y'].includes(txt))
-                    return true;
-                if (['false', '0', 'no', 'n'].includes(txt))
-                    return false;
-                return fallback;
-            };
-            const parseNum = (value, fallback = 0) => {
-                const n = Number(value);
-                return Number.isFinite(n) ? n : fallback;
             };
             const normalizeTextKey = (value) => String(value || '').trim().toLowerCase();
             const inferKOTFromGroup = (groupNameRaw, fallbackTemplateType) => {
