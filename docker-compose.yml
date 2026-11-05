@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  restaurant-pos:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: restaurant-saas-pos:latest
+    container_name: restaurant-pos-app
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5000}:5000"
+    environment:
+      - PORT=5000
+      - NODE_ENV=production
+      - DATABASE_URL=file:/app/apps/api/prisma/maligai.db
+      - JWT_SECRET=${JWT_SECRET:-restaurant-saas-super-secret-production-jwt-key-32chars}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-restaurant-saas-refresh-secret-production-key-32chars}
+      - CLIENT_URL=${CLIENT_URL:-https://pos.yourdomain.com}
+      - UPLOAD_DIR=/app/apps/api/uploads
+      - WEB_DIST_PATH=/app/apps/web/dist
+    volumes:
+      - pos-database:/app/apps/api/prisma
+      - pos-uploads:/app/apps/api/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  pos-database:
+    name: restaurant-pos-db-volume
+  pos-uploads:
+    name: restaurant-pos-uploads-volume

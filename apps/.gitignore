@@ -32,6 +32,12 @@ uploads/
 tmp/
 **/tmp/
 
+# Whitelist production SQLite template and seeded DB
+!api/prisma/maligai.db
+!api/prisma/sqlite-template/
+!api/prisma/sqlite-template/**
+
+
 # System & OS
 .DS_Store
 Thumbs.db

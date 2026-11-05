@@ -4,13 +4,19 @@ node_modules/
 .vscode/
 dist/
 release/
-*.db
-*.sqlite
 *.log
 logs/
 *.sqlite-journal
-*.sqlite3
 **/node_modules/
 **/dist/
 **/release/
 **/.history/
+
+# SQLite databases (ignore local temporary DBs, but preserve seeded templates)
+*.db
+*.sqlite
+*.sqlite3
+!apps/api/prisma/maligai.db
+!apps/api/prisma/sqlite-template/
+!apps/api/prisma/sqlite-template/**
+

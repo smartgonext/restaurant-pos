@@ -7,7 +7,7 @@
     "dev": "node --watch src/server.js",
     "build": "echo \"No TS build needed (JS project)\"",
     "start": "node src/server.js",
-    "postinstall": "prisma generate --schema=prisma/schema.sqlite.prisma",
+    "postinstall": "node scripts/postinstall-prisma.mjs",
     "db:generate": "prisma generate --schema=prisma/schema.sqlite.prisma",
     "db:push": "prisma db push --schema=prisma/schema.sqlite.prisma",
     "db:seed": "node prisma/seed.js",

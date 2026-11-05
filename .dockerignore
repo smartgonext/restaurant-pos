@@ -1,0 +1,34 @@
+# Version control
+.git
+.gitignore
+
+# Package manager and OS cache
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+release/
+**/release/
+dist-release/
+build/
+.history/
+**/.history/
+.vscode/
+.orchids/
+.claude/
+.kilo/
+
+# Temporary and log files
+*.log
+logs/
+**/logs/
+tmp/
+**/tmp/
+downloads/
+**/*.exe
+**/*.zip
+**/*.tar.gz

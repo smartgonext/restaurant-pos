@@ -42,9 +42,15 @@ if (existsSync(localPrisma)) {
   args = ['prisma', 'generate', '--schema', schemaPath];
 }
 
+// Ensure DATABASE_URL is set so prisma generate never fails due to missing env
+const childEnv = { ...process.env };
+if (!childEnv.DATABASE_URL) {
+  childEnv.DATABASE_URL = 'file:./prisma/maligai.db';
+}
+
 console.log(`[postinstall-prisma] Running: ${cmd} ${args.join(' ')}`);
 // On Windows, executing .cmd directly can fail; use shell on win32 to run the command.
-const res = spawnSync(cmd, args, { stdio: 'inherit', cwd: projectDir, shell: process.platform === 'win32' });
+const res = spawnSync(cmd, args, { stdio: 'inherit', cwd: projectDir, shell: process.platform === 'win32', env: childEnv });
 if (res.error) {
   console.error('[postinstall-prisma] prisma generate failed:', res.error);
   process.exit(res.status || 1);
