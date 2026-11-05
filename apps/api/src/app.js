@@ -419,6 +419,7 @@ export async function buildApp() {
         root: webDist,
         prefix: '/',
         decorateReply: true,
+        index: 'index.html',
         maxAge: 31536000000, // 1 year for hashed assets
         immutable: true,
         setHeaders: (res, pathName) => {
@@ -432,6 +433,15 @@ export async function buildApp() {
       });
 
       const indexHtmlPath = path.join(webDist, 'index.html');
+
+      // Explicit root route for SPA
+      app.get('/', async (request, reply) => {
+        reply.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+        if (typeof reply.sendFile === 'function') {
+          return reply.sendFile('index.html');
+        }
+        return reply.type('text/html').send(fs.createReadStream(indexHtmlPath));
+      });
 
       app.setNotFoundHandler((request, reply) => {
         if (request.url.startsWith('/api/')) {
@@ -478,6 +488,20 @@ export async function buildApp() {
       });
     } else {
       app.log.warn('[Static] No web dist folder found among candidates: ' + candidates.join(', '));
+      app.get('/', async () => ({
+        status: 'online',
+        service: 'Restaurant SaaS POS API Server',
+        version: '1.0.5',
+        timestamp: new Date().toISOString(),
+        health: '/health',
+        endpoints: {
+          health: '/health',
+          auth: '/api/auth/me',
+          subpos: '/api/subpos',
+          mainpos: '/api/mainpos',
+          restaurant: '/api/restaurant',
+        },
+      }));
     }
   } catch (err) {
     app.log.warn({ err }, 'Could not setup static file serving');
