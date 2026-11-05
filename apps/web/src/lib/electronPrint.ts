@@ -111,12 +111,24 @@ export function openCashDrawer() {
   console.log('[POS] Cash drawer signal sent (browser mode - no-op):', config);
 }
 
+let printLock = false;
+let printLockTimer: any = null;
+
 /**
- * Silent print — no dialog.
- * In Electron: uses ipcRenderer silentPrint channel with optional deviceName targeting.
- * In browser: falls back to window.print() with onafterprint cleanup.
+ * Silent print — no dialog in Electron, clean single print in browser.
+ * Includes a print lock to prevent duplicate back-to-back print triggers.
  */
 export async function printHtmlOrFallback(html: string, options?: any): Promise<void> {
+  if (printLock) {
+    console.warn('[POS] Duplicate print request ignored by lock');
+    return;
+  }
+  printLock = true;
+  clearTimeout(printLockTimer);
+  printLockTimer = setTimeout(() => {
+    printLock = false;
+  }, 2500);
+
   const electron = (window as any).electron || (window as any).electronAPI;
 
   // ── Electron silent print ──────────────────────────────────────────────────

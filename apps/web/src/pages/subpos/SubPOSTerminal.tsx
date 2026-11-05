@@ -25,6 +25,14 @@ import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { useWeightedBarcodeScanner } from '@/hooks/useWeightedBarcodeScanner';
 import { isKgMeasuredItem, parseWeightFromBarcode } from '@/lib/weightedBarcodeParser';
 import { filterAndRankMenuItems } from '@/lib/posItemSearch';
+import {
+  getCachedMenuItems,
+  setCachedMenuItems,
+  getCachedCategories,
+  setCachedCategories,
+  getCachedSettings,
+  setCachedSettings,
+} from '@/lib/posCache';
 import { useTouchLongPress } from '@/hooks/useTouchLongPress';
 import { ItemOptionsModal } from '@/components/modals/ItemOptionsModal';
 import { ReorderableCategoryBar } from '@/components/pos/ReorderableCategoryBar';
@@ -624,7 +632,6 @@ export default function SubPOSTerminal() {
   }, []);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [lastToken, setLastToken] = useState<TokenResult | null>(null);
-  const [showPrintPreview, setShowPrintPreview] = useState(false);
   const [todayCount, setTodayCount] = useState(0);
   const [lookupInput, setLookupInput] = useState('');
   const [loadedToken, setLoadedToken] = useState<any | null>(null);
@@ -816,23 +823,41 @@ export default function SubPOSTerminal() {
   };
   const { data: categories = [], refetch: refetchCategories } = useQuery<Category[]>({
     queryKey: ['subpos-categories', authToken],
-    queryFn: async () => { const { data } = await subposApi.get('/categories', { headers: { Authorization: `Bearer ${authToken}` } }); return data.data; },
+    queryFn: async () => {
+      const { data } = await subposApi.get('/categories', { headers: { Authorization: `Bearer ${authToken}` } });
+      if (Array.isArray(data?.data)) setCachedCategories('subpos', data.data);
+      return data.data;
+    },
+    initialData: () => getCachedCategories('subpos'),
     enabled: !!authToken,
-    staleTime: 60_000,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
 
   const { data: allItems = [], refetch: refetchItems } = useQuery<MenuItem[]>({
     queryKey: ['subpos-items', authToken],
-    queryFn: async () => { const { data } = await subposApi.get('/items', { headers: { Authorization: `Bearer ${authToken}` } }); return data.data; },
+    queryFn: async () => {
+      const { data } = await subposApi.get('/items', { headers: { Authorization: `Bearer ${authToken}` } });
+      if (Array.isArray(data?.data)) setCachedMenuItems('subpos', data.data);
+      return data.data;
+    },
+    initialData: () => getCachedMenuItems('subpos'),
     enabled: !!authToken,
-    staleTime: 60_000,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
 
   const { data: billSettings } = useQuery<BillSettings>({
     queryKey: ['subpos-bill-settings', authToken],
-    queryFn: async () => { const { data } = await subposApi.get('/bill-settings', { headers: { Authorization: `Bearer ${authToken}` } }); return data.data; },
+    queryFn: async () => {
+      const { data } = await subposApi.get('/bill-settings', { headers: { Authorization: `Bearer ${authToken}` } });
+      if (data?.data) setCachedSettings('subpos', data.data);
+      return data.data;
+    },
+    initialData: () => getCachedSettings('subpos') || undefined,
     enabled: !!authToken,
-    staleTime: 60_000,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
 
   const { data: customerSuggestions = [] } = useQuery({

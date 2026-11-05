@@ -28,6 +28,14 @@ import { printHtmlOrFallback, openCashDrawer, printKOTTicket, getPrinterSettings
 import { useWeightedBarcodeScanner } from '@/hooks/useWeightedBarcodeScanner';
 import { isKgMeasuredItem, parseWeightFromBarcode } from '@/lib/weightedBarcodeParser';
 import { filterAndRankMenuItems } from '@/lib/posItemSearch';
+import {
+  getCachedMenuItems,
+  setCachedMenuItems,
+  getCachedCategories,
+  setCachedCategories,
+  getCachedSettings,
+  setCachedSettings,
+} from '@/lib/posCache';
 import { API_BASE_URL, SERVER_BASE_URL } from '@/lib/config';
 import { useTouchLongPress } from '@/hooks/useTouchLongPress';
 import { ItemOptionsModal } from '@/components/modals/ItemOptionsModal';
@@ -240,9 +248,20 @@ const fmtAmt = (val: number | string | null | undefined) => {
 };
 
 let cachedAllMenuItems: MenuItem[] = [];
+let lastPrintedBillTokenId = '';
+let lastPrintedBillTimestamp = 0;
 
 // ── Print final bill ──────────────────────────────────────────────────────────
 function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', settings?: BillSettings) {
+  if (!token) return;
+  const now = Date.now();
+  const tokenKey = `${token.id || token.tokenNumber}_${token.total}`;
+  if (lastPrintedBillTokenId === tokenKey && (now - lastPrintedBillTimestamp) < 3500) {
+    console.warn('[MainPOS] Duplicate printFinalBill call suppressed for token:', tokenKey);
+    return;
+  }
+  lastPrintedBillTokenId = tokenKey;
+  lastPrintedBillTimestamp = now;
   const invokePrint = async () => {
     const userRest = useAuthStore.getState().user?.restaurant as any;
     const finalRestaurantName = (settings as any)?.restaurantName || userRest?.name || (bakeryName !== 'SMARTGONEXT Bakery' ? bakeryName : '') || 'SMARTGONEXT Bakery';
@@ -1637,14 +1656,18 @@ export default function MainPOSTerminal() {
     queryKey: ['mainpos-bill-settings', authToken],
     queryFn: async () => {
       const { data } = await api.get('/bill-settings');
+      if (data?.data) setCachedSettings('main', data.data);
       return data.data;
     },
+    initialData: () => getCachedSettings('main') || undefined,
     enabled: !!authToken,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
 
-  // Keep currentToken in sync when external token events arrive & auto-trigger bill on payment
+  // Keep currentToken in sync when external token events arrive & auto-trigger bill on external UPI payment
   useEffect(() => {
-    const handler = async (e: any) => {
+    const handlePaid = async (e: any) => {
       try {
         const detail = e?.detail;
         const payload = detail?.token ?? detail;
@@ -1670,14 +1693,15 @@ export default function MainPOSTerminal() {
         if (latestToken) {
           setCurrentToken(latestToken);
 
-          // If payment was completed automatically (via QR scan / Webhook / Socket), trigger bill & reset
-          if (latestToken.status === 'paid') {
+          // Only auto-print from socket if terminal was actively waiting for customer QR UPI scan!
+          // Normal counter checkout via Cash/Card/UPI button is printed directly in processPayment.
+          if (latestToken.status === 'paid' && awaitingUPIPayment) {
             playTokenSound();
             setPaidSuccess(true);
             setAwaitingUPIPayment(false);
             setPendingUpiPayment(null);
             if (socket) socket.emit('customer_display_reset', { restaurantId: activeRestaurantId });
-            toast.success('🎉 Payment Received! Printing Bill automatically...');
+            toast.success('🎉 UPI Payment Received! Printing Bill...');
             printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
             setTimeout(() => {
               setPaidSuccess(false);
@@ -1685,23 +1709,42 @@ export default function MainPOSTerminal() {
               setLocalCart([]);
               setCustomerName('');
               setCustomerPhone('');
-            }, 3000);
+            }, 2500);
           }
         }
       } catch (err) {}
     };
-    window.addEventListener('token_updated', handler as EventListener);
-    window.addEventListener('token_paid', handler as EventListener);
-    return () => {
-      window.removeEventListener('token_updated', handler as EventListener);
-      window.removeEventListener('token_paid', handler as EventListener);
+
+    const handleUpdated = (e: any) => {
+      try {
+        const detail = e?.detail;
+        const payload = detail?.token ?? detail;
+        const eventId = payload?.id ?? payload?.token?.id ?? detail?.tokenId ?? null;
+        if (currentToken && eventId && currentToken.id === eventId && payload && Array.isArray(payload.items)) {
+          setCurrentToken(prev => prev ? { ...prev, ...payload } : payload);
+        }
+      } catch (err) {}
     };
-  }, [currentToken, api, socket, activeRestaurantId, billSettings, user?.restaurant?.name]);
+
+    window.addEventListener('token_paid', handlePaid as EventListener);
+    window.addEventListener('token_updated', handleUpdated as EventListener);
+    return () => {
+      window.removeEventListener('token_paid', handlePaid as EventListener);
+      window.removeEventListener('token_updated', handleUpdated as EventListener);
+    };
+  }, [currentToken, api, socket, activeRestaurantId, billSettings, user?.restaurant?.name, awaitingUPIPayment]);
 
   const { data: allItems = [] } = useQuery<MenuItem[]>({
     queryKey: ['mainpos-items', authToken],
-    queryFn: async () => { const { data } = await api.get('/items'); return data.data; },
+    queryFn: async () => {
+      const { data } = await api.get('/items');
+      if (Array.isArray(data?.data)) setCachedMenuItems('main', data.data);
+      return data.data;
+    },
+    initialData: () => getCachedMenuItems('main'),
     enabled: !!authToken,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
 
   useEffect(() => {
@@ -1711,8 +1754,15 @@ export default function MainPOSTerminal() {
   }, [allItems]);
   const { data: categories = [] } = useQuery<Category[]>({
     queryKey: ['mainpos-categories', authToken],
-    queryFn: async () => { const { data } = await api.get('/categories'); return data.data; },
+    queryFn: async () => {
+      const { data } = await api.get('/categories');
+      if (Array.isArray(data?.data)) setCachedCategories('main', data.data);
+      return data.data;
+    },
+    initialData: () => getCachedCategories('main'),
     enabled: !!authToken,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
   const { data: loyaltyConfig } = useQuery({
     queryKey: ['mainpos-loyalty-config', authToken],
