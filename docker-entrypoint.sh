@@ -53,6 +53,19 @@ case "$DATABASE_URL" in
     else
       echo "[entrypoint] Verified existing SQLite database at $DB_FILE"
     fi
+
+    # Ensure full read/write permissions on database directory and file for WAL journals
+    chmod -R 777 "$DB_DIR" 2>/dev/null || true
+    if [ -f "$DB_FILE" ]; then
+      chmod 666 "$DB_FILE" 2>/dev/null || true
+    fi
+
+    # Defensive duplicate for Prisma relative resolution quirk
+    mkdir -p "$DB_DIR/prisma" 2>/dev/null || true
+    if [ -f "$DB_FILE" ]; then
+      cp -f "$DB_FILE" "$DB_DIR/prisma/$(basename "$DB_FILE")" 2>/dev/null || true
+      chmod -R 777 "$DB_DIR/prisma" 2>/dev/null || true
+    fi
     ;;
   postgres:*|postgresql:*)
     echo "[entrypoint] PostgreSQL database detected. Updating schema provider..."
@@ -77,3 +90,4 @@ mkdir -p "${UPLOAD_DIR:-/app/apps/api/uploads}"
 
 echo "[entrypoint] Initialization complete. Starting Node.js server..."
 exec "$@"
+

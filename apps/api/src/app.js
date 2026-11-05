@@ -42,15 +42,54 @@ try {
   console.warn('[dotenv] Module not available, skipping:', dotenvErr.message);
 }
 
-// ── Validate required env vars ────────────────────────────────────────────────
-console.info('[env] DATABASE_URL=', process.env.DATABASE_URL || '(not set)');
+// ── Validate and normalize DATABASE_URL to verified absolute path ───────────
+function getNormalizedDatabaseUrl() {
+  const raw = process.env.DATABASE_URL || '';
+  if (!raw.startsWith('file:') && raw !== '') {
+    // Non-sqlite (e.g. postgresql / mysql)
+    return raw;
+  }
+
+  const schemaPrismaDir = path.resolve(__dirname, '..', 'prisma');
+
+  // Candidates for existing database
+  const candidates = [
+    path.join(schemaPrismaDir, 'maligai.db'),
+    path.join(schemaPrismaDir, 'sqlite-template', 'dev.db'),
+    path.resolve(process.cwd(), 'prisma', 'maligai.db'),
+    path.resolve(process.cwd(), 'maligai.db'),
+    '/app/apps/api/prisma/maligai.db',
+  ];
+
+  if (raw.startsWith('file:')) {
+    const rawPath = raw.replace(/^file:/, '');
+    const cleanName = path.basename(rawPath);
+    if (path.isAbsolute(rawPath) && fs.existsSync(rawPath) && fs.statSync(rawPath).size > 1000) {
+      return `file:${rawPath.replace(/\\/g, '/')}`;
+    }
+    const inSchema = path.resolve(schemaPrismaDir, rawPath);
+    if (fs.existsSync(inSchema) && fs.statSync(inSchema).size > 1000) {
+      return `file:${inSchema.replace(/\\/g, '/')}`;
+    }
+    const byName = path.join(schemaPrismaDir, cleanName);
+    if (fs.existsSync(byName) && fs.statSync(byName).size > 1000) {
+      return `file:${byName.replace(/\\/g, '/')}`;
+    }
+  }
+
+  const existing = candidates.find(c => fs.existsSync(c) && fs.statSync(c).size > 10000);
+  if (existing) {
+    return `file:${existing.replace(/\\/g, '/')}`;
+  }
+
+  const defaultTarget = path.join(schemaPrismaDir, 'maligai.db');
+  return `file:${defaultTarget.replace(/\\/g, '/')}`;
+}
+
+process.env.DATABASE_URL = getNormalizedDatabaseUrl();
+console.info('[env] DATABASE_URL (normalized)=', process.env.DATABASE_URL);
 console.info('[env] NODE_ENV=', process.env.NODE_ENV || 'development');
 console.info('[env] PORT=', process.env.PORT || '3001');
-
-if (!process.env.DATABASE_URL) {
-  process.env.DATABASE_URL = 'file:./prisma/maligai.db';
-  console.info('[env] DATABASE_URL was not set, automatically defaulted to:', process.env.DATABASE_URL);
-}
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 import { authRoutes } from './routes/auth/index.js';
