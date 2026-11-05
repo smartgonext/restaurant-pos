@@ -154,18 +154,28 @@ export async function printHtmlOrFallback(html: string, options?: any): Promise<
     doc.write(html);
     doc.close();
 
-    iframe.onload = () => {
+    let hasPrinted = false;
+    const triggerPrint = () => {
+      if (hasPrinted) return;
+      hasPrinted = true;
       try {
         iframe.contentWindow?.focus();
-        iframe.contentWindow?.print(); // Browser shows dialog here — unavoidable without Electron
+        iframe.contentWindow?.print();
         resolve();
       } catch (e) {
         reject(e);
       } finally {
         setTimeout(() => {
           try { document.body.removeChild(iframe); } catch {}
-        }, 2000);
+        }, 1500);
       }
+    };
+
+    // Fast-trigger print after 50ms so print dialog pops up in milliseconds with zero lag
+    const fastTimer = setTimeout(triggerPrint, 50);
+    iframe.onload = () => {
+      clearTimeout(fastTimer);
+      triggerPrint();
     };
   });
 }

@@ -1,4 +1,6 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { QRCodeSVG } from 'qrcode.react';
 import { Navigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMainposStore } from '@/stores/mainposStore';
@@ -435,10 +437,15 @@ function printTokenSlip(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
       restaurantAddress: (settings as any)?.restaurantAddress || userRest?.address || '',
       restaurantPhone: (settings as any)?.restaurantPhone || userRest?.phone || '',
     };
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(token.qrCode)}`;
+    let qrSvgHtml = '';
+    try {
+      qrSvgHtml = renderToStaticMarkup(createElement(QRCodeSVG, { value: token.qrCode || String(token.tokenNumber), size: 160 }));
+    } catch (_) {
+      qrSvgHtml = `<img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(token.qrCode)}" alt="QR"/>`;
+    }
     const html = `
       <!doctype html><html><head><meta charset="utf-8"><title>Token ${token.tokenNumber}</title>
-      <style>body{font-family:Arial,Helvetica,sans-serif;padding:12px;text-align:center;color:#000} img.logo{max-height:45px;max-width:120px;margin:0 auto 4px auto;display:block;} img.qr{width:180px;height:180px;object-fit:contain}</style>
+      <style>body{font-family:Arial,Helvetica,sans-serif;padding:12px;text-align:center;color:#000} img.logo{max-height:45px;max-width:120px;margin:0 auto 4px auto;display:block;} svg{display:block;margin:0 auto;}</style>
       </head><body>
         ${cfg.showLogo && cfg.logoUrl ? `<img class="logo" src="${cfg.logoUrl}" alt="Logo" />` : ''}
         ${cfg.showRestaurantInfo ? `<div style="font-size:12pt;font-weight:700;">${finalRestaurantName}</div>` : ''}
@@ -446,7 +453,7 @@ function printTokenSlip(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
         ${cfg.showPhoneNumber && cfg.restaurantPhone ? `<div style="font-size:8pt;color:#333;">Ph: ${cfg.restaurantPhone}</div>` : ''}
         ${cfg.showTokenNumber ? `<div style="font-size:14pt;font-weight:700;margin-top:4px;">Token #${token.tokenNumber}</div>` : ''}
         ${token.customerName ? `<div style="font-size:10pt;margin-top:4px;">${token.customerName}${cfg.showPhoneNumber && token.customerPhone ? ` · ${token.customerPhone}` : ''}</div>` : ''}
-        <div style="margin:10px 0"><img class="qr" src="${qrUrl}" alt="QR"/></div>
+        <div style="margin:10px 0;display:flex;justify-content:center;">${qrSvgHtml}</div>
         <div style="font-size:10pt;color:#555">Scan to retrieve order</div>
         <div style="font-size:8pt;color:#777;margin-top:8px;font-weight:600;">Powered by SmartGoNext</div>
       </body></html>
@@ -1297,7 +1304,6 @@ export default function MainPOSTerminal() {
   const debouncedCustomerPhone = useDebounce(customerPhone, 300);
 
   const [activeCategory, setActiveCategory] = useState<string>('all');
-  const [showKotShortcuts, setShowKotShortcuts] = useState(false);
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -3050,19 +3056,17 @@ export default function MainPOSTerminal() {
           <button
             type="button"
             onClick={() => {
-              const next = !showKotShortcuts;
-              setShowKotShortcuts(next);
-              if (next) {
+              if (activeCategory === 'kot') {
+                setActiveCategory('all');
+              } else {
                 setActiveCategory('kot');
                 setSearch('');
-              } else if (activeCategory === 'kot') {
-                setActiveCategory('all');
               }
             }}
-            title="KOT Products - View all kitchen & prepared items shortcuts"
+            title="KOT Products - Filter all kitchen & prepared items"
             className={cn(
               "py-1.5 px-2.5 rounded-md text-[11px] font-black uppercase transition flex items-center gap-1.5 shadow-sm cursor-pointer",
-              showKotShortcuts || activeCategory === 'kot'
+              activeCategory === 'kot'
                 ? "bg-amber-500 hover:bg-amber-400 text-black shadow-[0_0_12px_rgba(245,158,11,0.4)]"
                 : (isLight ? "bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300" : "bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 border border-amber-800/60")
             )}
@@ -3070,7 +3074,7 @@ export default function MainPOSTerminal() {
             <span>🍳 KOT P</span>
             <span className={cn(
               "text-[9px] px-1.5 py-0.2 rounded-full font-black",
-              showKotShortcuts || activeCategory === 'kot' ? "bg-black/20 text-black" : "bg-amber-500/20 text-amber-300"
+              activeCategory === 'kot' ? "bg-black/20 text-black" : "bg-amber-500/20 text-amber-300"
             )}>
               {allItems.filter(i => Boolean(i.category?.isKOTEnabled)).length}
             </span>
@@ -3641,51 +3645,6 @@ export default function MainPOSTerminal() {
               storageKey="pos_category_order"
               className="w-full max-w-full min-w-0"
             />
-
-            {/* KOT Quick Shortcuts Tray */}
-            {(showKotShortcuts || activeCategory === 'kot') && (
-              <div className={cn(
-                "p-2.5 rounded-xl border space-y-2 animate-in fade-in slide-in-from-top-2 duration-200 shadow-md",
-                isLight ? "bg-amber-50/90 border-amber-300 text-slate-900" : "bg-[#16130f] border-amber-800/60 text-white"
-              )}>
-                <div className="flex items-center justify-between px-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
-                      🍳 KOT Products & Shortcuts ({allItems.filter(i => Boolean(i.category?.isKOTEnabled)).length})
-                    </span>
-                    <span className="text-[10px] text-gray-400 hidden sm:inline">Tap item to add directly to cart</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => { setShowKotShortcuts(false); if (activeCategory === 'kot') setActiveCategory('all'); }}
-                    className="text-[10px] uppercase font-bold text-gray-400 hover:text-white px-2 py-0.5 rounded bg-black/20 hover:bg-black/50 transition cursor-pointer"
-                  >
-                    Hide ✕
-                  </button>
-                </div>
-                <div className="flex gap-2 overflow-x-auto pb-1.5 pt-0.5 custom-scrollbar no-scrollbar scroll-smooth">
-                  {allItems.filter(i => Boolean(i.category?.isKOTEnabled)).map(kotItem => (
-                    <button
-                      key={kotItem.id}
-                      type="button"
-                      onClick={() => handleAddToCart(kotItem)}
-                      className={cn(
-                        "shrink-0 p-2.5 rounded-xl border text-left transition-all active:scale-95 flex flex-col justify-between min-w-[130px] max-w-[170px] shadow-sm hover:shadow-md cursor-pointer",
-                        isLight
-                          ? "bg-white border-amber-200 hover:border-amber-400 text-slate-900 hover:bg-amber-50"
-                          : "bg-[#1f1a14] border-amber-900/60 hover:border-amber-500 text-white hover:bg-amber-950/40"
-                      )}
-                    >
-                      <div className="text-xs font-black truncate">{kotItem.name}</div>
-                      <div className="flex items-center justify-between mt-2 pt-1 border-t border-amber-500/10">
-                        <span className="text-[11px] font-black text-amber-500">₹{Number(kotItem.price || 0).toFixed(2)}</span>
-                        <span className="text-[9px] font-bold text-gray-400 uppercase bg-amber-500/10 px-1 py-0.2 rounded">+ Add</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
             {filteredItems.length === 0 && search.trim() && (
               <div className={cn(
                 "p-2.5 rounded-xl border flex items-center justify-between gap-3 animate-in fade-in duration-200",

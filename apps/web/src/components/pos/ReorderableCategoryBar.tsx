@@ -232,20 +232,6 @@ export function ReorderableCategoryBar({
         All Items
       </button>
 
-      {/* "KOT Products" Category Button (Pinned after All Items) */}
-      <button
-        type="button"
-        onClick={() => onSelectCategory('kot')}
-        className={cn(
-          chipClass,
-          activeCategoryId === 'kot'
-            ? 'bg-amber-500 border-amber-500 text-black font-black shadow-md'
-            : (isLight ? 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100 shadow-sm' : 'bg-amber-950/30 border-amber-800/60 text-amber-300 hover:bg-amber-900/40')
-        )}
-      >
-        🍳 KOT Products
-      </button>
-
       {/* Reorderable Category Buttons */}
       {orderedCategories.map((cat) => {
         const catIdStr = String(cat.id);
