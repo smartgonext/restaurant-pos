@@ -460,7 +460,194 @@ export async function subposRoutes(app) {
             await recalculateTokenTotals(token.id, prisma);
             const updated = await prisma.bakeryToken.findUnique({
                 where: { id: token.id },
-                include: { items: { where: { isRemoved: false } } },
+                include: { items: { where: { isRemoved: false }, include: { menuItem: true } } },
+            });
+            emitToRestaurant(restaurantId, 'token_updated', updated);
+            return { success: true, data: updated };
+        }
+        catch (err) {
+            return reply.status(400).send({ success: false, error: err?.message });
+        }
+    });
+
+    // ── POST /api/subpos/token/:qr/items/bulk ── add multiple items atomically (FAST)
+    app.post('/token/:qr/items/bulk', async (request, reply) => {
+        const restaurantId = request.restaurantId;
+        const { qr } = request.params;
+        const terminalName = request.user?.username ?? 'Sub POS';
+        const groupIds = getGroupIds(request.user);
+        const schema = z.object({
+            items: z.array(z.object({
+                menuItemId: z.number(),
+                quantity: z.number().positive(),
+                inventoryItemMRPId: z.number().optional(),
+                purchaseRate: z.coerce.number().optional(),
+                linePrice: z.number().positive().optional(),
+                menuItemName: z.string().min(1).optional(),
+            })).min(1),
+            staffId: z.number().optional(),
+        });
+        try {
+            const body = schema.parse(request.body);
+            const token = await prisma.bakeryToken.findFirst({
+                where: { qrCode: qr, restaurantId },
+                include: { order: true }
+            });
+            if (!token)
+                return reply.status(404).send({ success: false, error: 'Token not found' });
+            if (token.status === 'paid' || token.status === 'cancelled') {
+                return reply.status(400).send({ success: false, error: 'Token is already closed or paid' });
+            }
+            const itemsToCreate = [];
+            const kotItemsData = [];
+            for (const i of body.items) {
+                const mi = await prisma.menuItem.findFirst({
+                    where: { id: i.menuItemId, restaurantId, isDeleted: false },
+                    include: { category: { include: { group: true } } }
+                });
+                if (mi) {
+                    if (groupIds.length > 0 && mi.categoryId && !groupIds.includes(mi.categoryId)) {
+                        continue;
+                    }
+                    itemsToCreate.push({
+                        tokenId: token.id,
+                        menuItemId: i.menuItemId,
+                        menuItemName: i.menuItemName || mi.name,
+                        price: i.linePrice ?? mi.price,
+                        quantity: Number(i.quantity),
+                        total: Number(i.linePrice ?? mi.price) * Number(i.quantity),
+                        addedBy: `subpos:${terminalName}`,
+                        inventoryItemMRPId: i.inventoryItemMRPId ?? undefined,
+                        purchaseRate: i.purchaseRate ?? undefined,
+                    });
+                    const isKot = !mi.category || (mi.category.group && typeof mi.category.group.isKOTEnabled === 'boolean' ? mi.category.group.isKOTEnabled : mi.category.isKOTEnabled);
+                    if (isKot) {
+                        kotItemsData.push({
+                            menuItemId: mi.id,
+                            quantity: normalizeKotQty(Number(i.quantity)),
+                            price: mi.price,
+                        });
+                    }
+                }
+            }
+            const createdKotsBulk = [];
+            await prisma.$transaction(async (tx) => {
+                if (itemsToCreate.length > 0) {
+                    await tx.bakeryTokenItem.createMany({ data: itemsToCreate });
+                }
+                if (kotItemsData.length > 0) {
+                    const settings = await tx.restaurantSettings.findUnique({ where: { restaurantId } });
+                    let orderId = token.orderId;
+                    if (!orderId) {
+                        const subtotal = kotItemsData.reduce((s, i) => s + (Number(i.price) * Number(i.quantity)), 0);
+                        const order = await tx.order.create({
+                            data: {
+                                restaurantId,
+                                branchId: token.branchId,
+                                orderNumber: `${settings?.orderPrefix || 'ORD'}-TEMP`,
+                                type: 'token',
+                                subtotal,
+                                total: subtotal,
+                                status: 'running',
+                                staffId: body.staffId ?? null
+                            }
+                        });
+                        const finalOrderNumber = `${settings?.orderPrefix || 'ORD'}-${String(order.id).padStart(5, '0')}`;
+                        await tx.order.update({ where: { id: order.id }, data: { orderNumber: finalOrderNumber } });
+                        orderId = order.id;
+                        await tx.bakeryToken.update({ where: { id: token.id }, data: { orderId } });
+                    } else if (body.staffId) {
+                        await tx.order.update({ where: { id: orderId }, data: { staffId: body.staffId } });
+                    }
+                    const kot = await tx.kOT.create({
+                        data: {
+                            orderId,
+                            restaurantId,
+                            kotNumber: `${settings?.kotPrefix || 'KOT'}-TEMP`,
+                            createdByTerminalId: request.user?.terminalId ?? null,
+                            createdByTerminalName: terminalName ?? request.user?.username ?? null,
+                            createdByTerminalType: 'subpos',
+                            items: { create: kotItemsData }
+                        },
+                        include: { items: { include: { menuItem: true } } }
+                    });
+                    const finalKotNumber = `${settings?.kotPrefix || 'KOT'}-${String(kot.id).padStart(5, '0')}`;
+                    await tx.kOT.update({ where: { id: kot.id }, data: { kotNumber: finalKotNumber } });
+                    if (kot?.id) createdKotsBulk.push(kot.id);
+                    emitToRestaurant(restaurantId, 'new_kot', {
+                        id: orderId,
+                        kots: [kot],
+                        createdByTerminalId: request.user?.terminalId,
+                        createdByTerminalName: terminalName,
+                        createdByTerminalType: 'subpos',
+                    });
+                }
+            });
+            await recalculateTokenTotals(token.id, prisma);
+            const updated = await prisma.bakeryToken.findUnique({
+                where: { id: token.id },
+                include: { items: { where: { isRemoved: false }, include: { menuItem: true } }, payments: true, customer: true },
+            });
+            emitToRestaurant(restaurantId, 'token_updated', updated);
+            for (const kid of createdKotsBulk) {
+                try {
+                    await applyKOTConsumption(kid, prisma);
+                } catch (err) {
+                    app.log.warn({ err }, `KOT consume failed ${kid}`);
+                }
+            }
+            return { success: true, data: updated };
+        } catch (err) {
+            return reply.status(400).send({ success: false, error: err?.message });
+        }
+    });
+
+    // ── DELETE /api/subpos/token/:qr/items/:itemId ── remove item from token on customer request
+    app.delete('/token/:qr/items/:itemId', async (request, reply) => {
+        const restaurantId = request.restaurantId;
+        const { qr, itemId } = request.params;
+        const terminalName = request.user?.username ?? 'Sub POS';
+        try {
+            const token = await prisma.bakeryToken.findFirst({ where: { qrCode: qr, restaurantId } });
+            if (!token)
+                return reply.status(404).send({ success: false, error: 'Token not found' });
+            if (token.status === 'paid' || token.status === 'cancelled') {
+                return reply.status(400).send({ success: false, error: 'Token is already closed or paid' });
+            }
+            const item = await prisma.bakeryTokenItem.findFirst({
+                where: { id: Number(itemId), tokenId: token.id, isRemoved: false },
+            });
+            if (!item)
+                return reply.status(404).send({ success: false, error: 'Item not found or already removed' });
+
+            await prisma.bakeryTokenItem.update({
+                where: { id: item.id },
+                data: { isRemoved: true, removedAt: new Date(), removedBy: terminalName, removeReason: 'Customer request at SubPOS' },
+            });
+
+            try {
+                await prisma.auditLog.create({
+                    data: {
+                        restaurantId,
+                        branchId: token.branchId,
+                        action: 'SUBPOS_DELETE_ITEM',
+                        reason: 'Customer request at SubPOS',
+                        referenceId: token.tokenNumber.toString(),
+                        details: JSON.stringify({
+                            tokenId: token.id,
+                            menuItemName: item.menuItemName,
+                            oldQty: item.quantity,
+                            newQty: 0,
+                            staffUsername: terminalName,
+                        }),
+                    },
+                });
+            } catch (e) {}
+
+            await recalculateTokenTotals(token.id, prisma);
+            const updated = await prisma.bakeryToken.findUnique({
+                where: { id: token.id },
+                include: { items: { where: { isRemoved: false }, include: { menuItem: true } }, payments: true, customer: true },
             });
             emitToRestaurant(restaurantId, 'token_updated', updated);
             return { success: true, data: updated };
@@ -485,47 +672,82 @@ export async function subposRoutes(app) {
             return reply.status(404).send({ success: false, error: 'Token not found' });
         return { success: true, data: token };
     });
-    // ── POST /api/subpos/token/lookup ── find token by QR or number
+    // ── POST /api/subpos/token/lookup ── find token by QR or number (INSTANT)
     app.post('/token/lookup', async (request, reply) => {
         const restaurantId = request.restaurantId;
         const schema = z.object({
             qrCode: z.string().optional(),
-            tokenNumber: z.number().optional(),
-        }).refine((d) => d.qrCode || d.tokenNumber, { message: 'Provide qrCode or tokenNumber' });
+            tokenNumber: z.union([z.number(), z.string()]).optional(),
+        }).refine((d) => d.qrCode || d.tokenNumber !== undefined, { message: 'Provide qrCode or tokenNumber' });
         try {
             const body = schema.parse(request.body);
-            const where = { restaurantId };
-            if (body.qrCode)
-                where.qrCode = body.qrCode;
-            else {
-                const todayStart = new Date();
-                todayStart.setHours(0, 0, 0, 0);
-                where.tokenNumber = body.tokenNumber;
-                where.createdAt = { gte: todayStart };
+            let rawCode = (body.qrCode || (body.tokenNumber !== undefined ? String(body.tokenNumber) : '')).trim();
+
+            // Extract from URL if full URL is scanned: e.g. "http://.../token/XYZ" -> "XYZ"
+            const urlMatch = rawCode.match(/\/token\/([a-zA-Z0-9\-]+)/);
+            if (urlMatch) {
+                rawCode = urlMatch[1];
             }
-            let token = await prisma.bakeryToken.findFirst({
-                where,
-                include: {
-                    items: { include: { menuItem: true } },
-                    payments: true,
-                    edits: true,
-                    customer: true,
-                },
-                orderBy: { createdAt: 'desc' },
-            });
-            if (!token && body.tokenNumber) {
-                // Fallback without todayStart restriction
+            // Strip any leading # or TOK- or TOKEN- e.g. "#12" -> "12", "TOK-12" -> "12"
+            const tokMatch = rawCode.match(/^(?:TOK(?:EN)?[-_ ]?|#)(\d+)$/i);
+            const tokenNum = tokMatch ? parseInt(tokMatch[1], 10) : (/^\d+$/.test(rawCode) ? parseInt(rawCode, 10) : null);
+
+            let token = null;
+
+            // 1. Direct Unique qrCode lookup (Instant O(1))
+            if (!tokenNum && rawCode) {
                 token = await prisma.bakeryToken.findFirst({
-                    where: { restaurantId, tokenNumber: body.tokenNumber },
+                    where: { restaurantId, qrCode: rawCode },
                     include: {
-                        items: { include: { menuItem: true } },
+                        items: { where: { isRemoved: false }, include: { menuItem: true } },
                         payments: true,
                         edits: true,
                         customer: true,
                     },
-                    orderBy: { createdAt: 'desc' },
                 });
             }
+
+            // 2. Token number lookup (today first, then fallback)
+            if (!token && tokenNum !== null) {
+                const todayStart = new Date();
+                todayStart.setHours(0, 0, 0, 0);
+                token = await prisma.bakeryToken.findFirst({
+                    where: { restaurantId, tokenNumber: tokenNum, createdAt: { gte: todayStart } },
+                    include: {
+                        items: { where: { isRemoved: false }, include: { menuItem: true } },
+                        payments: true,
+                        edits: true,
+                        customer: true,
+                    },
+                    orderBy: { id: 'desc' },
+                });
+                if (!token) {
+                    token = await prisma.bakeryToken.findFirst({
+                        where: { restaurantId, tokenNumber: tokenNum },
+                        include: {
+                            items: { where: { isRemoved: false }, include: { menuItem: true } },
+                            payments: true,
+                            edits: true,
+                            customer: true,
+                        },
+                        orderBy: { id: 'desc' },
+                    });
+                }
+            }
+
+            // 3. Fallback: maybe qrCode matched rawCode even if numeric
+            if (!token && rawCode) {
+                token = await prisma.bakeryToken.findFirst({
+                    where: { restaurantId, qrCode: rawCode },
+                    include: {
+                        items: { where: { isRemoved: false }, include: { menuItem: true } },
+                        payments: true,
+                        edits: true,
+                        customer: true,
+                    },
+                });
+            }
+
             if (!token)
                 return reply.status(404).send({ success: false, error: 'Token not found' });
             return { success: true, data: token };

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, createElement } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, createElement, memo } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QRCodeSVG } from 'qrcode.react';
 import { Navigate } from 'react-router-dom';
@@ -204,6 +204,7 @@ function printTokenSlip(
   customerPhone?: string,
   bakeryName = 'SMARTGONEXT Bakery',
   settings?: BillSettings,
+  options?: { isAppend?: boolean; isReprint?: boolean }
 ) {
   const invokePrint = async () => {
     const userRest = useAuthStore.getState().user?.restaurant as any;
@@ -230,6 +231,16 @@ function printTokenSlip(
     const tokenNum = token.tokenNumber || token.id;
     const resolvedCustName = customerName || token.customerName || '';
     const resolvedCustPhone = customerPhone || token.customerPhone || '';
+    const isAppend = Boolean(options?.isAppend);
+    const isReprint = Boolean(options?.isReprint);
+
+    // Subtotal of newly printed items on this slip
+    const slipItemsSubtotal = tokenItemsList.reduce((sum: number, it: any) => {
+      const p = Number(it.price || 0);
+      const q = Number(it.quantity || 1);
+      return sum + Number(it.total || (p * q));
+    }, 0);
+
     const html = `
       <!doctype html><html><head><meta charset="utf-8"><title>Token ${tokenNum}</title>
       <style>body{font-family:Arial,Helvetica,sans-serif;padding:12px;text-align:center;color:#000;margin:0} img.logo{max-height:45px;max-width:120px;margin:0 auto 4px auto;display:block;} svg{display:block;margin:0 auto;}</style>
@@ -238,10 +249,12 @@ function printTokenSlip(
         ${cfg.showRestaurantInfo ? `<div style="font-size:12pt;font-weight:700;">${finalRestaurantName}</div>` : ''}
         ${cfg.showRestaurantInfo && cfg.restaurantAddress ? `<div style="font-size:8pt;color:#333;">${cfg.restaurantAddress}</div>` : ''}
         ${cfg.showPhoneNumber && cfg.restaurantPhone ? `<div style="font-size:8pt;color:#333;">Ph: ${cfg.restaurantPhone}</div>` : ''}
-        ${cfg.showTokenNumber ? `<div style="font-size:14pt;font-weight:700;margin-top:4px;">Token #${tokenNum}</div>` : ''}
+        ${cfg.showTokenNumber ? `<div style="font-size:15pt;font-weight:900;margin-top:4px;">Token #${tokenNum} ${isReprint ? '<span style="font-size:10pt;color:#555;">[REPRINT]</span>' : ''}</div>` : ''}
+        ${isAppend ? `<div style="font-size:9.5pt;font-weight:800;color:#b91c1c;background:#fee2e2;padding:2px 8px;border-radius:4px;display:inline-block;margin:4px 0;letter-spacing:0.5px;">*** ADD-ON / NEW ITEMS ONLY ***</div>` : ''}
         ${resolvedCustName ? `<div style="font-size:10pt;margin-top:4px;">${resolvedCustName}${cfg.showPhoneNumber && resolvedCustPhone ? ` · ${resolvedCustPhone}` : ''}</div>` : ''}
         ${tokenItemsList.length > 0 ? `
           <div style="margin: 8px 0; border-top: 1px dashed #aaa; border-bottom: 1px dashed #aaa; padding: 6px 0; font-size: 9pt; text-align: left;">
+            <div style="font-size:8pt;font-weight:700;color:#666;margin-bottom:4px;text-transform:uppercase;">${isAppend ? 'Newly Added Items' : 'Order Items'}</div>
             ${tokenItemsList.map((it: any) => `
               <div style="display:flex; justify-content:space-between; margin-bottom: 3px;">
                 <span>${it.displayName || it.menuItemName || it.name || 'Item'} x ${it.quantity}</span>
@@ -250,8 +263,20 @@ function printTokenSlip(
             `).join('')}
           </div>
         ` : ''}
-        <div style="font-size:10pt;margin-top:4px;">Total Items: <strong>${totalItems}</strong></div>
-        <div style="font-size:12pt;font-weight:700;margin-top:6px;">Total: <strong>${totalAmt}</strong></div>
+        ${isAppend ? `
+          <div style="display:flex; justify-content:space-between; font-size:9pt; color:#444; margin-top:2px;">
+            <span>New Items Count:</span><strong>${tokenItemsList.length}</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:9.5pt; color:#444; margin-top:2px;">
+            <span>New Items Total:</span><strong>₹${slipItemsSubtotal.toFixed(2)}</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:12pt; font-weight:800; margin-top:6px; border-top:1px solid #333; padding-top:4px;">
+            <span>Overall Token Total:</span><strong>${totalAmt}</strong>
+          </div>
+        ` : `
+          <div style="font-size:10pt;margin-top:4px;">Total Items: <strong>${totalItems}</strong></div>
+          <div style="font-size:12pt;font-weight:700;margin-top:6px;">Total: <strong>${totalAmt}</strong></div>
+        `}
         <div style="margin:10px 0;display:flex;justify-content:center;">${qrSvgHtml}</div>
         <div style="font-size:10pt;color:#555">Scan to retrieve order</div>
         <div style="font-size:8pt;color:#777;margin-top:8px;font-weight:600;">Powered by SmartGoNext</div>
@@ -263,8 +288,8 @@ function printTokenSlip(
   invokePrint().catch(err => console.error('Print token failed', err));
 }
 
-// ── Touch Menu Item Card Component ──────────────────────────────────────────
-function TouchMenuItemCard({
+// ── Touch Menu Item Card Component (Memoized for Butter-Smooth 60fps POS Touch) ──
+const TouchMenuItemCard = memo(function TouchMenuItemCard({
   item,
   isLight,
   isDisabled,
@@ -333,7 +358,7 @@ function TouchMenuItemCard({
       </div>
     </div>
   );
-}
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QUANTITY EDITOR MODAL (Auto-selects on open, permits multi-digit input 10, 15, etc.)
@@ -991,6 +1016,37 @@ export default function SubPOSTerminal() {
     setCustomerPhone('');
   };
 
+  const handleRemoveExistingTokenItem = async (item: LocalCartItem) => {
+    if (!loadedToken) return;
+    const dbItemId = item.id.startsWith('existing-') ? item.id.replace('existing-', '') : item.id;
+    try {
+      const { data } = await subposApi.delete(`/token/${loadedToken.qrCode}/items/${dbItemId}`);
+      if (data.success && data.data) {
+        const updatedToken = data.data;
+        setLoadedToken(updatedToken);
+        const mapped: LocalCartItem[] = (updatedToken.items || [])
+          .filter((i: any) => !i.isRemoved)
+          .map((i: any): LocalCartItem => ({
+            id: `existing-${i.id}`,
+            menuItemId: i.menuItemId ?? i.menuItem?.id,
+            name: i.menuItem?.name || i.menuItemName || 'Item',
+            displayName: i.menuItemName || i.menuItem?.name || 'Item',
+            price: Number(i.price ?? 0),
+            quantity: Number(i.quantity ?? 0),
+            salesUnit: i.menuItem?.salesUnit ?? null,
+            inventoryItemMRPId: i.inventoryItemMRPId ?? undefined,
+            purchaseRate: i.purchaseRate !== undefined ? Number(i.purchaseRate) : undefined,
+            profitPercent: i.profitPercent !== undefined ? Number(i.profitPercent) : undefined,
+          }));
+        setExistingTokenItems(mapped);
+        playDeleteSound();
+        toast.success(`Removed ${item.displayName || item.name} from token`);
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to remove item');
+    }
+  };
+
   // ── Pack options helpers ──
   const getPackOptions = (item: MenuItem): PosPackOption[] => {
     if (!item?.enablePackOptions) return [];
@@ -1045,12 +1101,19 @@ export default function SubPOSTerminal() {
     const code = String(rawBarcode || '').trim();
     if (!code) return false;
 
-    // 1. Token QR code / Token Number detection (UUID or TOK-xxx)
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(code);
-    const isTokPrefix = /^TOK-?\d+$/i.test(code);
+    // Clean URL if full URL is scanned (e.g. 2D scanner reading full URL or path)
+    let scannedTokenCode = code;
+    const urlMatch = code.match(/\/token\/([a-zA-Z0-9\-]+)/);
+    if (urlMatch) {
+      scannedTokenCode = urlMatch[1];
+    }
+
+    // 1. Token QR code / Token Number detection (UUID, TOK-xxx, TOKEN-xxx, or #xxx)
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(scannedTokenCode);
+    const isTokPrefix = /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(scannedTokenCode);
     if (isUuid || isTokPrefix) {
       setSearchQuery('');
-      lookupToken(code);
+      lookupToken(scannedTokenCode);
       return true;
     }
 
@@ -1680,6 +1743,7 @@ export default function SubPOSTerminal() {
       }));
 
       if (!loadedToken) {
+        isAppendingRef.current = false;
         const { data } = await subposApi.post('/token/create', {
           items: itemsPayload,
           customerName: resolvedCustName,
@@ -1688,10 +1752,11 @@ export default function SubPOSTerminal() {
         }, { headers });
         return { ...(data.data as TokenResult), itemCount: localCart.length };
       } else {
-        for (const it of itemsPayload) {
-          await subposApi.post(`/token/${loadedToken.qrCode}/items`, { ...it, staffId: user?.id }, { headers });
-        }
-        const { data } = await subposApi.get(`/token/${loadedToken.qrCode}`, { headers });
+        isAppendingRef.current = true;
+        const { data } = await subposApi.post(`/token/${loadedToken.qrCode}/items/bulk`, {
+          items: itemsPayload,
+          staffId: user?.id,
+        }, { headers });
         const t = data.data;
         return {
           tokenId: t.id, tokenNumber: t.tokenNumber, qrCode: t.qrCode, qrUrl: `/token/${t.qrCode}`,
@@ -1708,7 +1773,15 @@ export default function SubPOSTerminal() {
       const resolvedCustName = customerName?.trim() || 'Walk-in Customer';
       const pSettings = getPrinterSettings(billSettings as any);
       if (pSettings.autoPrintBill) {
-        printTokenSlip(result, localCart, resolvedCustName, customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings);
+        printTokenSlip(
+          result,
+          localCart,
+          resolvedCustName,
+          customerPhone,
+          terminal?.name || 'SMARTGONEXT Bakery',
+          billSettings,
+          { isAppend: isAppendingRef.current }
+        );
       }
 
       // Check if cart contains any KOT items and print to dedicated KOT printer
@@ -2322,7 +2395,7 @@ export default function SubPOSTerminal() {
               </button>
             </div>
             {loadedToken && (
-              <div className={cn("p-2.5 border rounded-md flex flex-col gap-1 relative overflow-hidden", isLight ? "bg-slate-100 border-slate-300 text-slate-900" : "bg-[#0f1014] border-gray-800 text-white")}>
+              <div className={cn("p-2.5 border rounded-md flex flex-col gap-1.5 relative overflow-hidden", isLight ? "bg-slate-100 border-slate-300 text-slate-900" : "bg-[#0f1014] border-gray-800 text-white")}>
                 <div className="absolute top-0 right-0 p-1.5 opacity-10"><Tag className="w-16 h-16" /></div>
                 <div className="flex justify-between items-center relative z-10">
                   <span className={cn("text-sm font-black", isLight ? "text-slate-900" : "text-white")}>Token #{loadedToken.tokenNumber}</span>
@@ -2338,6 +2411,26 @@ export default function SubPOSTerminal() {
                     {loadedToken.customerName} {loadedToken.customerPhone ? `(${loadedToken.customerPhone})` : ''}
                   </div>
                 )}
+                <div className="flex gap-2 mt-1 relative z-10">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      printTokenSlip(loadedToken, loadedToken.items || [], loadedToken.customerName, loadedToken.customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings, { isReprint: true });
+                      toast.success(`Reprinting Token #${loadedToken.tokenNumber}`);
+                    }}
+                    className="flex-1 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded text-[10px] font-black uppercase flex items-center justify-center gap-1 shadow-sm transition active:scale-95"
+                    title="Print full updated token slip for customer"
+                  >
+                    <Printer className="w-3.5 h-3.5" /> Print Token
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearToken}
+                    className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded text-[10px] font-black uppercase transition active:scale-95"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -2414,22 +2507,32 @@ export default function SubPOSTerminal() {
                       {existingTokenItems.map((item) => {
                         const mi = allItems.find(ai => ai.id === item.menuItemId);
                         return (
-                          <div key={item.id} className={cn("flex gap-3 border p-2 rounded transition items-center", isLight ? "bg-slate-50 border-slate-200 hover:border-slate-300" : "bg-[#0f1014] border-gray-800/60 hover:border-gray-700")}>
-                            <img
-                              src={resolveImageUrl(mi?.image ?? null) || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name)}&background=1a1c23&color=fff`}
-                              alt={item.name}
-                              className="w-12 h-12 rounded-md object-cover flex-shrink-0"
-                              onError={(e) => {
-                                e.currentTarget.onerror = null;
-                                e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name)}&background=1a1c23&color=fff`;
-                              }}
-                            />
-                            <div className="flex-1 min-w-0">
-                              <h4 className={cn("text-xs font-bold uppercase truncate leading-tight", isLight ? "text-slate-900" : "text-white")}>{item.displayName || item.name}</h4>
-                              <div className={cn("text-[11px] font-bold mt-1", isLight ? "text-slate-500" : "text-gray-500")}>
-                                ₹{Number(item.price).toFixed(2)} × {formatQtyDisplay(Number(item.quantity || 0), item.salesUnit)} = {formatCurrency(item.price * item.quantity)}
+                          <div key={item.id} className={cn("flex gap-3 border p-2 rounded transition items-center justify-between", isLight ? "bg-slate-50 border-slate-200 hover:border-slate-300" : "bg-[#0f1014] border-gray-800/60 hover:border-gray-700")}>
+                            <div className="flex gap-2.5 items-center min-w-0 flex-1">
+                              <img
+                                src={resolveImageUrl(mi?.image ?? null) || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name)}&background=1a1c23&color=fff`}
+                                alt={item.name}
+                                className="w-10 h-10 rounded-md object-cover flex-shrink-0"
+                                onError={(e) => {
+                                  e.currentTarget.onerror = null;
+                                  e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name)}&background=1a1c23&color=fff`;
+                                }}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <h4 className={cn("text-xs font-bold uppercase truncate leading-tight", isLight ? "text-slate-900" : "text-white")}>{item.displayName || item.name}</h4>
+                                <div className={cn("text-[11px] font-bold mt-1", isLight ? "text-slate-500" : "text-gray-500")}>
+                                  ₹{Number(item.price).toFixed(2)} × {formatQtyDisplay(Number(item.quantity || 0), item.salesUnit)} = {formatCurrency(item.price * item.quantity)}
+                                </div>
                               </div>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveExistingTokenItem(item)}
+                              className="p-2 text-red-500 hover:text-red-700 hover:bg-red-500/10 rounded-lg transition active:scale-95 flex-shrink-0 ml-1"
+                              title="Remove item from this token"
+                            >
+                              <Trash2 size={16} />
+                            </button>
                           </div>
                         );
                       })}

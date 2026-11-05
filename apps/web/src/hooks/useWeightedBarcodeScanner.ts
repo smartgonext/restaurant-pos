@@ -58,11 +58,8 @@ export function useWeightedBarcodeScanner(
     const validation = isValidBarcode(clean);
     
     if (!validation.valid) {
-      console.warn('[WeightedScanner] Invalid format:', clean, validation.reason);
       return;
     }
-
-    console.log('[WeightedScanner] Processing barcode/QR:', clean);
 
     // Try to extract weight if numeric and likely weight-based
     const weightResult = isLikelyWeightBased(clean) ? parseWeightFromBarcode(clean) : null;

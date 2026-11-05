@@ -396,47 +396,82 @@ export async function mainposRoutes(app) {
         });
         return { success: true, data: categories };
     });
-    // ── POST /api/mainpos/token/lookup ── find token by QR or number
+    // ── POST /api/mainpos/token/lookup ── find token by QR or number (INSTANT)
     app.post('/token/lookup', async (request, reply) => {
         const restaurantId = request.restaurantId;
         const schema = z.object({
             qrCode: z.string().optional(),
-            tokenNumber: z.number().optional(),
-        }).refine((d) => d.qrCode || d.tokenNumber, { message: 'Provide qrCode or tokenNumber' });
+            tokenNumber: z.union([z.number(), z.string()]).optional(),
+        }).refine((d) => d.qrCode || d.tokenNumber !== undefined, { message: 'Provide qrCode or tokenNumber' });
         try {
             const body = schema.parse(request.body);
-            const where = { restaurantId };
-            if (body.qrCode)
-                where.qrCode = body.qrCode;
-            else {
-                const todayStart = new Date();
-                todayStart.setHours(0, 0, 0, 0);
-                where.tokenNumber = body.tokenNumber;
-                where.createdAt = { gte: todayStart };
+            let rawCode = (body.qrCode || (body.tokenNumber !== undefined ? String(body.tokenNumber) : '')).trim();
+
+            // Extract from URL if full URL is scanned: e.g. "http://.../token/XYZ" -> "XYZ"
+            const urlMatch = rawCode.match(/\/token\/([a-zA-Z0-9\-]+)/);
+            if (urlMatch) {
+                rawCode = urlMatch[1];
             }
-            let token = await prisma.bakeryToken.findFirst({
-                where,
-                include: {
-                    items: { include: { menuItem: true } },
-                    payments: true,
-                    edits: true,
-                    customer: true,
-                },
-                orderBy: { createdAt: 'desc' },
-            });
-            if (!token && body.tokenNumber) {
-                // Fallback without todayStart restriction
+            // Strip any leading # or TOK- or TOKEN- e.g. "#12" -> "12", "TOK-12" -> "12"
+            const tokMatch = rawCode.match(/^(?:TOK(?:EN)?[-_ ]?|#)(\d+)$/i);
+            const tokenNum = tokMatch ? parseInt(tokMatch[1], 10) : (/^\d+$/.test(rawCode) ? parseInt(rawCode, 10) : null);
+
+            let token = null;
+
+            // 1. Direct Unique qrCode lookup (Instant O(1))
+            if (!tokenNum && rawCode) {
                 token = await prisma.bakeryToken.findFirst({
-                    where: { restaurantId, tokenNumber: body.tokenNumber },
+                    where: { restaurantId, qrCode: rawCode },
                     include: {
-                        items: { include: { menuItem: true } },
+                        items: { where: { isRemoved: false }, include: { menuItem: true } },
                         payments: true,
                         edits: true,
                         customer: true,
                     },
-                    orderBy: { createdAt: 'desc' },
                 });
             }
+
+            // 2. Token number lookup (today first, then fallback)
+            if (!token && tokenNum !== null) {
+                const todayStart = new Date();
+                todayStart.setHours(0, 0, 0, 0);
+                token = await prisma.bakeryToken.findFirst({
+                    where: { restaurantId, tokenNumber: tokenNum, createdAt: { gte: todayStart } },
+                    include: {
+                        items: { where: { isRemoved: false }, include: { menuItem: true } },
+                        payments: true,
+                        edits: true,
+                        customer: true,
+                    },
+                    orderBy: { id: 'desc' },
+                });
+                if (!token) {
+                    token = await prisma.bakeryToken.findFirst({
+                        where: { restaurantId, tokenNumber: tokenNum },
+                        include: {
+                            items: { where: { isRemoved: false }, include: { menuItem: true } },
+                            payments: true,
+                            edits: true,
+                            customer: true,
+                        },
+                        orderBy: { id: 'desc' },
+                    });
+                }
+            }
+
+            // 3. Fallback: maybe qrCode matched rawCode even if numeric
+            if (!token && rawCode) {
+                token = await prisma.bakeryToken.findFirst({
+                    where: { restaurantId, qrCode: rawCode },
+                    include: {
+                        items: { where: { isRemoved: false }, include: { menuItem: true } },
+                        payments: true,
+                        edits: true,
+                        customer: true,
+                    },
+                });
+            }
+
             if (!token)
                 return reply.status(404).send({ success: false, error: 'Token not found' });
             return { success: true, data: token };

@@ -59,9 +59,11 @@
           "!prisma/migrations/**",
           "!src/**/*.ts",
           "!tests/**",
-          "!logs/**",
           "!tmp/**",
           "!scratch/**",
+          "!logs/**",
+          "!whisper/**",
+          "!scripts/**",
           "!*.txt"
         ]
       },
@@ -70,6 +72,8 @@
         "to": "api/node_modules",
         "filter": [
           "**/*",
+          "!prisma/**",
+          "!@types/**",
           "!**/.ignored_*/**",
           "!**/.ignored_*",
           "!**/prisma/**",

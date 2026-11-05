@@ -23,8 +23,8 @@ export function useTouchLongPress({
     (e: React.MouseEvent | React.TouchEvent) => {
       const isTouch = 'touches' in e;
 
-      // Filter out synthetic mouse events triggered by touch screens within 800ms
-      if (!isTouch && Date.now() - lastTouchTimeRef.current < 800) {
+      // Filter out synthetic mouse events triggered by touch screens within 400ms
+      if (!isTouch && Date.now() - lastTouchTimeRef.current < 400) {
         return;
       }
 
@@ -76,7 +76,7 @@ export function useTouchLongPress({
       const isTouch = 'changedTouches' in e || 'touches' in e;
 
       // Filter out synthetic mouse events
-      if (!isTouch && Date.now() - lastTouchTimeRef.current < 800) {
+      if (!isTouch && Date.now() - lastTouchTimeRef.current < 400) {
         if (timerRef.current) {
           clearTimeout(timerRef.current);
           timerRef.current = null;
@@ -93,16 +93,16 @@ export function useTouchLongPress({
         timerRef.current = null;
       }
 
-      // CRITICAL: If finger moved (scrolling) or just finished scrolling within 600ms, DO NOT click!
-      if (isMovedRef.current || Date.now() - lastScrollTimeRef.current < 600) {
+      // CRITICAL: If finger moved (scrolling) or just finished scrolling within 120ms, do not trigger tap
+      if (isMovedRef.current || Date.now() - lastScrollTimeRef.current < 120) {
         isMovedRef.current = false;
         return;
       }
 
       if (shouldTriggerClick && !isLongPressRef.current && onClick) {
         const now = Date.now();
-        // Prevent rapid accidental double-invocation within 350ms
-        if (now - lastClickTimeRef.current > 350) {
+        // Prevent rapid hardware bounce within 80ms while keeping fast POS tapping instant
+        if (now - lastClickTimeRef.current > 80) {
           lastClickTimeRef.current = now;
           onClick(e);
         }
@@ -114,15 +114,15 @@ export function useTouchLongPress({
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       // Block synthetic click event after scrolling or touch
-      if (Date.now() - lastScrollTimeRef.current < 600 || isMovedRef.current) {
+      if (Date.now() - lastScrollTimeRef.current < 120 || isMovedRef.current) {
         e.preventDefault();
         e.stopPropagation();
         return;
       }
-      // If pure desktop mouse click (no touch in last 800ms):
-      if (Date.now() - lastTouchTimeRef.current >= 800 && onClick) {
+      // If pure desktop mouse click (no touch in last 400ms):
+      if (Date.now() - lastTouchTimeRef.current >= 400 && onClick) {
         const now = Date.now();
-        if (now - lastClickTimeRef.current > 350) {
+        if (now - lastClickTimeRef.current > 80) {
           lastClickTimeRef.current = now;
           onClick(e);
         }

@@ -2231,12 +2231,19 @@ export default function MainPOSTerminal() {
     const code = String(rawBarcode || '').trim();
     if (!code) return false;
 
-    // 1. Token QR code / Token Number detection (UUID or TOK-xxx)
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(code);
-    const isTokPrefix = /^TOK-?\d+$/i.test(code);
+    // Clean URL if full URL is scanned (e.g. 2D scanner reading full URL or path)
+    let scannedTokenCode = code;
+    const urlMatch = code.match(/\/token\/([a-zA-Z0-9\-]+)/);
+    if (urlMatch) {
+      scannedTokenCode = urlMatch[1];
+    }
+
+    // 1. Token QR code / Token Number detection (UUID, TOK-xxx, TOKEN-xxx, or #xxx)
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(scannedTokenCode);
+    const isTokPrefix = /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(scannedTokenCode);
     if (isUuid || isTokPrefix) {
       setSearch('');
-      lookupToken(code);
+      lookupToken(scannedTokenCode);
       return true;
     }
 

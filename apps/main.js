@@ -114,14 +114,16 @@ async function ensureDatabase() {
     fs.mkdirSync(userDataPath, { recursive: true });
   }
 
-  // Look for template DB in multiple candidate paths
+  // Look for template DB in multiple candidate paths (prioritize latest live maligai.db)
   const templateCandidates = [
+    path.join(process.resourcesPath, "api", "prisma", "maligai.db"),
+    path.join(process.resourcesPath, "api", "maligai.db"),
     path.join(process.resourcesPath, "api", "prisma", "sqlite-template", "dev.db"),
     path.join(process.resourcesPath, "api", "sqlite-template", "dev.db"),
-    path.join(process.resourcesPath, "api", "prisma", "maligai.db"),
+    path.join(app.getAppPath(), "api", "prisma", "maligai.db"),
+    path.join(app.getAppPath(), "api", "maligai.db"),
     path.join(app.getAppPath(), "api", "prisma", "sqlite-template", "dev.db"),
     path.join(app.getAppPath(), "api", "sqlite-template", "dev.db"),
-    path.join(app.getAppPath(), "api", "prisma", "maligai.db"),
   ];
 
   let templateDbPath = null;
@@ -135,8 +137,8 @@ async function ensureDatabase() {
   const forceReset = process.argv.includes('--reset-db');
   const exists = fs.existsSync(dbPath);
   
-  // Auto-upgrade if existing file is an older template (<800KB) and we have the full 843KB+ template
-  const isOldTemplate = exists && templateDbPath && fs.statSync(dbPath).size < 800000 && fs.statSync(templateDbPath).size >= 800000;
+  // Auto-upgrade if existing file is an older template (<900KB) and we have the full 940KB+ template
+  const isOldTemplate = exists && templateDbPath && fs.statSync(dbPath).size < 900000 && fs.statSync(templateDbPath).size >= 900000;
 
   if (exists && !forceReset && !isOldTemplate) {
     console.log('[OK] Database already exists at:', dbPath, `(size: ${fs.statSync(dbPath).size} bytes)`);
