@@ -196,6 +196,7 @@ export async function backupRoutes(app) {
         const fileStream = fs.createReadStream(dbPath);
         reply.header('Content-Type', 'application/octet-stream');
         reply.header('Content-Disposition', `attachment; filename="amora_database_backup_${Date.now()}.db"`);
+        reply.header('Access-Control-Expose-Headers', 'Content-Disposition');
         return reply.send(fileStream);
       }
 
@@ -233,8 +234,23 @@ export async function backupRoutes(app) {
 
       const archive = archiver('zip', { store: true }); // store=true keeps zip generation super fast (images already compressed)
 
+      archive.on('warning', (err) => {
+        app.log.warn({ err }, 'Archiver warning during backup');
+      });
+      archive.on('error', (err) => {
+        app.log.error(err, 'Archiver error during backup');
+        try {
+          if (!reply.raw.headersSent) {
+            reply.status(500).send({ success: false, error: err.message });
+          } else {
+            reply.raw.end();
+          }
+        } catch (_) {}
+      });
+
       reply.header('Content-Type', 'application/zip');
       reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+      reply.header('Access-Control-Expose-Headers', 'Content-Disposition');
 
       // 1. Add database file
       archive.file(dbPath, { name: 'database.db' });

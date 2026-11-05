@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { cn, resolveImageUrl } from '@/lib/utils';
 import api from '@/lib/api';
+import { API_BASE_URL } from '@/lib/config';
 import toast from 'react-hot-toast';
 import { ComingSoon } from '@/components/ui/ComingSoon';
 import BillSettings from './BillSettings';
@@ -126,24 +127,24 @@ export default function Settings() {
     const isFull = type === 'full';
     const toastId = toast.loading(isFull ? 'Packaging Full System Backup (Database + All Images)...' : 'Generating Database Snapshot (.db)...');
     try {
-      const response = await api.get(`/restaurant/backup/export?type=${type}`, { responseType: 'blob' });
-      const ext = isFull ? 'zip' : 'db';
-      const mime = isFull ? 'application/zip' : 'application/octet-stream';
-      const blob = new Blob([response.data], { type: mime });
-      const url = window.URL.createObjectURL(blob);
+      const token = useAuthStore.getState().token;
+      const downloadUrl = `${API_BASE_URL}/restaurant/backup/export?type=${type}&token=${encodeURIComponent(token || '')}`;
+      
       const link = document.createElement('a');
-      link.href = url;
-      const dateStr = new Date().toISOString().slice(0, 10);
-      link.setAttribute('download', `amora_${isFull ? 'full_system_backup' : 'database_snapshot'}_${dateStr}.${ext}`);
+      link.href = downloadUrl;
+      link.setAttribute('download', '');
+      link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
-      link.parentNode?.removeChild(link);
-      window.URL.revokeObjectURL(url);
-      toast.success(isFull ? 'Full System Backup (.zip) downloaded successfully!' : 'Database Snapshot (.db) downloaded successfully!', { id: toastId });
+      setTimeout(() => {
+        if (link.parentNode) link.parentNode.removeChild(link);
+      }, 2000);
+
+      toast.success(isFull ? 'Full System Backup (.zip) download started!' : 'Database Snapshot (.db) download started!', { id: toastId });
     } catch (err: any) {
       toast.error('Failed to generate backup: ' + (err?.message || 'Server error'), { id: toastId });
     } finally {
-      setIsExporting(false);
+      setTimeout(() => setIsExporting(false), 2000);
     }
   };
 

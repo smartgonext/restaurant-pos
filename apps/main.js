@@ -135,16 +135,16 @@ async function ensureDatabase() {
   const forceReset = process.argv.includes('--reset-db');
   const exists = fs.existsSync(dbPath);
   
-  // Auto-upgrade if existing file is the old broken template (<600KB) and we have a full template (>700KB)
-  const isOldBrokenTemplate = exists && fs.statSync(dbPath).size < 600000 && templateDbPath && fs.statSync(templateDbPath).size > 700000;
+  // Auto-upgrade if existing file is an older template (<800KB) and we have the full 843KB+ template
+  const isOldTemplate = exists && templateDbPath && fs.statSync(dbPath).size < 800000 && fs.statSync(templateDbPath).size >= 800000;
 
-  if (exists && !forceReset && !isOldBrokenTemplate) {
+  if (exists && !forceReset && !isOldTemplate) {
     console.log('[OK] Database already exists at:', dbPath, `(size: ${fs.statSync(dbPath).size} bytes)`);
     return;
   }
 
-  if (isOldBrokenTemplate) {
-    console.log('[UPGRADE] Detected old/incomplete database file (<700KB). Upgrading to full template...');
+  if (isOldTemplate) {
+    console.log('[UPGRADE] Detected old database file (<800KB). Upgrading to full template...');
     try {
       fs.copyFileSync(dbPath, path.join(userDataPath, `restaurant.db.old_${Date.now()}`));
     } catch (e) { /**/ }
