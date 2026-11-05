@@ -805,6 +805,7 @@ export default function MainPOSTerminal() {
   const setKotPopupEnabled = useMainposStore(s => s.setKotPopupEnabled ?? (() => {}));
   const { socket } = useSocket();
   const qc = useQueryClient();
+  const queryClient = qc;
 
   // Cash Register session state
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
@@ -1110,8 +1111,8 @@ export default function MainPOSTerminal() {
       });
       if (res.data?.success) {
         toast.success(`⚡ "${quickEditState.name}" updated on the spot!`, { icon: '✅' });
-        queryClient.invalidateQueries({ queryKey: ['mainpos-items'] });
-        queryClient.invalidateQueries({ queryKey: ['menu-items'] });
+        qc.invalidateQueries({ queryKey: ['mainpos-items'] });
+        qc.invalidateQueries({ queryKey: ['menu-items'] });
         
         // Update item in localCart if present
         setLocalCart(prev => prev.map(cartIt => {
@@ -1238,8 +1239,8 @@ export default function MainPOSTerminal() {
       if (res.data?.success && res.data?.data) {
         const newItem = res.data.data;
         toast.success(`⚡ "${newItem.name}" added & placed in cart!`, { icon: '⚡' });
-        queryClient.invalidateQueries({ queryKey: ['mainpos-items'] });
-        queryClient.invalidateQueries({ queryKey: ['menu-items'] });
+        qc.invalidateQueries({ queryKey: ['mainpos-items'] });
+        qc.invalidateQueries({ queryKey: ['menu-items'] });
         
         // Immediately add to cart!
         handleAddToCart(newItem);
