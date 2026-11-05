@@ -38,11 +38,13 @@ function resolveApiBase(): string {
   if (envUrl) {
     try {
       const resolved = new URL(envUrl, window.location.origin);
-      // If the page is served from a non-loopback host (e.g. 26.166.42.176 or 192.168.1.5)
-      // but envUrl points to loopback, derive API base from the current hostname on port 3001
-      // to avoid Private Network Access (PNA) CORS restriction blocking localhost requests.
-      if (isHttpPage && !isLoopback(window.location.hostname) && isLoopback(resolved.hostname)) {
+      // In Vite dev mode (port 5173), redirect localhost envUrl to current LAN IP
+      if (isHttpPage && window.location.port === '5173' && !isLoopback(window.location.hostname) && isLoopback(resolved.hostname)) {
         return `${protocol}//${window.location.hostname}:${resolved.port || DEFAULT_PORT}/api`;
+      }
+      // In production on public/domain host, never append :3001 if envUrl points to localhost
+      if (isHttpPage && !isLoopback(window.location.hostname) && isLoopback(resolved.hostname)) {
+        return `${window.location.origin}/api`;
       }
       return resolved.toString().replace(/\/$/, '');
     } catch {
@@ -50,8 +52,12 @@ function resolveApiBase(): string {
     }
   }
 
-  if (isHttpPage && !isLoopback(window.location.hostname)) {
+  if (isHttpPage && window.location.port === '5173') {
     return `${protocol}//${window.location.hostname}:${DEFAULT_PORT}/api`;
+  }
+
+  if (isHttpPage) {
+    return `${window.location.origin}/api`;
   }
 
   return `http://localhost:${DEFAULT_PORT}/api`;
@@ -77,8 +83,11 @@ function resolveSocketBase(): string {
   if (envUrl) {
     try {
       const resolved = new URL(envUrl, window.location.origin);
-      if (isHttpPage && !isLoopback(window.location.hostname) && isLoopback(resolved.hostname)) {
+      if (isHttpPage && window.location.port === '5173' && !isLoopback(window.location.hostname) && isLoopback(resolved.hostname)) {
         return `${protocol}//${window.location.hostname}:${DEFAULT_PORT}`;
+      }
+      if (isHttpPage && !isLoopback(window.location.hostname) && isLoopback(resolved.hostname)) {
+        return window.location.origin;
       }
       return resolved.toString().replace(/\/$/, '');
     } catch {
@@ -86,8 +95,12 @@ function resolveSocketBase(): string {
     }
   }
 
-  if (isHttpPage && (!isLoopback(window.location.hostname) || window.location.port === '5173')) {
+  if (isHttpPage && window.location.port === '5173') {
     return `${protocol}//${window.location.hostname}:${DEFAULT_PORT}`;
+  }
+
+  if (isHttpPage) {
+    return window.location.origin;
   }
 
   return isHttpPage ? window.location.origin : `http://localhost:${DEFAULT_PORT}`;
