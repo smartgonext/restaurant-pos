@@ -160,8 +160,11 @@ export async function subposRoutes(app) {
     // ── GET /api/subpos/bill-settings ──
     app.get('/bill-settings', async (request) => {
         const restaurantId = request.restaurantId;
-        let settings = await prisma.billSettings.findUnique({ where: { restaurantId } });
-        const restaurant = await prisma.restaurant.findUnique({ where: { id: restaurantId } });
+        let [settings, restaurant, restSettings] = await Promise.all([
+            prisma.billSettings.findUnique({ where: { restaurantId } }),
+            prisma.restaurant.findUnique({ where: { id: restaurantId } }),
+            prisma.restaurantSettings.findUnique({ where: { restaurantId } })
+        ]);
         if (!settings) {
             settings = await prisma.billSettings.create({
                 data: {
@@ -182,6 +185,11 @@ export async function subposRoutes(app) {
             success: true,
             data: {
                 ...settings,
+                taxMode: restSettings?.taxMode || 'inclusive',
+                sgstRate: Number(restSettings?.sgstRate || 0),
+                cgstRate: Number(restSettings?.cgstRate || 0),
+                igstRate: Number(restSettings?.igstRate || 0),
+                isInterState: Boolean(restSettings?.isInterState),
                 upiVpa: settings.upiVpa || settings.upiId || '',
                 restaurantName: restaurant?.name || '',
                 restaurantAddress: settings.restaurantAddress || restaurant?.address || '',
@@ -289,7 +297,7 @@ export async function subposRoutes(app) {
                         branchId,
                         tokenNumber,
                         qrCode,
-                        customerName: resolvedCustomerName ?? body.customerName,
+                        customerName: resolvedCustomerName || (body.customerName && body.customerName.trim()) || 'Walk-in Customer',
                         customerPhone: body.customerPhone,
                         customerId,
                         items: {

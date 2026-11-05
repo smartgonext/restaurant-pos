@@ -6504,8 +6504,11 @@ export async function restaurantRoutes(app) {
     // ── Bill Settings ──
     app.get('/bill-settings', async (request) => {
         const restaurantId = request.restaurantId;
-        let billSettings = await prisma.billSettings.findUnique({ where: { restaurantId } });
-        const restaurant = await prisma.restaurant.findUnique({ where: { id: restaurantId } });
+        let [billSettings, restaurant, restSettings] = await Promise.all([
+            prisma.billSettings.findUnique({ where: { restaurantId } }),
+            prisma.restaurant.findUnique({ where: { id: restaurantId } }),
+            prisma.restaurantSettings.findUnique({ where: { restaurantId } })
+        ]);
         // Create default if not exists
         if (!billSettings) {
             billSettings = await prisma.billSettings.create({
@@ -6534,6 +6537,11 @@ export async function restaurantRoutes(app) {
             success: true,
             data: {
                 ...billSettings,
+                taxMode: restSettings?.taxMode || 'inclusive',
+                sgstRate: Number(restSettings?.sgstRate || 0),
+                cgstRate: Number(restSettings?.cgstRate || 0),
+                igstRate: Number(restSettings?.igstRate || 0),
+                isInterState: Boolean(restSettings?.isInterState),
                 registerAutoCloseTime: billSettings.registerAutoCloseTime || '23:59',
                 upiVpa: billSettings.upiVpa || billSettings.upiId || '',
                 restaurantName: restaurant?.name || '',

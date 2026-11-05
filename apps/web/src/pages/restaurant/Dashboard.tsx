@@ -606,7 +606,7 @@ export default function RestaurantDashboard() {
       </div>
 
       {/* ── ⚡ RECENT INSTANT POS ITEMS ── */}
-      {recentInstantItems.length > 0 && (
+      {/* {recentInstantItems.length > 0 && (
         <div className="space-y-4 pt-4 border-t border-border/40">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-2.5">
@@ -695,7 +695,7 @@ export default function RestaurantDashboard() {
             })}
           </div>
         </div>
-      )}
+      )} */}
 
       <OrderDetailPanel
         orderId={selectedOrderId}

@@ -71,16 +71,22 @@ export async function recalculateTokenTotals(tokenId, prisma) {
         igstRate: Number(settings?.igstRate ?? 0),
         isInterState: settings?.isInterState ?? false,
     };
+    const isTaxInclusive = String(taxConfig.taxMode).toLowerCase() === 'inclusive' || (taxConfig.sgstRate === 0 && taxConfig.cgstRate === 0 && taxConfig.igstRate === 0);
     let baseAmount = 0;
     let totalTax = 0;
     let totalWithTax = 0;
     for (const item of token.items) {
         const gross = Number(item.total || 0);
-        const rawRate = (storeTaxRate !== null && storeTaxRate !== undefined && storeTaxRate > 0)
+        if (isTaxInclusive) {
+            baseAmount += gross;
+            totalWithTax += gross;
+            continue;
+        }
+        const rawRate = (storeTaxRate !== null && storeTaxRate !== undefined)
           ? storeTaxRate
           : Number(item.menuItem?.taxPercent ?? 0);
         const rate = Number.isFinite(rawRate) ? Math.max(0, rawRate) : 0;
-        const taxType = String(item.menuItem?.taxType || 'external').toLowerCase();
+        const taxType = String(item.menuItem?.taxType || 'internal').toLowerCase();
         if (taxType === 'internal') {
             const divisor = 1 + rate / 100;
             const lineBase = divisor > 0 ? round2(gross / divisor) : gross;
@@ -97,9 +103,9 @@ export async function recalculateTokenTotals(tokenId, prisma) {
         }
     }
     let adjustedBase = round2(baseAmount);
-    let adjustedTax = round2(totalTax);
-    let adjustedTotal = round2(totalWithTax);
-    if (discount > 0 && adjustedTotal > 0) {
+    let adjustedTax = isTaxInclusive ? 0 : round2(totalTax);
+    let adjustedTotal = isTaxInclusive ? Math.max(0, round2(subtotal - discount)) : round2(totalWithTax);
+    if (!isTaxInclusive && discount > 0 && adjustedTotal > 0) {
         const appliedDiscount = Math.min(discount, adjustedTotal);
         const ratio = (adjustedTotal - appliedDiscount) / adjustedTotal;
         adjustedBase = round2(adjustedBase * ratio);
@@ -109,12 +115,14 @@ export async function recalculateTokenTotals(tokenId, prisma) {
     let sgst = 0;
     let cgst = 0;
     let igst = 0;
-    if (taxConfig.isInterState) {
-        igst = adjustedTax;
-    }
-    else {
-        sgst = round2(adjustedTax / 2);
-        cgst = round2(adjustedTax - sgst);
+    if (!isTaxInclusive) {
+        if (taxConfig.isInterState) {
+            igst = adjustedTax;
+        }
+        else {
+            sgst = round2(adjustedTax / 2);
+            cgst = round2(adjustedTax - sgst);
+        }
     }
     await prisma.bakeryToken.update({
         where: { id: tokenId },
@@ -123,7 +131,7 @@ export async function recalculateTokenTotals(tokenId, prisma) {
             sgst,
             cgst,
             igst,
-            total: adjustedTotal,
+            total: isTaxInclusive ? Math.max(0, round2(subtotal - discount)) : adjustedTotal,
         },
     });
 }

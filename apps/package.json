@@ -59,6 +59,7 @@
           "!prisma/migrations/**",
           "!src/**/*.ts",
           "!tests/**",
+          "!logs/**",
           "!tmp/**",
           "!scratch/**",
           "!*.txt"
@@ -69,8 +70,13 @@
         "to": "api/node_modules",
         "filter": [
           "**/*",
+          "!**/.ignored_*/**",
+          "!**/.ignored_*",
+          "!**/prisma/**",
           "!**/*.tmp*",
           "!**/*.map",
+          "!**/*.md",
+          "!**/*.ts",
           "!**/test/**",
           "!**/tests/**"
         ]
@@ -93,6 +99,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "Restaurant SaaS",
+      "differentialPackage": false,
       "include": "build/installer.nsh"
     }
   }

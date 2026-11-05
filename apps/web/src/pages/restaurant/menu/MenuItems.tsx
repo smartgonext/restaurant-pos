@@ -365,8 +365,8 @@ export default function MenuItems() {
         isAutoImage: item.isAutoImage ?? true,
         imageSource: 'manual' as 'manual' | 'ai' | 'library',
         salesUnit: item.salesUnit || 'piece',
-        taxType: String(item.taxType || 'external').toLowerCase(),
-        taxPercent: typeof item.taxPercent !== 'undefined' && item.taxPercent !== null ? String(item.taxPercent) : '5',
+        taxType: String(item.taxType || 'internal').toLowerCase(),
+        taxPercent: typeof item.taxPercent !== 'undefined' && item.taxPercent !== null ? String(item.taxPercent) : '0',
         enablePackOptions: Boolean(item.enablePackOptions),
         stockWarningThreshold: typeof item.stockWarningThreshold !== 'undefined' && item.stockWarningThreshold !== null ? String(item.stockWarningThreshold) : '',
         expiryDate: item.expiryDate ? item.expiryDate.split('T')[0] : ''
@@ -751,7 +751,7 @@ export default function MenuItems() {
         ? null
         : (selectedInvUnit?.symbol || selectedInvUnit?.name || 'piece');
       if (isFoodCategory) {
-        payload.taxType = 'external';
+        payload.taxType = 'internal';
         payload.taxPercent = 0;
       } else {
         payload.taxType = String(formData.taxType || '').toLowerCase();
@@ -976,7 +976,7 @@ export default function MenuItems() {
   const showFoodFields = selectedMenuCat ? isCategoryKOTEnabled(selectedMenuCat) : true;
   const sellingPriceNum = Number(formData.price || 0);
   const taxPercentNum = Number(formData.taxPercent || 0);
-  const normalizedTaxType = String(formData.taxType || 'external').toLowerCase();
+  const normalizedTaxType = String(formData.taxType || 'internal').toLowerCase();
   const computedTaxPreview = (() => {
     if (!showInventoryFields || !Number.isFinite(sellingPriceNum) || sellingPriceNum < 0 || !Number.isFinite(taxPercentNum) || taxPercentNum < 0) {
       return { taxable: 0, tax: 0, final: 0 };

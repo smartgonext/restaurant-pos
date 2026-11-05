@@ -1297,7 +1297,6 @@ export default function MainPOSTerminal() {
   const customerPhoneInputRef = useRef<HTMLInputElement | null>(null);
   const cashBtnRef = useRef<HTMLButtonElement | null>(null);
   const focusCustomerName = useCallback(() => {
-    toast.error('Customer Name is REQUIRED! Please enter customer name before billing.');
     if (customerNameInputRef.current) {
       customerNameInputRef.current.focus();
       customerNameInputRef.current.select();
@@ -1818,10 +1817,7 @@ export default function MainPOSTerminal() {
 
   const saveToken = async () => {
     if (localCart.length === 0) { toast.error('No items to save'); return; }
-    if (!customerName || !customerName.trim()) {
-      focusCustomerName();
-      return;
-    }
+    const resolvedCustName = customerName?.trim() || 'Walk-in Customer';
     if (currentToken?.status === 'paid') { toast.error('Cannot add items to a paid token'); return; }
     setIsSubmitting(true);
     try {
@@ -1834,7 +1830,7 @@ export default function MainPOSTerminal() {
         menuItemName: i.displayName || i.name,
       }));
       if (!currentToken) {
-        await createTokenMut.mutateAsync({ items: itemsPayload, customerName: customerName || undefined, customerPhone: customerPhone || undefined });
+        await createTokenMut.mutateAsync({ items: itemsPayload, customerName: resolvedCustName, customerPhone: customerPhone || undefined });
       } else {
         await addItemsMut.mutateAsync({ qr: currentToken.qrCode, items: itemsPayload });
       }
@@ -2574,10 +2570,7 @@ export default function MainPOSTerminal() {
   });
 
   const processPayment = async (method: string, customPayAmount?: number) => {
-    if (!customerName || !customerName.trim()) {
-      focusCustomerName();
-      return;
-    }
+    const resolvedCustName = customerName?.trim() || 'Walk-in Customer';
     if (!currentToken && localCart.length === 0) { toast.error('Cart is empty'); return; }
     if (currentToken?.status === 'paid') { toast.success('This token is already fully paid'); return; }
     playTokenSound();
@@ -2594,7 +2587,7 @@ export default function MainPOSTerminal() {
             linePrice: i.price,
             menuItemName: i.displayName || i.name,
           })),
-          customerName: customerName || undefined, customerPhone: customerPhone || undefined,
+          customerName: resolvedCustName, customerPhone: customerPhone || undefined,
           staffId: user?.id,
           orderId: loadedWaiterBill?.orderId || undefined,
           orderIds: loadedWaiterBill?.orderIds || undefined,
@@ -2840,7 +2833,12 @@ export default function MainPOSTerminal() {
   const removedTokenItems = currentToken?.items.filter(i => i.isRemoved) ?? [];
   const localCartSubtotal = localCart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
   const existingRemaining = currentToken ? Math.max(0, Number(currentToken.total) - currentToken.payments.reduce((s, p) => s + Number(p.amount), 0)) : 0;
-  const isTaxInclusiveMode = String((restaurantSettings as any)?.taxMode || '').toLowerCase() === 'inclusive';
+  const isTaxInclusiveMode = 
+    billSettings?.showGST === false || 
+    String((restaurantSettings as any)?.taxMode || (billSettings as any)?.taxMode || '').toLowerCase() === 'inclusive' ||
+    (Number((restaurantSettings as any)?.sgstRate ?? (billSettings as any)?.sgstRate ?? 0) === 0 && 
+     Number((restaurantSettings as any)?.cgstRate ?? (billSettings as any)?.cgstRate ?? 0) === 0 &&
+     Number((restaurantSettings as any)?.igstRate ?? (billSettings as any)?.igstRate ?? 0) === 0);
 
   const storeTaxRate = (billSettings?.showGST === false || isTaxInclusiveMode)
     ? 0
@@ -2848,9 +2846,9 @@ export default function MainPOSTerminal() {
       ? (Number((restaurantSettings as any).sgstRate || 0) + Number((restaurantSettings as any).cgstRate || 0) + Number((restaurantSettings as any).igstRate || 0))
       : (billSettings ? (Number(billSettings.sgstRate || 0) + Number(billSettings.cgstRate || 0) + Number(billSettings.igstRate || 0)) : null);
 
-  const localCartTax = localCart.reduce((sum, item) => {
+  const localCartTax = isTaxInclusiveMode ? 0 : localCart.reduce((sum, item) => {
     const menu = allItems.find((m) => m.id === item.menuItemId);
-    const itemTaxType = isTaxInclusiveMode ? 'internal' : String(menu?.taxType || 'internal').toLowerCase();
+    const itemTaxType = String(menu?.taxType || 'internal').toLowerCase();
     // In inclusive/internal tax mode, tax is already included inside item price, never added on top
     if (itemTaxType === 'internal') {
       return sum;
@@ -2859,9 +2857,9 @@ export default function MainPOSTerminal() {
     const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), itemTaxType, taxRate);
     return sum + Number(line.tax || 0);
   }, 0);
-  const localCartFinal = localCart.reduce((sum, item) => {
+  const localCartFinal = isTaxInclusiveMode ? localCartSubtotal : localCart.reduce((sum, item) => {
     const menu = allItems.find((m) => m.id === item.menuItemId);
-    const itemTaxType = isTaxInclusiveMode ? 'internal' : String(menu?.taxType || 'internal').toLowerCase();
+    const itemTaxType = String(menu?.taxType || 'internal').toLowerCase();
     if (itemTaxType === 'internal') {
       return sum + (Number(item.price) * Number(item.quantity));
     }
@@ -4044,7 +4042,7 @@ export default function MainPOSTerminal() {
                             customerPhoneInputRef.current?.select();
                           }
                         }}
-                        placeholder="Cust Name * (Required)"
+                        placeholder="Cust Name (Optional - Walk-in)"
                         className={cn(
                           "w-full px-3 py-1.5 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm",
                           isLight
@@ -4228,13 +4226,7 @@ export default function MainPOSTerminal() {
                           className="bg-[#e67e22] hover:bg-[#f39c12] disabled:opacity-50 disabled:grayscale text-white py-2.5 rounded text-[9px] font-black uppercase flex flex-col items-center gap-1 transition-colors">
                           <Wallet size={16} /> UPI
                         </button>
-                        <button onClick={() => {
-                          if (!customerName || !customerName.trim()) {
-                            focusCustomerName();
-                            return;
-                          }
-                          setShowSplitModal(true);
-                        }} disabled={isSubmitting || isCartEmpty}
+                        <button onClick={() => setShowSplitModal(true)} disabled={isSubmitting || isCartEmpty}
                           className="bg-[#2980b9] hover:bg-[#3498db] disabled:opacity-50 disabled:grayscale text-white py-2.5 rounded text-[9px] font-black uppercase flex flex-col items-center gap-1 transition-colors">
                           <Split size={16} /> Split
                         </button>

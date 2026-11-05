@@ -187,8 +187,8 @@ const fmtAmt = (val: number | string | null | undefined) => {
 
 // ── Print token slip ──────────────────────────────────────────────────────────
 function printTokenSlip(
-  token: TokenResult,
-  items: LocalCartItem[],
+  token: TokenResult | any,
+  items?: LocalCartItem[] | any[],
   customerName?: string,
   customerPhone?: string,
   bakeryName = 'SMARTGONEXT Bakery',
@@ -206,19 +206,34 @@ function printTokenSlip(
       restaurantAddress: (settings as any)?.restaurantAddress || userRest?.address || '',
       restaurantPhone: (settings as any)?.restaurantPhone || userRest?.phone || '',
     };
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(token.qrCode)}`;
-    const totalItems = token.itemCount ?? items.length;
-    const totalAmt = formatCurrency(Number(token.token?.total ?? 0));
+    const qrData = token.qrCode || String(token.tokenNumber || token.id || '');
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrData)}`;
+    const tokenItemsList = (items && items.length > 0) ? items : ((token as any)?.items || []);
+    const totalItems = token.itemCount ?? tokenItemsList.length;
+    const totalAmt = formatCurrency(Number(token.token?.total ?? (token as any)?.total ?? 0));
+    const tokenNum = token.tokenNumber || token.id;
+    const resolvedCustName = customerName || token.customerName || '';
+    const resolvedCustPhone = customerPhone || token.customerPhone || '';
     const html = `
-      <!doctype html><html><head><meta charset="utf-8"><title>Token ${token.tokenNumber}</title>
+      <!doctype html><html><head><meta charset="utf-8"><title>Token ${tokenNum}</title>
       <style>body{font-family:Arial,Helvetica,sans-serif;padding:12px;text-align:center;color:#000;margin:0} img.logo{max-height:45px;max-width:120px;margin:0 auto 4px auto;display:block;} img.qr{width:180px;height:180px;object-fit:contain}</style>
       </head><body>
         ${cfg.showLogo && cfg.logoUrl ? `<img class="logo" src="${cfg.logoUrl}" alt="Logo" />` : ''}
         ${cfg.showRestaurantInfo ? `<div style="font-size:12pt;font-weight:700;">${finalRestaurantName}</div>` : ''}
         ${cfg.showRestaurantInfo && cfg.restaurantAddress ? `<div style="font-size:8pt;color:#333;">${cfg.restaurantAddress}</div>` : ''}
         ${cfg.showPhoneNumber && cfg.restaurantPhone ? `<div style="font-size:8pt;color:#333;">Ph: ${cfg.restaurantPhone}</div>` : ''}
-        ${cfg.showTokenNumber ? `<div style="font-size:14pt;font-weight:700;margin-top:4px;">Token #${token.tokenNumber}</div>` : ''}
-        ${customerName ? `<div style="font-size:10pt;margin-top:4px;">${customerName}${cfg.showPhoneNumber && customerPhone ? ` · ${customerPhone}` : ''}</div>` : ''}
+        ${cfg.showTokenNumber ? `<div style="font-size:14pt;font-weight:700;margin-top:4px;">Token #${tokenNum}</div>` : ''}
+        ${resolvedCustName ? `<div style="font-size:10pt;margin-top:4px;">${resolvedCustName}${cfg.showPhoneNumber && resolvedCustPhone ? ` · ${resolvedCustPhone}` : ''}</div>` : ''}
+        ${tokenItemsList.length > 0 ? `
+          <div style="margin: 8px 0; border-top: 1px dashed #aaa; border-bottom: 1px dashed #aaa; padding: 6px 0; font-size: 9pt; text-align: left;">
+            ${tokenItemsList.map((it: any) => `
+              <div style="display:flex; justify-content:space-between; margin-bottom: 3px;">
+                <span>${it.displayName || it.menuItemName || it.name || 'Item'} x ${it.quantity}</span>
+                <span>₹${Number(it.total || (Number(it.price || 0) * Number(it.quantity || 1))).toFixed(2)}</span>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
         <div style="font-size:10pt;margin-top:4px;">Total Items: <strong>${totalItems}</strong></div>
         <div style="font-size:12pt;font-weight:700;margin-top:6px;">Total: <strong>${totalAmt}</strong></div>
         <div style="margin:10px 0"><img class="qr" src="${qrUrl}" alt="QR"/></div>
@@ -600,7 +615,6 @@ export default function SubPOSTerminal() {
   const customerPhoneInputRef = useRef<HTMLInputElement | null>(null);
   const createTokenBtnRef = useRef<HTMLButtonElement | null>(null);
   const focusCustomerName = useCallback(() => {
-    toast.error('Customer Name is REQUIRED! Please enter customer name before generating token.');
     if (customerNameInputRef.current) {
       customerNameInputRef.current.focus();
       customerNameInputRef.current.select();
@@ -1574,15 +1588,20 @@ export default function SubPOSTerminal() {
 
   // ── Totals ──
   const localCartSubtotal = localCart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-  const isTaxInclusiveMode = billSettings?.showGST === false || String((billSettings as any)?.taxMode || '').toLowerCase() === 'inclusive';
+  const isTaxInclusiveMode = 
+    billSettings?.showGST === false || 
+    String((billSettings as any)?.taxMode || '').toLowerCase() === 'inclusive' ||
+    (Number((billSettings as any)?.sgstRate ?? 0) === 0 && 
+     Number((billSettings as any)?.cgstRate ?? 0) === 0 &&
+     Number((billSettings as any)?.igstRate ?? 0) === 0);
 
   const storeTaxRate = (billSettings?.showGST === false || isTaxInclusiveMode)
     ? 0
     : (billSettings ? (Number(billSettings.sgstRate || 0) + Number(billSettings.cgstRate || 0) + Number(billSettings.igstRate || 0)) : null);
 
-  const localCartTax = localCart.reduce((sum, item) => {
+  const localCartTax = isTaxInclusiveMode ? 0 : localCart.reduce((sum, item) => {
     const menu = allItems.find((m) => m.id === item.menuItemId);
-    const itemTaxType = isTaxInclusiveMode ? 'internal' : String(menu?.taxType || 'internal').toLowerCase();
+    const itemTaxType = String(menu?.taxType || 'internal').toLowerCase();
     if (itemTaxType === 'internal') {
       return sum;
     }
@@ -1590,9 +1609,9 @@ export default function SubPOSTerminal() {
     const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), itemTaxType, taxRate);
     return sum + Number(line.tax || 0);
   }, 0);
-  const localCartFinal = localCart.reduce((sum, item) => {
+  const localCartFinal = isTaxInclusiveMode ? localCartSubtotal : localCart.reduce((sum, item) => {
     const menu = allItems.find((m) => m.id === item.menuItemId);
-    const itemTaxType = isTaxInclusiveMode ? 'internal' : String(menu?.taxType || 'internal').toLowerCase();
+    const itemTaxType = String(menu?.taxType || 'internal').toLowerCase();
     if (itemTaxType === 'internal') {
       return sum + (Number(item.price) * Number(item.quantity));
     }
@@ -1627,7 +1646,7 @@ export default function SubPOSTerminal() {
       if (!loadedToken) {
         const { data } = await subposApi.post('/token/create', {
           items: itemsPayload,
-          customerName: customerName || undefined,
+          customerName: customerName?.trim() || 'Walk-in Customer',
           customerPhone: customerPhone || undefined,
           staffId: user?.id,
         }, { headers });
@@ -1652,7 +1671,7 @@ export default function SubPOSTerminal() {
       
       const pSettings = getPrinterSettings(billSettings as any);
       if (pSettings.autoPrintBill) {
-        printTokenSlip(result, localCart, customerName, customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings);
+        printTokenSlip(result, localCart, customerName?.trim() || 'Walk-in Customer', customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings);
       }
 
       // Check if cart contains any KOT items and print to dedicated KOT printer
@@ -2268,6 +2287,17 @@ export default function SubPOSTerminal() {
               <div className="space-y-2">
                 <div className={cn("p-2.5 rounded-lg border flex items-center justify-between text-xs font-bold shadow-sm", isLight ? "bg-amber-100 border-amber-300 text-amber-900" : "bg-amber-500/20 border-amber-500/40 text-amber-300")}>
                   <span>Past Bill #{todayTokens[browsingOrderIndex].tokenNumber || todayTokens[browsingOrderIndex].id} Items ({todayTokens[browsingOrderIndex].items?.length || 0})</span>
+                  <button
+                    onClick={() => {
+                      const cur = todayTokens[browsingOrderIndex];
+                      printTokenSlip(cur, cur.items || [], cur.customerName, cur.customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings);
+                      toast.success(`Reprinting Token #${cur.tokenNumber || cur.id}`);
+                    }}
+                    className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded text-[10px] font-black uppercase flex items-center gap-1 shadow-sm transition active:scale-95"
+                    title="Reprint this old token"
+                  >
+                    <Printer className="w-3.5 h-3.5" /> Reprint
+                  </button>
                 </div>
                 {(!todayTokens[browsingOrderIndex].items || todayTokens[browsingOrderIndex].items.length === 0) ? (
                   <div className="text-center py-8 opacity-50 text-xs font-bold">No items found in this past bill</div>
@@ -2514,12 +2544,29 @@ export default function SubPOSTerminal() {
                     <span>Customer: <strong>{todayTokens[browsingOrderIndex].customerName}</strong></span>
                   )}
                 </div>
-                <button
-                  onClick={() => setBrowsingOrderIndex(null)}
-                  className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white rounded-xl font-black text-xs shadow-lg tracking-wide uppercase transition active:scale-[0.98] flex items-center justify-center gap-1.5"
-                >
-                  Return to Current Bill
-                </button>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={() => {
+                      const cur = todayTokens[browsingOrderIndex];
+                      printTokenSlip(cur, cur.items || [], cur.customerName, cur.customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings);
+                      toast.success(`Reprinting Token #${cur.tokenNumber || cur.id}...`);
+                    }}
+                    className={cn(
+                      "flex-1 py-3 border rounded-xl font-black text-xs flex items-center justify-center gap-2 transition uppercase shadow-sm active:scale-[0.98]",
+                      isLight
+                        ? "bg-purple-50 border-purple-300 text-purple-700 hover:bg-purple-100"
+                        : "bg-purple-950/40 border-purple-500/50 text-purple-300 hover:bg-purple-900/50"
+                    )}
+                  >
+                    <Printer className="w-4 h-4 text-purple-400" /> Reprint Token
+                  </button>
+                  <button
+                    onClick={() => setBrowsingOrderIndex(null)}
+                    className="flex-1 py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white rounded-xl font-black text-xs shadow-md tracking-wide uppercase transition active:scale-[0.98] flex items-center justify-center gap-1.5"
+                  >
+                    Return
+                  </button>
+                </div>
               </div>
             ) : (
               <>
@@ -2541,7 +2588,7 @@ export default function SubPOSTerminal() {
                           customerPhoneInputRef.current?.select();
                         }
                       }}
-                      placeholder="Cust Name * (Required)"
+                      placeholder="Cust Name (Optional - Walk-in)"
                       className={cn("w-full pl-8 pr-3 py-2 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm", isLight ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400" : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400")}
                     />
                   </div>
@@ -2633,10 +2680,6 @@ export default function SubPOSTerminal() {
                     ref={createTokenBtnRef}
                     id="btn-create-token"
                     onClick={() => {
-                      if (!customerName || !customerName.trim()) {
-                        focusCustomerName();
-                        return;
-                      }
                       isAppendingRef.current = Boolean(loadedToken);
                       createToken.mutate();
                     }}
