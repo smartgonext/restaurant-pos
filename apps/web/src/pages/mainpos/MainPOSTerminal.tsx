@@ -1297,6 +1297,7 @@ export default function MainPOSTerminal() {
   const debouncedCustomerPhone = useDebounce(customerPhone, 300);
 
   const [activeCategory, setActiveCategory] = useState<string>('all');
+  const [showKotShortcuts, setShowKotShortcuts] = useState(false);
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -1820,7 +1821,7 @@ export default function MainPOSTerminal() {
     return filterAndRankMenuItems(
       allItems,
       search,
-      activeCategory,
+      search.trim() ? null : activeCategory,
       weightSearch?.productQR
     );
   }, [allItems, activeCategory, search]);
@@ -2236,19 +2237,24 @@ export default function MainPOSTerminal() {
     // 2. Try weight-based barcode parsing
     const weightResult = parseWeightFromBarcode(code);
     if (weightResult && weightResult.isWeightBased) {
-      const productQR = weightResult.productQR;
-      const quantity = weightResult.quantity; // in kg
-
       const item = allItems.find(i => {
         const qr = String(i.productQR || '').trim().toLowerCase();
         const invSku = String(i.inventoryItem?.sku || '').trim().toLowerCase();
         const invBc = String(i.inventoryItem?.barcode || '').trim().toLowerCase();
 
         const targets = new Set<string>();
-        if (productQR) targets.add(productQR.trim().toLowerCase());
+        if (weightResult.productQR) targets.add(weightResult.productQR.trim().toLowerCase());
         if (weightResult.skuRaw) {
-          targets.add(weightResult.skuRaw.trim().toLowerCase());
-          targets.add(weightResult.skuRaw.replace(/^0+/, '').trim().toLowerCase());
+          const raw = weightResult.skuRaw.trim().toLowerCase();
+          targets.add(raw);
+          const stripped = raw.replace(/^0+/, '');
+          if (stripped) {
+            targets.add(stripped);
+            targets.add(stripped.padStart(2, '0'));
+            targets.add(stripped.padStart(3, '0'));
+            targets.add(stripped.padStart(4, '0'));
+            targets.add(stripped.padStart(5, '0'));
+          }
         }
         if (weightResult.prefix && weightResult.skuRaw) {
           targets.add(`${weightResult.prefix}${weightResult.skuRaw}`.trim().toLowerCase());
@@ -2258,10 +2264,17 @@ export default function MainPOSTerminal() {
         if (invSku && targets.has(invSku)) return true;
         if (invBc && targets.has(invBc)) return true;
         if (targets.has(String(i.id))) return true;
+        if (Array.isArray(i.inventoryItem?.inventoryMRPs)) {
+          if (i.inventoryItem.inventoryMRPs.some((m: any) => m.barcode && targets.has(String(m.barcode).trim().toLowerCase()))) {
+            return true;
+          }
+        }
         return false;
       });
 
-      if (item && isKgMeasuredItem(item.salesUnit)) {
+      if (item) {
+        const isKg = isKgMeasuredItem(item.salesUnit);
+        const qtyToAdd = (isKg || weightResult.isWeightBased) ? weightResult.quantity : 1;
         const allMRPs = item.inventoryItem?.inventoryMRPs ?? [];
         const activeMRPs = getActiveMRPs(allMRPs);
 
@@ -2275,24 +2288,20 @@ export default function MainPOSTerminal() {
             purchaseRate: active.purchaseRate,
             profitPercent: active.profitPercent,
             displayName: item.name,
-            salesUnit: item.salesUnit ?? null,
-            quantity,
+            salesUnit: item.salesUnit ?? (isKg ? 'kg' : null),
+            quantity: qtyToAdd,
           });
         } else {
           addCartEntry({
             item,
             price: Number(item.price),
             displayName: item.name,
-            salesUnit: item.salesUnit ?? null,
-            quantity,
+            salesUnit: item.salesUnit ?? (isKg ? 'kg' : null),
+            quantity: qtyToAdd,
           });
         }
         setSearch('');
-        toast.success(`✓ Added ${item.name}: ${quantity.toFixed(2)}kg`, { duration: 1000, icon: '📦' });
-        return true;
-      } else if (item) {
-        handleAddToCart(item);
-        setSearch('');
+        toast.success(`✓ Added ${item.name}: ${qtyToAdd.toFixed(3).replace(/\.?0+$/, '')}kg`, { duration: 1000, icon: '📦' });
         return true;
       }
     }
@@ -3038,6 +3047,34 @@ export default function MainPOSTerminal() {
               </span>
             )}
           </button> */}
+          <button
+            type="button"
+            onClick={() => {
+              const next = !showKotShortcuts;
+              setShowKotShortcuts(next);
+              if (next) {
+                setActiveCategory('kot');
+                setSearch('');
+              } else if (activeCategory === 'kot') {
+                setActiveCategory('all');
+              }
+            }}
+            title="KOT Products - View all kitchen & prepared items shortcuts"
+            className={cn(
+              "py-1.5 px-2.5 rounded-md text-[11px] font-black uppercase transition flex items-center gap-1.5 shadow-sm cursor-pointer",
+              showKotShortcuts || activeCategory === 'kot'
+                ? "bg-amber-500 hover:bg-amber-400 text-black shadow-[0_0_12px_rgba(245,158,11,0.4)]"
+                : (isLight ? "bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300" : "bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 border border-amber-800/60")
+            )}
+          >
+            <span>🍳 KOT P</span>
+            <span className={cn(
+              "text-[9px] px-1.5 py-0.2 rounded-full font-black",
+              showKotShortcuts || activeCategory === 'kot' ? "bg-black/20 text-black" : "bg-amber-500/20 text-amber-300"
+            )}>
+              {allItems.filter(i => Boolean(i.category?.isKOTEnabled)).length}
+            </span>
+          </button>
           <button onClick={() => setKotsModalOpen(true)}
             className={`py-1.5 px-2.5 rounded-md text-[11px] font-bold uppercase transition ${heldCount > 0 ? 'bg-red-500 text-white' : (isLight ? 'bg-slate-200 text-slate-800 hover:bg-slate-300' : 'bg-gray-800 text-gray-300')}`}>
             KOT {heldCount > 0 && <span className="ml-2 inline-block bg-white/10 text-white text-xs px-2 py-0.5 rounded-full">{heldCount}</span>}
@@ -3604,6 +3641,51 @@ export default function MainPOSTerminal() {
               storageKey="pos_category_order"
               className="w-full max-w-full min-w-0"
             />
+
+            {/* KOT Quick Shortcuts Tray */}
+            {(showKotShortcuts || activeCategory === 'kot') && (
+              <div className={cn(
+                "p-2.5 rounded-xl border space-y-2 animate-in fade-in slide-in-from-top-2 duration-200 shadow-md",
+                isLight ? "bg-amber-50/90 border-amber-300 text-slate-900" : "bg-[#16130f] border-amber-800/60 text-white"
+              )}>
+                <div className="flex items-center justify-between px-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
+                      🍳 KOT Products & Shortcuts ({allItems.filter(i => Boolean(i.category?.isKOTEnabled)).length})
+                    </span>
+                    <span className="text-[10px] text-gray-400 hidden sm:inline">Tap item to add directly to cart</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setShowKotShortcuts(false); if (activeCategory === 'kot') setActiveCategory('all'); }}
+                    className="text-[10px] uppercase font-bold text-gray-400 hover:text-white px-2 py-0.5 rounded bg-black/20 hover:bg-black/50 transition cursor-pointer"
+                  >
+                    Hide ✕
+                  </button>
+                </div>
+                <div className="flex gap-2 overflow-x-auto pb-1.5 pt-0.5 custom-scrollbar no-scrollbar scroll-smooth">
+                  {allItems.filter(i => Boolean(i.category?.isKOTEnabled)).map(kotItem => (
+                    <button
+                      key={kotItem.id}
+                      type="button"
+                      onClick={() => handleAddToCart(kotItem)}
+                      className={cn(
+                        "shrink-0 p-2.5 rounded-xl border text-left transition-all active:scale-95 flex flex-col justify-between min-w-[130px] max-w-[170px] shadow-sm hover:shadow-md cursor-pointer",
+                        isLight
+                          ? "bg-white border-amber-200 hover:border-amber-400 text-slate-900 hover:bg-amber-50"
+                          : "bg-[#1f1a14] border-amber-900/60 hover:border-amber-500 text-white hover:bg-amber-950/40"
+                      )}
+                    >
+                      <div className="text-xs font-black truncate">{kotItem.name}</div>
+                      <div className="flex items-center justify-between mt-2 pt-1 border-t border-amber-500/10">
+                        <span className="text-[11px] font-black text-amber-500">₹{Number(kotItem.price || 0).toFixed(2)}</span>
+                        <span className="text-[9px] font-bold text-gray-400 uppercase bg-amber-500/10 px-1 py-0.2 rounded">+ Add</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {filteredItems.length === 0 && search.trim() && (
               <div className={cn(
                 "p-2.5 rounded-xl border flex items-center justify-between gap-3 animate-in fade-in duration-200",

@@ -71,7 +71,15 @@ export function getItemSearchScore(
   }
   if (weightProductQR) {
     const normW = weightProductQR.toLowerCase();
-    if (productQR === normW || idStr === normW) {
+    const strippedW = normW.replace(/^0+/, '');
+    if (
+      productQR === normW ||
+      invBarcode === normW ||
+      invSku === normW ||
+      idStr === normW ||
+      mrpBarcodes.includes(normW) ||
+      (strippedW && (productQR === strippedW || invBarcode === strippedW || invSku === strippedW || idStr === strippedW || mrpBarcodes.includes(strippedW)))
+    ) {
       return 15;
     }
   }
@@ -149,6 +157,9 @@ export function filterAndRankMenuItems<T extends SearchableItem>(
 
   // Browsing mode (no active search query)
   if (!q) {
+    if (selectedCategoryId === 'kot') {
+      return items.filter((it) => Boolean(it.category?.isKOTEnabled));
+    }
     if (
       selectedCategoryId !== undefined &&
       selectedCategoryId !== null &&
@@ -160,12 +171,15 @@ export function filterAndRankMenuItems<T extends SearchableItem>(
     return items;
   }
 
-  // Search mode: compute scores and rank
+  // Search mode: ALWAYS search across ALL items in the entire store!
+  // Even if a category or KOT filter is selected, typing a search query
+  // searches the entire catalog so no item is ever hidden or lost.
   const scored: ScoredItem<T>[] = [];
   const targetCatId =
     selectedCategoryId !== undefined &&
     selectedCategoryId !== null &&
-    selectedCategoryId !== 'all'
+    selectedCategoryId !== 'all' &&
+    selectedCategoryId !== 'kot'
       ? Number(selectedCategoryId)
       : null;
 
@@ -173,9 +187,9 @@ export function filterAndRankMenuItems<T extends SearchableItem>(
     let score = getItemSearchScore(item, q, weightProductQR);
     if (score === null) continue;
 
-    // Give priority boost to items in the currently active category (if one is selected)
+    // Subtle boost if item happens to be in currently focused category
     if (targetCatId !== null && item.categoryId === targetCatId) {
-      score = Math.max(1, score - 60);
+      score = Math.max(1, score - 15);
     }
 
     scored.push({ item, score });

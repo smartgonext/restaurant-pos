@@ -29,13 +29,15 @@ export interface BarcodeScanResult {
 }
 
 const WEIGHT_DIGITS = 5;  // Last 5 digits represent weight
-const MIN_WEIGHT_GRAMS = 50;  // Minimum weight: 50g
-const MAX_WEIGHT_GRAMS = 50000; // Maximum weight: 50kg
+const MIN_WEIGHT_GRAMS = 1;  // Minimum weight: 1g
+const MAX_WEIGHT_GRAMS = 100000; // Maximum weight: 100kg
 
 /**
  * Parse weight from barcode supporting dynamic Settings (weigh_scale_prefix)
- * Handles both 13-digit EAN-13 weigh scale format [Prefix(2)][SKU(5)][WeightGrams(5)][CheckDigit(1)]
- * as well as 14+ digit format [ProductQR][WeightGrams(5)]
+ * Handles:
+ * - 12-digit scale format: [Prefix(2)][SKU(5)][WeightGrams(5)] (e.g. 220009700130 -> 130g of item 00097)
+ * - 13-digit EAN-13 format: [Prefix(2)][SKU(5)][WeightGrams(5)][CheckDigit(1)]
+ * - 14+ digit format: [ProductQR][WeightGrams(5)]
  */
 export function parseWeightFromBarcode(barcode: string): WeightScanResult | null {
   if (!barcode || typeof barcode !== 'string') return null;
@@ -57,15 +59,63 @@ export function parseWeightFromBarcode(barcode: string): WeightScanResult | null
     }
   } catch (_) {}
 
-  // 1. EAN-13 Format: exactly 13 digits [Prefix(2)][SKU(5)][WeightGrams(5)][CheckDigit(1)]
-  if (normalized.length === 13) {
-    const prefix = normalized.substring(0, 2);
+  const prefix2 = normalized.substring(0, 2);
+  const isScalePrefix = (prefix2 >= '20' && prefix2 <= '29') || prefix2 === configuredPrefix;
+
+  // 1. 12-digit Scale Format: [Prefix(2)][SKU(5)][WeightGrams(5)]
+  // Standard in Indian and retail electronic scales (e.g. 220009700130)
+  if (normalized.length === 12 && isScalePrefix) {
+    const prefix = prefix2;
     const skuRaw = normalized.substring(2, 7);
     const weightStr = normalized.substring(7, 12);
     const weightGrams = parseInt(weightStr, 10);
 
     if (weightGrams >= MIN_WEIGHT_GRAMS && weightGrams <= MAX_WEIGHT_GRAMS) {
-      const weightKg = weightGrams / 1000;
+      const weightKg = Number((weightGrams / 1000).toFixed(3));
+      return {
+        productQR: skuRaw,
+        skuRaw,
+        prefix,
+        weightGrams,
+        weightKg,
+        quantity: weightKg,
+        rawBarcode: normalized,
+        isWeightBased: true,
+      };
+    }
+  }
+
+  // 2. 13-digit EAN-13 Scale Format: [Prefix(2)][SKU(5)][WeightGrams(5)][CheckDigit(1)]
+  if (normalized.length === 13 && isScalePrefix) {
+    const prefix = prefix2;
+    const skuRaw = normalized.substring(2, 7);
+    const weightStr = normalized.substring(7, 12);
+    const weightGrams = parseInt(weightStr, 10);
+
+    if (weightGrams >= MIN_WEIGHT_GRAMS && weightGrams <= MAX_WEIGHT_GRAMS) {
+      const weightKg = Number((weightGrams / 1000).toFixed(3));
+      return {
+        productQR: skuRaw,
+        skuRaw,
+        prefix,
+        weightGrams,
+        weightKg,
+        quantity: weightKg,
+        rawBarcode: normalized,
+        isWeightBased: true,
+      };
+    }
+  }
+
+  // 3. Fallback for generic 13-digit if prefix wasn't in 20-29 range
+  if (normalized.length === 13) {
+    const prefix = prefix2;
+    const skuRaw = normalized.substring(2, 7);
+    const weightStr = normalized.substring(7, 12);
+    const weightGrams = parseInt(weightStr, 10);
+
+    if (weightGrams >= MIN_WEIGHT_GRAMS && weightGrams <= MAX_WEIGHT_GRAMS) {
+      const weightKg = Number((weightGrams / 1000).toFixed(3));
       return {
         productQR: skuRaw,
         skuRaw,
@@ -79,23 +129,25 @@ export function parseWeightFromBarcode(barcode: string): WeightScanResult | null
     }
   }
   
-  // 2. Standard / 14+ Digit Format: [productQR][last-5-digits-as-weight]
-  const lastFiveDigits = normalized.slice(-WEIGHT_DIGITS);
-  const productQR = normalized.slice(0, -WEIGHT_DIGITS);
-  const weightGrams = parseInt(lastFiveDigits, 10);
-  
-  if (weightGrams >= MIN_WEIGHT_GRAMS && weightGrams <= MAX_WEIGHT_GRAMS) {
-    const weightKg = weightGrams / 1000;
-    return {
-      productQR,
-      skuRaw: undefined,
-      prefix: undefined,
-      weightGrams,
-      weightKg,
-      quantity: weightKg,
-      rawBarcode: normalized,
-      isWeightBased: true,
-    };
+  // 4. Standard / 14+ Digit Format: [productQR][last-5-digits-as-weight]
+  if (normalized.length >= 14) {
+    const lastFiveDigits = normalized.slice(-WEIGHT_DIGITS);
+    const productQR = normalized.slice(0, -WEIGHT_DIGITS);
+    const weightGrams = parseInt(lastFiveDigits, 10);
+    
+    if (weightGrams >= MIN_WEIGHT_GRAMS && weightGrams <= MAX_WEIGHT_GRAMS) {
+      const weightKg = Number((weightGrams / 1000).toFixed(3));
+      return {
+        productQR,
+        skuRaw: undefined,
+        prefix: undefined,
+        weightGrams,
+        weightKg,
+        quantity: weightKg,
+        rawBarcode: normalized,
+        isWeightBased: true,
+      };
+    }
   }
 
   return null;
@@ -126,16 +178,10 @@ export function extractProductQR(barcode: string): BarcodeScanResult {
 
 /**
  * Check if a barcode could be weight-based
- * Returns true if last 5 digits are within valid weight range
  */
 export function isLikelyWeightBased(barcode: string): boolean {
-  if (!barcode || barcode.length < 6) return false;
-  if (!/^\d+$/.test(barcode)) return false;
-  
-  const lastFiveDigits = barcode.slice(-WEIGHT_DIGITS);
-  const weightGrams = parseInt(lastFiveDigits, 10);
-  
-  return weightGrams >= MIN_WEIGHT_GRAMS && weightGrams <= MAX_WEIGHT_GRAMS;
+  if (!barcode || typeof barcode !== 'string') return false;
+  return parseWeightFromBarcode(barcode) !== null;
 }
 
 /**
@@ -143,7 +189,8 @@ export function isLikelyWeightBased(barcode: string): boolean {
  */
 export function formatWeight(grams: number): string {
   if (grams >= 1000) {
-    return `${(grams / 1000).toFixed(2)}kg`;
+    const kg = grams / 1000;
+    return `${Number(kg.toFixed(3))}kg`;
   }
   return `${Math.round(grams)}g`;
 }
@@ -152,19 +199,27 @@ export function formatWeight(grams: number): string {
  * Format quantity with unit (Kg)
  */
 export function formatWeightQuantity(kg: number): string {
-  if (kg === Math.floor(kg)) {
-    return `${Math.round(kg)}kg`;
+  const rounded = Number(kg.toFixed(3));
+  if (rounded === Math.floor(rounded)) {
+    return `${Math.round(rounded)}kg`;
   }
-  return `${kg.toFixed(2)}kg`;
+  return `${rounded}kg`;
 }
 
 /**
  * Validate that an item has Kg as its sales unit
+ * Recognizes 'kg', 'Kilogram (kg)', 'Kg', 'grams', 'gm', etc.
  */
 export function isKgMeasuredItem(salesUnit?: string | null): boolean {
   if (!salesUnit) return false;
-  const normalized = salesUnit.toUpperCase().trim();
-  return normalized === 'KG' || normalized === 'KILOGRAM' || normalized === 'KILOGRAMS';
+  const normalized = salesUnit.toLowerCase().trim();
+  return (
+    normalized === 'kg' ||
+    normalized.includes('kg') ||
+    normalized.includes('kilo') ||
+    normalized.includes('gram') ||
+    normalized.includes('gm')
+  );
 }
 
 /**
