@@ -23,5 +23,12 @@ logs/
 # Production compiled web assets
 !apps/web/dist/
 !apps/web/dist/**
+apps/web/dist/uploads/
+apps/web/dist/uploads/**
+
+# Product image uploads
+!apps/api/uploads/
+!apps/api/uploads/**
+
 
 

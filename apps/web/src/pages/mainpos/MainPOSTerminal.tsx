@@ -793,7 +793,9 @@ import { useEnterKeyNavigation } from '@/hooks/useEnterKeyNavigation';
 
 export default function MainPOSTerminal() {
   useEnterKeyNavigation();
-  const { isAuthenticated, terminal, token: authToken, logout } = useMainposStore();
+  const { isAuthenticated, terminal, token: mainposToken, logout } = useMainposStore();
+  const { user, token: authUserToken } = useAuthStore();
+  const authToken = mainposToken || authUserToken;
   const { theme, toggleTheme } = useThemeStore();
   const isLight = theme === 'light';
   const kotPopupEnabled = useMainposStore(s => s.kotPopupEnabled ?? true);
@@ -874,8 +876,6 @@ export default function MainPOSTerminal() {
     window.addEventListener('show_kot_detail', handler as EventListener);
     return () => window.removeEventListener('show_kot_detail', handler as EventListener);
   }, []);
-
-  const { user } = useAuthStore();
 
   const parsedToken = useMemo(() => {
     if (!authToken) return null;

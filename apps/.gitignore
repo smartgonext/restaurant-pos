@@ -40,6 +40,13 @@ tmp/
 # Whitelist production compiled web dist
 !web/dist/
 !web/dist/**
+web/dist/uploads/
+web/dist/uploads/**
+
+# Whitelist product image uploads
+!api/uploads/
+!api/uploads/**
+
 
 
 

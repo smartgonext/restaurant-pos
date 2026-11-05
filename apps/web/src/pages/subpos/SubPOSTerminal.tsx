@@ -42,7 +42,7 @@ import { ReorderableCategoryBar } from '@/components/pos/ReorderableCategoryBar'
 // ── Axios instance ────────────────────────────────────────────────────────────
 const subposApi = axios.create({ baseURL: `${API_BASE_URL}/subpos` });
 subposApi.interceptors.request.use((c) => {
-  const token = useSubposStore.getState().token;
+  const token = useSubposStore.getState().token || useAuthStore.getState().token;
   if (token) c.headers.Authorization = `Bearer ${token}`;
   return c;
 });
@@ -496,10 +496,11 @@ interface InstantAddState {
 
 export default function SubPOSTerminal() {
   useEnterKeyNavigation();
-  const { isAuthenticated, terminal, token: authToken, logout } = useSubposStore();
+  const { isAuthenticated, terminal, token: subposToken, logout } = useSubposStore();
   const { theme, toggleTheme } = useThemeStore();
   const isLight = theme === 'light';
-  const { user } = useAuthStore();
+  const { user, token: authUserToken } = useAuthStore();
+  const authToken = subposToken || authUserToken;
   const qc = useQueryClient();
   const { socket } = useSocket();
   const kotPopupEnabled = useSubposStore(s => s.kotPopupEnabled ?? true);

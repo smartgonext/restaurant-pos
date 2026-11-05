@@ -37,3 +37,4 @@ HEALTHCHECK --interval=20s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -f http://127.0.0.1:${PORT}/health || exit 1
 
 CMD ["node", "src/server.js"]
+

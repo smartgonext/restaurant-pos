@@ -500,7 +500,7 @@ export async function buildApp() {
         }
 
         // 2. Resolve nested root static files (e.g. /admin/vite.svg -> vite.svg)
-        const rootStaticMatch = cleanUrl.match(/.*(\/(?:vite\.svg|favicon\.ico|manifest\.json))$/);
+        const rootStaticMatch = cleanUrl.match(/.*(\/(?:vite\.svg|favicon\.ico|manifest\.json|amora-logo\.png|fallback-food\.png))$/);
         if (rootStaticMatch) {
           const relFile = rootStaticMatch[1].replace(/^\//, '');
           const fullPath = path.join(webDist, relFile);

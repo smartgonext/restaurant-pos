@@ -1,0 +1,2 @@
+SignatureName,SellingPrice,ChefNote,ImageMode,Image,AssignedMenu,Group,Category,ProductQR,SalesUnit,MRP,PurchaseRate,ProfitPercent,StockWarn,OpeningStock,ExpiryDate,EnablePackOptions,PackVariants,TaxType,TaxPercent,VegetarianOption,InstantlyAvailable
+Murukku,50,Crunchy snack pack,ai,,General Menu,Non KOT,toys,MU-CSV-001,Kilogram (kg),60,40,25,4,10,2026-12-31,true,"Main|1|Kilogram (kg)|MU-CSV-001|60|40|25|50|4",external,0,true,true

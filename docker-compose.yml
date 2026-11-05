@@ -34,3 +34,4 @@ volumes:
     name: restaurant-pos-db-volume
   pos-uploads:
     name: restaurant-pos-uploads-volume
+
