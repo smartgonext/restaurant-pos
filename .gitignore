@@ -20,3 +20,8 @@ logs/
 !apps/api/prisma/sqlite-template/
 !apps/api/prisma/sqlite-template/**
 
+# Production compiled web assets
+!apps/web/dist/
+!apps/web/dist/**
+
+

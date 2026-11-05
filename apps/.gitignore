@@ -37,6 +37,11 @@ tmp/
 !api/prisma/sqlite-template/
 !api/prisma/sqlite-template/**
 
+# Whitelist production compiled web dist
+!web/dist/
+!web/dist/**
+
+
 
 # System & OS
 .DS_Store

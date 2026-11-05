@@ -1,0 +1,15 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Serve existing files directly
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Do not rewrite API calls - allow proxy or backend handling
+  RewriteRule ^api/ - [L]
+
+  # Fallback to index.html for SPA routes
+  RewriteRule ^ index.html [L]
+</IfModule>

@@ -8,6 +8,8 @@
 FROM node:20-bookworm-slim AS web-builder
 WORKDIR /app
 
+ENV NODE_ENV=development
+
 # Copy shared packages and web frontend source
 COPY packages/ ./packages/
 COPY apps/shared/ ./apps/shared/
@@ -15,9 +17,13 @@ COPY apps/web/ ./apps/web/
 
 WORKDIR /app/apps/web
 
-# Build frontend SPA
-RUN npm install --ignore-scripts --no-audit --no-fund
-RUN npm run build
+# Use pre-built dist if present (fast path), otherwise install with devDependencies and build
+RUN if [ -f "dist/index.html" ]; then \
+      echo "[web-builder] Pre-built dist found. Using bundled SPA assets."; \
+    else \
+      npm install --include=dev --no-audit --no-fund && \
+      npm run build; \
+    fi
 
 # ------------------------------------------------------------------------------
 # Stage 2: Install API & Generate Prisma Client
@@ -32,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY apps/api/package*.json ./apps/api/
 COPY apps/api/prisma/ ./apps/api/prisma/
+COPY apps/api/scripts/ ./apps/api/scripts/
 
 WORKDIR /app/apps/api
 
@@ -58,8 +65,6 @@ ENV NODE_ENV=production
 ENV PORT=5000
 ENV HOST=0.0.0.0
 ENV DATABASE_URL="file:/app/apps/api/prisma/maligai.db"
-ENV JWT_SECRET="restaurant-saas-super-secret-production-jwt-key-32chars"
-ENV JWT_REFRESH_SECRET="restaurant-saas-refresh-secret-production-key-32chars"
 ENV UPLOAD_DIR="/app/apps/api/uploads"
 ENV WEB_DIST_PATH="/app/apps/web/dist"
 
