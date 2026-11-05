@@ -27,6 +27,7 @@ import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { printHtmlOrFallback, openCashDrawer, printKOTTicket, getPrinterSettings } from '@/lib/electronPrint';
 import { useWeightedBarcodeScanner } from '@/hooks/useWeightedBarcodeScanner';
 import { isKgMeasuredItem, parseWeightFromBarcode } from '@/lib/weightedBarcodeParser';
+import { filterAndRankMenuItems } from '@/lib/posItemSearch';
 import { API_BASE_URL, SERVER_BASE_URL } from '@/lib/config';
 import { useTouchLongPress } from '@/hooks/useTouchLongPress';
 import { ItemOptionsModal } from '@/components/modals/ItemOptionsModal';
@@ -264,10 +265,6 @@ function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
 
     // ── Live data from DB (token comes from /payment API response) ──
     const activeItems = token.items.filter(i => !i.isRemoved);
-    const isKotItem = (i: TokenItem) =>
-      Boolean(i.menuItem?.category?.isKOTEnabled) || (!i.inventoryItemMRPId && !i.menuItem?.salesUnit);
-    const kotItems = activeItems.filter(isKotItem);
-    const nonKotItems = activeItems.filter(i => !isKotItem(i));
     const totalTax = Number(token.sgst || 0) + Number(token.cgst || 0) + Number(token.igst || 0);
     const totalPaid = token.payments.reduce((s, p) => s + Number(p.amount), 0);
     const changeAmount = Math.max(0, totalPaid - Number(token.total));
@@ -283,7 +280,7 @@ function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
         <td style="text-align:right;font-weight:700;padding:2px 0;">₹${fmtAmt(changeAmount)}</td>
       </tr>` : '');
 
-    const kotRows = kotItems.map(i => {
+    const itemRows = activeItems.map(i => {
       const matchedItem = cachedAllMenuItems.find((it: any) =>
         it.id === i.menuItemId ||
         (it.name && i.menuItemName && it.name.trim().toLowerCase() === i.menuItemName.trim().toLowerCase())
@@ -291,26 +288,8 @@ function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
       const rawUnit = i.menuItem?.salesUnit ||
         matchedItem?.salesUnit ||
         (matchedItem?.inventoryItem as any)?.unit?.symbol ||
-        (matchedItem?.inventoryItem as any)?.unit?.name;
-
-      return `<tr>
-        <td style="width:46%;text-align:left;padding:3px 4px 3px 0;word-break:break-word;">${i.menuItemName}</td>
-        <td style="width:16%;text-align:center;padding:3px 2px;">${fmtAmt(i.quantity)}${cfg.showUnitForKOT && rawUnit ? ` ${rawUnit}` : ''}</td>
-        <td style="width:18%;text-align:right;padding:3px 4px 3px 2px;">₹${fmtAmt(i.price)}</td>
-        <td style="width:20%;text-align:right;font-weight:700;padding:3px 0 3px 2px;">₹${fmtAmt(i.total)}</td>
-      </tr>`;
-    }).join('');
-
-    const nonKotRows = nonKotItems.map(i => {
-      const matchedItem = cachedAllMenuItems.find((it: any) =>
-        it.id === i.menuItemId ||
-        (it.name && i.menuItemName && it.name.trim().toLowerCase() === i.menuItemName.trim().toLowerCase())
-      );
-      const rawUnit = i.menuItem?.salesUnit ||
-        matchedItem?.salesUnit ||
-        (matchedItem?.inventoryItem as any)?.unit?.symbol ||
-        (matchedItem?.inventoryItem as any)?.unit?.name;
-      const unitDisplay = (rawUnit && rawUnit.trim() !== '' && rawUnit !== '-') ? rawUnit : 'Pcs';
+        (matchedItem?.inventoryItem as any)?.unit?.name || '';
+      const unitText = rawUnit && rawUnit.trim() !== '' && rawUnit !== '-' ? ` ${rawUnit}` : '';
 
       let mrpValue = Number((i as any).inventoryItemMRP?.mrp ?? 0);
       if (!mrpValue && i.inventoryItemMRPId && matchedItem?.inventoryItem?.inventoryMRPs) {
@@ -326,14 +305,16 @@ function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
 
       const rateValue = Number(i.price || 0);
       const amtValue = Number(i.total || (rateValue * Number(i.quantity || 1)));
+      const hasDiscount = mrpValue > rateValue;
 
       return `<tr>
-        <td style="width:34%;text-align:left;padding:3px 4px 3px 0;word-break:break-word;">${i.menuItemName}</td>
-        <td style="width:12%;text-align:center;padding:3px 2px;">${cfg.showUnitForNonKOT ? unitDisplay : '-'}</td>
-        <td style="width:15%;text-align:right;padding:3px 4px 3px 2px;">₹${fmtAmt(mrpValue)}</td>
-        <td style="width:15%;text-align:right;padding:3px 4px 3px 2px;">₹${fmtAmt(rateValue)}</td>
-        <td style="width:10%;text-align:center;padding:3px 2px;">${fmtAmt(i.quantity)}</td>
-        <td style="width:14%;text-align:right;font-weight:700;padding:3px 0 3px 2px;">₹${fmtAmt(amtValue)}</td>
+        <td style="width:44%;text-align:left;padding:3px 2px 3px 0;word-break:break-word;">
+          <div style="font-weight:600;">${i.menuItemName}</div>
+          ${hasDiscount ? `<div style="font-size:7pt;color:#666;">MRP: ₹${fmtAmt(mrpValue)}</div>` : ''}
+        </td>
+        <td style="width:18%;text-align:center;padding:3px 2px;">${fmtAmt(i.quantity)}${unitText}</td>
+        <td style="width:18%;text-align:right;padding:3px 2px;">₹${fmtAmt(rateValue)}</td>
+        <td style="width:20%;text-align:right;font-weight:700;padding:3px 0 3px 2px;">₹${fmtAmt(amtValue)}</td>
       </tr>`;
     }).join('');
 
@@ -368,38 +349,19 @@ function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
       ${token.customerName
         ? `<div style="font-size:9pt;">Bill To: ${token.customerName}${cfg.showPhoneNumber && token.customerPhone ? ' (' + token.customerPhone + ')' : ''}</div><div class="divider"></div>`
         : ''}
-      ${kotItems.length > 0 ? `
-        <div style="font-size:9pt;font-weight:700;margin-top:2px;">FOOD / KOT ITEMS</div>
-        <table class="items-table">
-          <thead>
-            <tr>
-              <th style="width:46%;text-align:left;padding:3px 4px 3px 0;">Item</th>
-              <th style="width:16%;text-align:center;padding:3px 2px;">Qty</th>
-              <th style="width:18%;text-align:right;padding:3px 4px 3px 2px;">Rate</th>
-              <th style="width:20%;text-align:right;padding:3px 0 3px 2px;">Amt</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${kotRows}
-          </tbody>
-        </table>` : ''}
-      ${nonKotItems.length > 0 ? `
-        <div style="font-size:9pt;font-weight:700;margin-top:4px;">NON-KOT / RETAIL</div>
-        <table class="items-table">
-          <thead>
-            <tr>
-              <th style="width:34%;text-align:left;padding:3px 4px 3px 0;">Item</th>
-              <th style="width:12%;text-align:center;padding:3px 2px;">Unit</th>
-              <th style="width:15%;text-align:right;padding:3px 4px 3px 2px;">MRP</th>
-              <th style="width:15%;text-align:right;padding:3px 4px 3px 2px;">Rate</th>
-              <th style="width:10%;text-align:center;padding:3px 2px;">Qty</th>
-              <th style="width:14%;text-align:right;padding:3px 0 3px 2px;">Amt</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${nonKotRows}
-          </tbody>
-        </table>` : ''}
+      <table class="items-table">
+        <thead>
+          <tr>
+            <th style="width:44%;text-align:left;padding:3px 2px 3px 0;">Item</th>
+            <th style="width:18%;text-align:center;padding:3px 2px;">Qty</th>
+            <th style="width:18%;text-align:right;padding:3px 2px;">Rate</th>
+            <th style="width:20%;text-align:right;padding:3px 0 3px 2px;">Amt</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itemRows}
+        </tbody>
+      </table>
       <div class="divider"></div>
       <table style="font-size:9pt;width:100%;">
         <tr><td style="text-align:left;padding:2px 0;">Subtotal</td><td style="text-align:right;padding:2px 0;">₹${fmtAmt(token.subtotal)}</td></tr>
@@ -484,6 +446,13 @@ function autoPrintKotIfEligible(token: TokenData, bakeryName = 'SMARTGONEXT Bake
   try {
     const pSettings = getPrinterSettings(settings as any);
     if (!pSettings.autoPrintKot) return;
+
+    // Only auto-print separate KOT ticket if a dedicated KOT printer is set and distinct from the bill printer
+    const billPrinter = (pSettings.billPrinterName || '').trim().toLowerCase();
+    const kotPrinter = (pSettings.kotPrinterName || '').trim().toLowerCase();
+    if (!kotPrinter || (billPrinter && kotPrinter === billPrinter)) {
+      return;
+    }
 
     const activeItems = (token.items || []).filter(i => !i.isRemoved);
     const isKotItem = (i: TokenItem) =>
@@ -1310,6 +1279,7 @@ export default function MainPOSTerminal() {
 
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [search, setSearch] = useState('');
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   const processScannedBarcodeRef = useRef<(rawBarcode: string) => boolean>(() => false);
 
@@ -1797,13 +1767,12 @@ export default function MainPOSTerminal() {
 
   const filteredItems = useMemo(() => {
     const weightSearch = parseWeightFromBarcode(search);
-    return allItems.filter(item => {
-      const matchCat = activeCategory === 'all' || item.categoryId === parseInt(activeCategory);
-      const matchSearch = item.name.toLowerCase().includes(search.toLowerCase()) ||
-        (item.productQR && item.productQR === search) ||
-        (weightSearch?.productQR && (item.productQR === weightSearch.productQR || String(item.id) === weightSearch.productQR));
-      return matchCat && matchSearch;
-    });
+    return filterAndRankMenuItems(
+      allItems,
+      search,
+      activeCategory,
+      weightSearch?.productQR
+    );
   }, [allItems, activeCategory, search]);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -2349,9 +2318,12 @@ export default function MainPOSTerminal() {
       setSearch('');
       toast.success(`Scanned: ${finalItem.name}`, { duration: 800, icon: '🏷️' });
       return true;
-    } else if (filteredItems.length === 1 && search.trim().toLowerCase() === cleanCode) {
-      handleAddToCart(filteredItems[0]);
+    } else if (filteredItems.length > 0) {
+      const exactMatch = filteredItems.find(i => String(i.name || '').trim().toLowerCase() === cleanCode);
+      const targetItem = exactMatch || filteredItems[0];
+      handleAddToCart(targetItem);
       setSearch('');
+      toast.success(`Added ${targetItem.name}`, { duration: 800, icon: '🛒' });
       return true;
     } else if (code.length > 0) {
       // 5. Fallback: If short numeric and no menu items matched, try loading as a token number
@@ -2360,7 +2332,7 @@ export default function MainPOSTerminal() {
         lookupToken(code);
         return true;
       }
-      toast.error(`Barcode "${code}" not found in catalog`);
+      toast.error(`Item "${code}" not found in catalog`);
       setSearch('');
       return false;
     }
@@ -2635,18 +2607,14 @@ export default function MainPOSTerminal() {
       const payAmount = (customPayAmount && customPayAmount > 0 && customPayAmount <= remaining) ? customPayAmount : remaining;
 
       if (remaining > 0) {
-        if (method === 'gpay' || method === 'upi') {
+        // Broadcast UPI/GPay QR to customer screen if configured, without blocking or erroring
+        if ((method === 'gpay' || method === 'upi') && socket) {
           const merchantVpa = (billSettings?.upiVpa || billSettings?.upiId || import.meta.env.VITE_UPI_MERCHANT || import.meta.env.VITE_MERCHANT_UPI || '');
-          if (!merchantVpa) {
-            toast.error('Merchant UPI VPA is not configured! Please save your UPI ID in Settings -> Bill Settings.');
-            setIsSubmitting(false);
-            return;
+          if (merchantVpa) {
+            const merchantName = (user?.restaurant?.name || import.meta.env.VITE_MERCHANT_NAME || 'Merchant');
+            const upiUri = `upi://pay?pa=${encodeURIComponent(merchantVpa)}&pn=${encodeURIComponent(merchantName)}&am=${encodeURIComponent(String(payAmount))}&cu=INR&tr=${encodeURIComponent(String(targetQrCode || ''))}`;
+            socket.emit('customer_display_show_qr', { restaurantId: user?.restaurant?.id, upiUri, amount: payAmount, token: targetQrCode, merchantName, merchantVpa });
           }
-          const merchantName = (user?.restaurant?.name || import.meta.env.VITE_MERCHANT_NAME || 'Merchant');
-          const upiUri = `upi://pay?pa=${encodeURIComponent(merchantVpa)}&pn=${encodeURIComponent(merchantName)}&am=${encodeURIComponent(String(payAmount))}&cu=INR&tr=${encodeURIComponent(String(targetQrCode || ''))}`;
-          if (socket) socket.emit('customer_display_show_qr', { restaurantId: user?.restaurant?.id, upiUri, amount: payAmount, token: targetQrCode, merchantName, merchantVpa });
-          setAwaitingUPIPayment(true); setPendingUpiPayment({ tokenQr: String(targetQrCode), amount: payAmount, method });
-          toast.success('UPI/GPay QR shown on customer display'); setIsSubmitting(false); return;
         }
         const payRes = await api.post(`/token/${targetQrCode}/payment`, { method, amount: payAmount, staffId: user?.id });
         const responseData = payRes.data?.data || payRes.data;
@@ -2665,10 +2633,17 @@ export default function MainPOSTerminal() {
           if (getPrinterSettings(billSettings).autoPrintBill) {
             printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
           }
-          autoPrintKotIfEligible(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
           setLoadedWaiterBill(null);
           refetchPendingWaiterBills();
-          setTimeout(() => { setPaidSuccess(false); setCurrentToken(null); setCustomerName(''); setCustomerPhone(''); }, 3000);
+          setTimeout(() => {
+            setPaidSuccess(false);
+            setCurrentToken(null);
+            setCustomerName('');
+            setCustomerPhone('');
+            setSearch('');
+            searchRef.current?.focus();
+            searchRef.current?.select();
+          }, 1200);
         } else {
           toast.success(`Partial payment of ₹${payAmount.toFixed(2)} (${method.toUpperCase()}) recorded!`);
         }
@@ -2777,7 +2752,7 @@ export default function MainPOSTerminal() {
           setCurrentToken(null);
           setCustomerName('');
           setCustomerPhone('');
-        }, 3000);
+        }, 1200);
       } else {
         toast.success(`Split payment recorded!`);
       }
@@ -2803,8 +2778,7 @@ export default function MainPOSTerminal() {
         if (getPrinterSettings(billSettings).autoPrintBill) {
           printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
         }
-        autoPrintKotIfEligible(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
-        setTimeout(() => { setPaidSuccess(false); setCurrentToken(null); setCustomerName(''); setCustomerPhone(''); }, 3000);
+        setTimeout(() => { setPaidSuccess(false); setCurrentToken(null); setCustomerName(''); setCustomerPhone(''); }, 1200);
       }
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'UPI confirmation failed');
@@ -3549,6 +3523,7 @@ export default function MainPOSTerminal() {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
                 <input
+                  ref={searchRef}
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -4044,12 +4019,20 @@ export default function MainPOSTerminal() {
                         }}
                         placeholder="Cust Name (Optional - Walk-in)"
                         className={cn(
-                          "w-full px-3 py-1.5 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm",
+                          "w-full pl-3 pr-16 py-1.5 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm",
                           isLight
                             ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400"
                             : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400"
                         )}
                       />
+                      <button
+                        type="button"
+                        onClick={() => setCustomerName(customerName === 'Walk-in Customer' ? '' : 'Walk-in Customer')}
+                        title="Set as Walk-in Customer"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[9px] font-black rounded uppercase transition bg-purple-600/30 text-purple-300 hover:bg-purple-600 hover:text-white"
+                      >
+                        Walk-in
+                      </button>
                       {activeCustomerDropdown === 'name' && customerSuggestions.length > 0 && (
                         <div className={cn("absolute bottom-full mb-1 left-0 w-72 border rounded-xl z-50 shadow-2xl overflow-hidden max-h-60 overflow-y-auto", isLight ? "bg-white border-slate-300" : "bg-[#1a1c23] border-gray-800")}>
                           <div className={cn("px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b", isLight ? "bg-slate-50 text-slate-500 border-slate-200" : "bg-[#14161d] text-gray-400 border-gray-800")}>
@@ -4346,7 +4329,10 @@ export default function MainPOSTerminal() {
 
       {/* Payment success overlay */}
       {paidSuccess && (
-        <div className="fixed inset-0 bg-black/98 flex items-center justify-center z-[200] backdrop-blur-sm">
+        <div
+          onClick={() => { setPaidSuccess(false); setCurrentToken(null); setCustomerName(''); setCustomerPhone(''); }}
+          className="fixed inset-0 bg-black/90 flex items-center justify-center z-[200] backdrop-blur-sm cursor-pointer"
+        >
           <div className="text-center animate-in fade-in zoom-in duration-300">
             <div className="w-32 h-32 rounded-full bg-green-500/10 flex items-center justify-center mx-auto mb-6">
               <CheckCircle className="w-16 h-16 text-green-400" />

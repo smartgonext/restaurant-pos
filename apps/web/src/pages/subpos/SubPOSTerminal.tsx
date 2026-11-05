@@ -24,6 +24,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { useWeightedBarcodeScanner } from '@/hooks/useWeightedBarcodeScanner';
 import { isKgMeasuredItem, parseWeightFromBarcode } from '@/lib/weightedBarcodeParser';
+import { filterAndRankMenuItems } from '@/lib/posItemSearch';
 import { useTouchLongPress } from '@/hooks/useTouchLongPress';
 import { ItemOptionsModal } from '@/components/modals/ItemOptionsModal';
 import { ReorderableCategoryBar } from '@/components/pos/ReorderableCategoryBar';
@@ -994,6 +995,20 @@ export default function SubPOSTerminal() {
     return null;
   };
 
+  // ── Filtered items with Intelligent Relevance Ranking ──
+  const filteredItems = useMemo(() => {
+    const weightResult = parseWeightFromBarcode(searchQuery);
+    return filterAndRankMenuItems(
+      allItems,
+      searchQuery,
+      selectedCategoryId,
+      weightResult?.productQR
+    );
+  }, [allItems, searchQuery, selectedCategoryId]);
+
+  const filteredItemsRef = useRef<MenuItem[]>(filteredItems);
+  filteredItemsRef.current = filteredItems;
+
   const processScannedBarcode = (rawBarcode: string): boolean => {
     const code = String(rawBarcode || '').trim();
     if (!code) return false;
@@ -1139,17 +1154,14 @@ export default function SubPOSTerminal() {
       return true;
     }
 
-    // 5. Text match
-    const textMatches = allItems.filter(item => {
-      const q = code.toLowerCase();
-      return item.name.toLowerCase().includes(q) ||
-        (item.productQR && item.productQR.toLowerCase() === q) ||
-        (item.productQR && item.productQR.toLowerCase().includes(q)) ||
-        String(item.id) === code;
-    });
-    if (textMatches.length === 1 && searchQuery.trim().toLowerCase() === cleanCode) {
-      handleAddToCart(textMatches[0]);
+    // 5. Intelligent match from ranked search results
+    const curFiltered = filteredItemsRef.current;
+    if (curFiltered.length > 0) {
+      const exactMatch = curFiltered.find(i => String(i.name || '').trim().toLowerCase() === cleanCode);
+      const targetItem = exactMatch || curFiltered[0];
+      handleAddToCart(targetItem);
       setSearchQuery('');
+      toast.success(`Added ${targetItem.name}`, { duration: 800, icon: '🛒' });
       return true;
     }
 
@@ -1160,29 +1172,11 @@ export default function SubPOSTerminal() {
       return true;
     }
 
-    toast.error('Item not found for scanning');
+    toast.error(`Item "${code}" not found in catalog`);
     setSearchQuery('');
     return false;
   };
   processScannedBarcodeRef.current = processScannedBarcode;
-
-  // ── Filtered items ──
-  const filteredItems = allItems.filter((item) => {
-    const normalizedSearch = String(searchQuery || '').trim();
-    const q = normalizedSearch.toLowerCase();
-    const weightResult = parseWeightFromBarcode(normalizedSearch);
-    const matchCat = selectedCategoryId === null || item.categoryId === selectedCategoryId;
-    const matchSearch = !q ||
-      String(item.name || '').toLowerCase().includes(q) ||
-      String(item.category?.name || '').toLowerCase().includes(q) ||
-      String(item.productQR || '').toLowerCase() === q ||
-      String(item.productQR || '').toLowerCase().includes(q) ||
-      String(weightResult?.productQR || '').toLowerCase() === String(item.productQR || '').toLowerCase() ||
-      String(item.inventoryItem?.barcode || '').toLowerCase().includes(q) ||
-      String(item.inventoryItem?.sku || '').toLowerCase().includes(q) ||
-      String(item.id) === normalizedSearch;
-    return matchCat && matchSearch;
-  });
 
   // ── Add to cart ──
   const { playSound, playAddSound, playIncrementSound, playDecrementSound, playDeleteSound, playTokenSound, playKeypadSound } = useClickSound();
@@ -1632,7 +1626,7 @@ export default function SubPOSTerminal() {
   // ── Create / save token mutation ──
   const createToken = useMutation({
     mutationFn: async () => {
-      if (!customerName || !customerName.trim()) throw new Error('Customer Name is REQUIRED! Please enter customer name before generating token.');
+      const resolvedCustName = customerName?.trim() || 'Walk-in Customer';
       if (localCart.length === 0) throw new Error('No items to save');
       const itemsPayload = localCart.map(i => ({
         menuItemId: i.menuItemId,
@@ -1646,7 +1640,7 @@ export default function SubPOSTerminal() {
       if (!loadedToken) {
         const { data } = await subposApi.post('/token/create', {
           items: itemsPayload,
-          customerName: customerName?.trim() || 'Walk-in Customer',
+          customerName: resolvedCustName,
           customerPhone: customerPhone || undefined,
           staffId: user?.id,
         }, { headers });
@@ -1667,11 +1661,12 @@ export default function SubPOSTerminal() {
     onSuccess: (result) => {
       playTokenSound();
       setLastToken(result);
-      setShowPrintPreview(true);
+      // Success modal suppressed per user request - seamlessly ready for next customer
       
+      const resolvedCustName = customerName?.trim() || 'Walk-in Customer';
       const pSettings = getPrinterSettings(billSettings as any);
       if (pSettings.autoPrintBill) {
-        printTokenSlip(result, localCart, customerName?.trim() || 'Walk-in Customer', customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings);
+        printTokenSlip(result, localCart, resolvedCustName, customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings);
       }
 
       // Check if cart contains any KOT items and print to dedicated KOT printer
@@ -1679,10 +1674,11 @@ export default function SubPOSTerminal() {
         Boolean((i as any).category?.isKOTEnabled) || (!i.inventoryItemMRPId && !i.salesUnit);
       const kotItems = localCart.filter(isKotCartItem);
 
-      if (kotItems.length > 0 && pSettings.autoPrintKot) {
+      const hasDedicatedKotPrinter = Boolean(pSettings.kotPrinterName && (!pSettings.billPrinterName || pSettings.kotPrinterName.trim().toLowerCase() !== pSettings.billPrinterName.trim().toLowerCase()));
+      if (kotItems.length > 0 && pSettings.autoPrintKot && hasDedicatedKotPrinter) {
         printKOTTicket({
           tokenNumber: result.tokenNumber,
-          customerName,
+          customerName: resolvedCustName,
           customerPhone,
           time: new Date(),
           orderType: 'Sub POS Token',
@@ -1700,18 +1696,26 @@ export default function SubPOSTerminal() {
       setLocalCart([]);
       setCustomerName('');
       setCustomerPhone('');
+      setSearchQuery('');
       if (!isAppendingRef.current) setTodayCount((c) => c + 1);
       setLoadedToken(null);
       setExistingTokenItems([]);
       isAppendingRef.current = false;
       toast.success(`Token #${result.tokenNumber} created!`);
-      searchRef.current?.focus();
+      
+      // Auto-focus and select search field immediately and after print completes
+      const focusAndSelectSearch = () => {
+        if (searchRef.current) {
+          searchRef.current.focus();
+          searchRef.current.select();
+        }
+      };
+      focusAndSelectSearch();
+      setTimeout(focusAndSelectSearch, 150);
+      setTimeout(focusAndSelectSearch, 450);
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to create token');
-      if (!customerName || !customerName.trim()) {
-        focusCustomerName();
-      }
     },
   });
 
@@ -2589,8 +2593,16 @@ export default function SubPOSTerminal() {
                         }
                       }}
                       placeholder="Cust Name (Optional - Walk-in)"
-                      className={cn("w-full pl-8 pr-3 py-2 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm", isLight ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400" : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400")}
+                      className={cn("w-full pl-8 pr-16 py-2 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm", isLight ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400" : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400")}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setCustomerName(customerName === 'Walk-in Customer' ? '' : 'Walk-in Customer')}
+                      title="Set as Walk-in Customer"
+                      className="absolute right-1 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[9px] font-black rounded uppercase transition bg-purple-600/30 text-purple-300 hover:bg-purple-600 hover:text-white"
+                    >
+                      Walk-in
+                    </button>
                   </div>
                   <div className="relative flex-1">
                     <Phone className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 z-10", isLight ? "text-slate-300" : "text-slate-600")} />
@@ -2767,33 +2779,6 @@ export default function SubPOSTerminal() {
         );
       })()}
 
-      {/* ── Print preview success modal ── */}
-      {showPrintPreview && lastToken && (
-        <div
-          className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-[100] no-print"
-          onClick={() => setShowPrintPreview(false)}
-        >
-          <div className={cn(
-            "rounded-3xl p-8 text-center max-w-sm w-full mx-4 shadow-2xl border transform animate-in zoom-in-95 duration-200 transition-colors",
-            isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#1a1c23] border-gray-800 text-white"
-          )}>
-            <div className="w-16 h-16 bg-[#7c5cfc]/10 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Printer className="w-8 h-8 text-[#7c5cfc]" />
-            </div>
-            <div className={cn("text-7xl font-black mb-1 tracking-tighter", isLight ? "text-slate-900" : "text-white")}>{lastToken.tokenNumber}</div>
-            <p className="text-[#7c5cfc] text-sm font-bold uppercase tracking-widest mb-6">Token Printed</p>
-            <button
-              onClick={() => setShowPrintPreview(false)}
-              className={cn(
-                "w-full py-3.5 rounded-xl font-bold border transition active:scale-95",
-                isLight ? "bg-slate-900 text-white hover:bg-slate-800 border-slate-800" : "bg-gray-800 text-white hover:bg-gray-700 border-gray-700"
-              )}
-            >
-              Ready for Next Customer
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* ── Modifiers Selection Modal ── */}
       {activeModifierItem && (
