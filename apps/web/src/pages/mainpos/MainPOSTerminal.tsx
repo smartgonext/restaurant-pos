@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback, createElement } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, createElement, memo } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QRCodeSVG } from 'qrcode.react';
 import { Navigate } from 'react-router-dom';
@@ -3785,8 +3785,8 @@ export default function MainPOSTerminal() {
                   item={item}
                   isLight={isLight}
                   isDisabled={currentToken?.status === 'paid'}
-                  onTap={(it) => handleAddToCart(it)}
-                  onLongPress={(it) => setOptionsModalTarget({ item: it })}
+                  onTap={(it: any) => handleAddToCart(it)}
+                  onLongPress={(it: any) => setOptionsModalTarget({ item: it })}
                 />
               ))}
             </div>

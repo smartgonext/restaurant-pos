@@ -1500,7 +1500,7 @@ export default function MenuItems() {
                 categories={categories || []}
                 value={formData.categoryId}
                 onChange={(catId) => {
-                  const cat = categories?.find(c => Number(c.id) === Number(catId));
+                  const cat = categories?.find((c: any) => Number(c.id) === Number(catId));
                   const isFood = cat ? isCategoryKOTEnabled(cat) : false;
                   setFormData(prev => ({
                     ...prev,
