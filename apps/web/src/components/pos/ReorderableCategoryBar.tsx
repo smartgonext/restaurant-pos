@@ -5,6 +5,8 @@ import toast from 'react-hot-toast';
 export interface CategoryItem {
   id: number | string;
   name: string;
+  isKOTEnabled?: boolean;
+  sortOrder?: number;
   [key: string]: any;
 }
 
@@ -21,7 +23,7 @@ export function ReorderableCategoryBar({
   categories,
   activeCategoryId,
   onSelectCategory,
-  storageKey = 'pos_category_order',
+  storageKey = 'pos_category_order_v2',
   isLight = false,
   className,
 }: ReorderableCategoryBarProps) {
@@ -34,6 +36,16 @@ export function ReorderableCategoryBar({
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const activeTouchIdRef = useRef<string | number | null>(null);
   const didDragRef = useRef(false);
+
+  // Helper to arrange categories: KOT categories first, then all others
+  const sortCategoriesKotFirst = useCallback((cats: CategoryItem[]): CategoryItem[] => {
+    return [...cats].sort((a, b) => {
+      const aKot = Boolean(a.isKOTEnabled);
+      const bKot = Boolean(b.isKOTEnabled);
+      if (aKot !== bKot) return aKot ? -1 : 1; // KOT categories first
+      return (Number(a.sortOrder || 0)) - (Number(b.sortOrder || 0));
+    });
+  }, []);
 
   // Load and apply persistent category order from localStorage
   useEffect(() => {
@@ -51,9 +63,18 @@ export function ReorderableCategoryBar({
           savedIds.forEach((id, idx) => idMap.set(String(id), idx));
 
           const sorted = [...categories].sort((a, b) => {
-            const indexA = idMap.has(String(a.id)) ? idMap.get(String(a.id))! : 99999;
-            const indexB = idMap.has(String(b.id)) ? idMap.get(String(b.id))! : 99999;
-            return indexA - indexB;
+            const hasA = idMap.has(String(a.id));
+            const hasB = idMap.has(String(b.id));
+            if (hasA && hasB) {
+              return idMap.get(String(a.id))! - idMap.get(String(b.id))!;
+            }
+            if (hasA && !hasB) return -1;
+            if (!hasA && hasB) return 1;
+            // Any items not in saved custom order: sort KOT first
+            const aKot = Boolean(a.isKOTEnabled);
+            const bKot = Boolean(b.isKOTEnabled);
+            if (aKot !== bKot) return aKot ? -1 : 1;
+            return (Number(a.sortOrder || 0)) - (Number(b.sortOrder || 0));
           });
 
           setOrderedCategories(sorted);
@@ -64,8 +85,9 @@ export function ReorderableCategoryBar({
       console.warn('[ReorderableCategoryBar] Failed to read saved category order', e);
     }
 
-    setOrderedCategories(categories);
-  }, [categories, storageKey]);
+    // Starting arrangement: KOT categories first, then other categories
+    setOrderedCategories(sortCategoriesKotFirst(categories));
+  }, [categories, storageKey, sortCategoriesKotFirst]);
 
   // Persist new order into localStorage
   const saveNewOrder = useCallback(

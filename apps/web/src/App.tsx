@@ -119,14 +119,14 @@ export default function App() {
       <Toaster
         position="bottom-right"
         toastOptions={{
-          duration: 3000,
+          duration: 500,
           style: {
             background: '#1e2235',
             color: '#ffffff',
             border: '1px solid #2a2d3e',
             borderRadius: '12px',
           },
-          success: { duration: 3000, iconTheme: { primary: '#10b981', secondary: '#ffffff' } },
+          success: { duration: 500, iconTheme: { primary: '#10b981', secondary: '#ffffff' } },
           error: { duration: 5000, iconTheme: { primary: '#ef4444', secondary: '#ffffff' } },
         }}
       />

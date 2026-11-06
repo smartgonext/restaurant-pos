@@ -22,13 +22,15 @@ export const computeSellingPrice = (m, fallbackPrice = 0) => {
     if (!m) return m;
     const purchase = Number(m.purchaseRate ?? 0);
     const profit = Number(m.profitPercent ?? 0);
-    let selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
-    if (selling <= 0) {
-        if (Number(m.mrp ?? 0) > 0) {
-            selling = Number(m.mrp);
-        } else if (Number(fallbackPrice ?? 0) > 0) {
-            selling = Number(fallbackPrice);
-        }
+    let selling = 0;
+    if (profit > 0 && purchase > 0) {
+        selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+    } else if (Number(m.mrp ?? 0) > 0) {
+        selling = Number(m.mrp);
+    } else if (Number(fallbackPrice ?? 0) > 0) {
+        selling = Number(fallbackPrice);
+    } else if (purchase > 0) {
+        selling = purchase;
     }
     return { ...m, sellingPrice: selling };
 };
@@ -167,15 +169,29 @@ export async function getMainposCategories(restaurantId) {
     }
     const categories = await prisma.itemCategory.findMany({
         where: { restaurantId },
+        include: {
+            group: { select: { id: true, name: true, isKOTEnabled: true } }
+        },
         orderBy: { sortOrder: 'asc' },
     });
-    const etag = `W/"cat-${restaurantId}-${categories.length}-${Date.now()}"`;
+    const normalized = categories.map((cat) => ({
+        ...cat,
+        isKOTEnabled: cat.group && typeof cat.group.isKOTEnabled === 'boolean'
+            ? Boolean(cat.group.isKOTEnabled)
+            : Boolean(cat.isKOTEnabled),
+    })).sort((a, b) => {
+        const aKot = a.isKOTEnabled ? 1 : 0;
+        const bKot = b.isKOTEnabled ? 1 : 0;
+        if (aKot !== bKot) return bKot - aKot; // KOT categories first
+        return (Number(a.sortOrder || 0)) - (Number(b.sortOrder || 0));
+    });
+    const etag = `W/"cat-${restaurantId}-${normalized.length}-${Date.now()}"`;
     mainposCatCache.set(restaurantId, {
-        data: categories,
+        data: normalized,
         etag,
         expiresAt: Date.now() + TTL_MS,
     });
-    return { data: categories, etag };
+    return { data: normalized, etag };
 }
 
 export async function getSubposCategories(restaurantId, groupIds = []) {
@@ -192,15 +208,29 @@ export async function getSubposCategories(restaurantId, groupIds = []) {
             restaurantId,
             ...(validGroupIds.length > 0 ? { id: { in: validGroupIds } } : {}),
         },
+        include: {
+            group: { select: { id: true, name: true, isKOTEnabled: true } }
+        },
         orderBy: { sortOrder: 'asc' },
     });
-    const etag = `W/"sp-cat-${cacheKey}-${categories.length}-${Date.now()}"`;
+    const normalized = categories.map((cat) => ({
+        ...cat,
+        isKOTEnabled: cat.group && typeof cat.group.isKOTEnabled === 'boolean'
+            ? Boolean(cat.group.isKOTEnabled)
+            : Boolean(cat.isKOTEnabled),
+    })).sort((a, b) => {
+        const aKot = a.isKOTEnabled ? 1 : 0;
+        const bKot = b.isKOTEnabled ? 1 : 0;
+        if (aKot !== bKot) return bKot - aKot; // KOT categories first
+        return (Number(a.sortOrder || 0)) - (Number(b.sortOrder || 0));
+    });
+    const etag = `W/"sp-cat-${cacheKey}-${normalized.length}-${Date.now()}"`;
     subposCatCache.set(cacheKey, {
-        data: categories,
+        data: normalized,
         etag,
         expiresAt: Date.now() + TTL_MS,
     });
-    return { data: categories, etag };
+    return { data: normalized, etag };
 }
 
 /**

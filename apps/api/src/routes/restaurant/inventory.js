@@ -21,13 +21,15 @@ export async function inventoryRoutes(app) {
             return m;
         const purchase = Number(m.purchaseRate ?? 0);
         const profit = Number(m.profitPercent ?? 0); // ← never modified here
-        let selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
-        if (selling <= 0) {
-            if (Number(m.mrp ?? 0) > 0) {
-                selling = Number(m.mrp);
-            } else if (Number(fallbackPrice ?? 0) > 0) {
-                selling = Number(fallbackPrice);
-            }
+        let selling = 0;
+        if (profit > 0 && purchase > 0) {
+            selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+        } else if (Number(m.mrp ?? 0) > 0) {
+            selling = Number(m.mrp);
+        } else if (Number(fallbackPrice ?? 0) > 0) {
+            selling = Number(fallbackPrice);
+        } else if (purchase > 0) {
+            selling = purchase;
         }
         return { ...m, sellingPrice: selling };
     };

@@ -91,7 +91,7 @@ interface MenuItem {
   };
 }
 
-interface Category { id: number; name: string; }
+interface Category { id: number; name: string; isKOTEnabled?: boolean; sortOrder?: number; }
 
 interface BillSettings {
   showGST?: boolean;
@@ -140,12 +140,16 @@ function getMRPSellingPrice(m: InventoryMRP, fallbackPrice: number = 0): number 
   }
   const purchase = Number(m.purchaseRate ?? 0);
   const profit = Number(m.profitPercent ?? 0);
-  const computed = Math.round(purchase * (1 + profit / 100) * 100) / 100;
-  if (computed > 0) return computed;
+  if (profit > 0 && purchase > 0) {
+    return Math.round(purchase * (1 + profit / 100) * 100) / 100;
+  }
   if (m.mrp !== undefined && m.mrp !== null && Number(m.mrp) > 0) {
     return Number(m.mrp);
   }
-  return Number(fallbackPrice || 0);
+  if (Number(fallbackPrice || 0) > 0) {
+    return Number(fallbackPrice);
+  }
+  return purchase;
 }
 
 function getActiveMRPs(mrps: InventoryMRP[]): InventoryMRP[] {
@@ -311,7 +315,7 @@ function printTokenSlip(
     const pSettings = getPrinterSettings(settings as any);
     await printHtmlOrFallback(html, { deviceName: pSettings.billPrinterName || undefined });
   };
-  invokePrint().catch(err => console.error('Print token failed', err));
+  return invokePrint().catch(err => console.error('Print token failed', err));
 }
 
 // ── Touch Menu Item Card Component (Memoized for Butter-Smooth 60fps POS Touch) ──
@@ -426,18 +430,22 @@ function QtyEditorModal({ cartItem, initialValue, onApply, onClose }: QtyEditorM
     onApply(parsed);
   };
 
+  const { theme } = useThemeStore();
+  const isLight = theme === 'light';
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[150]" onClick={onClose}>
       <form
-        className="bg-[#1a1c23] rounded-xl border border-gray-800 p-4 w-full max-w-sm shadow-2xl"
+        data-enter-ignore="true"
+        className={cn("rounded-xl border p-4 w-full max-w-sm shadow-2xl transition-colors", isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#1a1c23] border-gray-800 text-white")}
         onClick={(e) => e.stopPropagation()}
         onSubmit={handleSubmit}
       >
-        <div className="text-white font-black text-sm uppercase tracking-wide mb-2">Edit Quantity</div>
-        <div className="text-gray-400 text-xs mb-3">{cartItem.displayName || cartItem.name}</div>
+        <div className={cn("font-black text-sm uppercase tracking-wide mb-2", isLight ? "text-slate-900" : "text-white")}>Edit Quantity</div>
+        <div className={cn("text-xs mb-3", isLight ? "text-slate-500" : "text-gray-400")}>{cartItem.displayName || cartItem.name}</div>
 
         <select
-          className="w-full bg-[#0f1014] border border-gray-700 text-white text-xs rounded-lg px-2 py-2 mb-2"
+          className={cn("w-full text-xs rounded-lg px-2 py-2 mb-2 border outline-none", isLight ? "bg-slate-50 border-slate-300 text-slate-900" : "bg-[#0f1014] border-gray-700 text-white")}
           value=""
           onChange={(e) => {
             const num = Number(e.target.value);
@@ -456,16 +464,22 @@ function QtyEditorModal({ cartItem, initialValue, onApply, onClose }: QtyEditorM
           onChange={(e) => setVal(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') onClose();
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              e.stopPropagation();
+              handleSubmit(e);
+            }
           }}
           placeholder="Type quantity (e.g. 10, 15, 0.5)"
-          className="w-full bg-[#0f1014] border border-gray-700 text-white text-lg font-bold rounded-lg px-3 py-2 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+          className={cn("w-full text-lg font-bold rounded-lg px-3 py-2 border outline-none", isLight ? "bg-white border-slate-300 text-slate-900 focus:border-purple-600 focus:ring-1 focus:ring-purple-600" : "bg-[#0f1014] border-gray-700 text-white focus:border-purple-500 focus:ring-1 focus:ring-purple-500")}
         />
-        <div className="mt-2 text-xs text-gray-400">Preview: {formatQtyDisplay(Number(val || 0), cartItem.salesUnit)}</div>
+        <div className={cn("mt-2 text-xs", isLight ? "text-slate-500" : "text-gray-400")}>Preview: {formatQtyDisplay(Number(val || 0), cartItem.salesUnit)}</div>
 
         <div className="mt-4 flex justify-end gap-2">
-          <button type="button" className="px-3 py-1.5 text-xs bg-gray-800 rounded text-gray-300 hover:bg-gray-700" onClick={onClose}>Cancel</button>
+          <button type="button" className={cn("px-3 py-1.5 text-xs rounded transition", isLight ? "bg-slate-100 text-slate-700 hover:bg-slate-200" : "bg-gray-800 text-gray-300 hover:bg-gray-700")} onClick={onClose}>Cancel</button>
           <button
             type="submit"
+            data-submit-btn="true"
             className="px-4 py-2 text-xs bg-purple-600 hover:bg-purple-500 rounded text-white font-bold transition active:scale-95"
           >
             Apply (Enter)
@@ -559,7 +573,7 @@ export default function SubPOSTerminal() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | string | null>(null);
 
-  const processScannedBarcodeRef = useRef<(rawBarcode: string) => boolean>(() => false);
+  const processScannedBarcodeRef = useRef<(rawBarcode: string, skipTokenLookup?: boolean) => boolean>(() => false);
 
   useWeightedBarcodeScanner((scanResult) => {
     const processed = processScannedBarcodeRef.current(scanResult.rawBarcode);
@@ -603,6 +617,7 @@ export default function SubPOSTerminal() {
   const instantSellingInputRef = useRef<HTMLInputElement>(null);
   const instantPurchaseInputRef = useRef<HTMLInputElement>(null);
   const isSavingInstantRef = useRef(false);
+  const handleOpenInstantAddRef = useRef<(searchVal?: string, explicitBarcode?: string) => Promise<void>>(() => Promise.resolve());
 
   const handleSaveItemOptions = ({
     quantity,
@@ -829,6 +844,53 @@ export default function SubPOSTerminal() {
   const cartScrollRef = useRef<HTMLDivElement | null>(null);
   const isAppendingRef = useRef(false);
   const previousTokenSnapshotRef = useRef<{ items: any[]; total: number } | null>(null);
+  const headers = useMemo(() => ({ Authorization: `Bearer ${authToken}` }), [authToken]);
+
+  // ── Post-Print / Cancel-Print Workflow State ──
+  const [postPrintPending, setPostPrintPending] = useState<{
+    tokenNumber: number | string;
+    loadedTokenData: any;
+    savedItems: LocalCartItem[];
+  } | null>(null);
+  const postPrintTimerRef = useRef<any>(null);
+
+  const finalizeSubposOrder = useCallback(() => {
+    if (postPrintTimerRef.current) {
+      clearTimeout(postPrintTimerRef.current);
+      postPrintTimerRef.current = null;
+    }
+    setPostPrintPending(null);
+    setLocalCart([]);
+    setCustomerName('');
+    setCustomerPhone('');
+    setSearchQuery('');
+    setLoadedToken(null);
+    setExistingTokenItems([]);
+    isAppendingRef.current = false;
+    toast.success('Bill closed! Ready for next order', { duration: 1200, icon: '✓' });
+  }, []);
+
+  const cancelPostPrintAndKeepCart = useCallback(() => {
+    if (postPrintTimerRef.current) {
+      clearTimeout(postPrintTimerRef.current);
+      postPrintTimerRef.current = null;
+    }
+    setPostPrintPending(prev => {
+      if (prev) {
+        const qr = prev.loadedTokenData?.qrCode;
+        if (qr) {
+          subposApi.post(`/token/${qr}/cancel`, {}, { headers }).catch(() => {});
+        }
+        // Restore all items back into localCart so cashier can edit, add, or generate again!
+        setLocalCart(prev.savedItems);
+        setLoadedToken(null);
+        setExistingTokenItems([]);
+        isAppendingRef.current = false;
+      }
+      return null;
+    });
+    toast.success('Print cancelled — continue adding items!', { duration: 1500, icon: '🛒' });
+  }, [headers]);
   const displayWindowRef = useRef<Window | null>(null);
   const isPresentingRef = useRef(sessionStorage.getItem('subpos_is_presenting') === 'true');
   const [isCustomerDisplayActive, setIsCustomerDisplayActive] = useState(sessionStorage.getItem('subpos_is_presenting') === 'true');
@@ -836,7 +898,6 @@ export default function SubPOSTerminal() {
   if (!isAuthenticated) return <Navigate to="/subpos" replace />;
 
   const debouncedCustomerPhone = useDebounce(customerPhone, 500);
-  const headers = useMemo(() => ({ Authorization: `Bearer ${authToken}` }), [authToken]);
 
   // ── Queries ──
   const { data: todayTokens = [] } = useQuery({
@@ -887,8 +948,15 @@ export default function SubPOSTerminal() {
     queryKey: ['subpos-categories', authToken],
     queryFn: async () => {
       const { data } = await subposApi.get('/categories', { headers: { Authorization: `Bearer ${authToken}` } });
-      if (Array.isArray(data?.data)) setCachedCategories('subpos', data.data);
-      return data.data;
+      const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+      const sorted = [...list].sort((a: any, b: any) => {
+        const aKot = Boolean(a.isKOTEnabled);
+        const bKot = Boolean(b.isKOTEnabled);
+        if (aKot !== bKot) return aKot ? -1 : 1;
+        return (Number(a.sortOrder || 0)) - (Number(b.sortOrder || 0));
+      });
+      setCachedCategories('subpos', sorted);
+      return sorted;
     },
     initialData: () => getCachedCategories('subpos'),
     enabled: !!authToken,
@@ -962,6 +1030,22 @@ export default function SubPOSTerminal() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // ── Keyboard handling for Post-Print actions (Enter = New Order, Escape = Keep Cart) ──
+  useEffect(() => {
+    if (!postPrintPending) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finalizeSubposOrder();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelPostPrintAndKeepCart();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [postPrintPending, finalizeSubposOrder, cancelPostPrintAndKeepCart]);
+
   // ── KOT detail popup ──
   useEffect(() => {
     const handler = (e: any) => {
@@ -1008,6 +1092,23 @@ export default function SubPOSTerminal() {
   const lookupToken = async (overrideCode?: string | any) => {
     const raw = (typeof overrideCode === 'string' ? overrideCode : lookupInput).trim();
     if (!raw) return;
+
+    // Fast-path: If user scanned a typical product barcode (6+ digits) into the token search box, check item catalog first!
+    if (raw.length >= 6) {
+      const itemAdded = processScannedBarcodeRef.current(raw, true);
+      if (itemAdded) {
+        setLookupInput('');
+        return;
+      }
+      const isUuidOrToken = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw) || /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(raw);
+      if (!isUuidOrToken) {
+        setLookupInput('');
+        handleOpenInstantAddRef.current('', raw);
+        toast(`⚡ Barcode "${raw}" not in catalog — enter name & MRP to add!`, { icon: '⚡', duration: 2500 });
+        return;
+      }
+    }
+
     try {
       const isNum = /^\d+$/.test(raw);
       const body = isNum ? { tokenNumber: Number(raw) } : { qrCode: raw };
@@ -1035,6 +1136,12 @@ export default function SubPOSTerminal() {
       toast.success(`Token #${tokenData.tokenNumber} loaded`);
       setLookupInput('');
     } catch (err: any) {
+      // Fallback: If token not found, check if staff scanned an item barcode/QR into the token box!
+      const itemAdded = processScannedBarcodeRef.current(raw, true);
+      if (itemAdded) {
+        setLookupInput('');
+        return;
+      }
       toast.error(err?.response?.data?.error || 'Token not found');
     }
   };
@@ -1144,7 +1251,7 @@ export default function SubPOSTerminal() {
   const filteredItemsRef = useRef<MenuItem[]>(filteredItems);
   filteredItemsRef.current = filteredItems;
 
-  const processScannedBarcode = (rawBarcode: string): boolean => {
+  const processScannedBarcode = (rawBarcode: string, skipTokenLookup: boolean = false): boolean => {
     const code = String(rawBarcode || '').trim();
     if (!code) return false;
 
@@ -1156,12 +1263,14 @@ export default function SubPOSTerminal() {
     }
 
     // 1. Token QR code / Token Number detection (UUID, TOK-xxx, TOKEN-xxx, or #xxx)
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(scannedTokenCode);
-    const isTokPrefix = /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(scannedTokenCode);
-    if (isUuid || isTokPrefix) {
-      setSearchQuery('');
-      lookupToken(scannedTokenCode);
-      return true;
+    if (!skipTokenLookup) {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(scannedTokenCode);
+      const isTokPrefix = /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(scannedTokenCode);
+      if (isUuid || isTokPrefix) {
+        setSearchQuery('');
+        lookupToken(scannedTokenCode);
+        return true;
+      }
     }
 
     // 2. Weight-based barcode parsing
@@ -1193,7 +1302,6 @@ export default function SubPOSTerminal() {
         if (qr && targets.has(qr)) return true;
         if (invSku && targets.has(invSku)) return true;
         if (invBc && targets.has(invBc)) return true;
-        if (targets.has(String(i.id))) return true;
         if (Array.isArray(i.inventoryItem?.inventoryMRPs)) {
           if (i.inventoryItem.inventoryMRPs.some((m: any) => m.barcode && targets.has(String(m.barcode).trim().toLowerCase()))) {
             return true;
@@ -1248,7 +1356,7 @@ export default function SubPOSTerminal() {
       });
       void attachInventoryMRPsToCartItem(newId, displayName);
       setSearchQuery('');
-      toast.success(`Scanned: ${displayName}`, { duration: 800, icon: '🏷️' });
+      toast.success(`Scanned: ${displayName}`, { duration: 500, icon: '🏷️' });
       return true;
     }
 
@@ -1258,11 +1366,9 @@ export default function SubPOSTerminal() {
       const qr = String(i.productQR || '').trim().toLowerCase();
       const bc = String(i.inventoryItem?.barcode || '').trim().toLowerCase();
       const sku = String(i.inventoryItem?.sku || '').trim().toLowerCase();
-      const id = String(i.id).trim().toLowerCase();
       if (qr && qr === cleanCode) return true;
       if (bc && bc === cleanCode) return true;
       if (sku && sku === cleanCode) return true;
-      if (id === cleanCode) return true;
       if (Array.isArray(i.inventoryItem?.inventoryMRPs)) {
         if (i.inventoryItem.inventoryMRPs.some((m: any) => String(m.barcode || '').trim().toLowerCase() === cleanCode)) {
           return true;
@@ -1302,31 +1408,36 @@ export default function SubPOSTerminal() {
     if (finalMatch) {
       handleAddToCart(finalMatch);
       setSearchQuery('');
-      toast.success(`Scanned: ${finalMatch.name}`, { duration: 800, icon: '🏷️' });
+      toast.success(`Scanned: ${finalMatch.name}`, { duration: 500, icon: '🏷️' });
       return true;
     }
 
-    // 5. Intelligent match from ranked search results
-    const curFiltered = filteredItemsRef.current;
-    if (curFiltered.length > 0) {
-      const exactMatch = curFiltered.find(i => String(i.name || '').trim().toLowerCase() === cleanCode);
-      const targetItem = exactMatch || curFiltered[0];
-      handleAddToCart(targetItem);
+    // Check if user entered an exact item name (case-insensitive)
+    const exactNameMatch = allItems.find(i => String(i.name || '').trim().toLowerCase() === cleanCode);
+    if (exactNameMatch) {
+      handleAddToCart(exactNameMatch);
       setSearchQuery('');
-      toast.success(`Added ${targetItem.name}`, { duration: 800, icon: '🛒' });
+      toast.success(`Added ${exactNameMatch.name}`, { duration: 500, icon: '🛒' });
       return true;
     }
 
-    // 6. Fallback: If numeric and no menu items matched, try loading as a token number
-    if (/^\d+$/.test(code)) {
+    if (skipTokenLookup) {
+      return false;
+    }
+
+    // Explicit token number / prefix format (#10 or TOK-10)
+    const isExplicitToken = /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(code);
+    if (isExplicitToken) {
       setSearchQuery('');
       lookupToken(code);
       return true;
     }
 
-    toast.error(`Item "${code}" not found in catalog`);
+    // ── Item NOT found in catalog -> Automatically open Instant Add with scanned barcode pre-filled! ──
     setSearchQuery('');
-    return false;
+    handleOpenInstantAddRef.current('', code);
+    toast(`⚡ Barcode "${code}" not found — enter product name & MRP to add!`, { icon: '⚡', duration: 2500 });
+    return true;
   };
   processScannedBarcodeRef.current = processScannedBarcode;
 
@@ -1348,6 +1459,22 @@ export default function SubPOSTerminal() {
     const id = Math.random().toString(36).substr(2, 9);
     const { item, price, mrpId, purchaseRate, profitPercent, displayName, salesUnit, quantity = 1, inventoryItemName, inventoryMRPs } = options;
     let returnedId = id;
+
+    // If print dialog was cancelled and staff immediately clicks/scans a new item, preserve order state
+    if (postPrintPending) {
+      if (postPrintTimerRef.current) {
+        clearTimeout(postPrintTimerRef.current);
+        postPrintTimerRef.current = null;
+      }
+      const qr = postPrintPending.loadedTokenData?.qrCode;
+      if (qr) {
+        subposApi.post(`/token/${qr}/cancel`, {}, { headers }).catch(() => {});
+      }
+      setLoadedToken(null);
+      setExistingTokenItems([]);
+      isAppendingRef.current = false;
+      setPostPrintPending(null);
+    }
     setLocalCart(prev => {
       const resolvedName = displayName || item.name;
       const match = prev.find(p =>
@@ -1380,7 +1507,7 @@ export default function SubPOSTerminal() {
       const el = document.getElementById(`local-${returnedId}`);
       el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 40);
-    toast.success(`Added ${displayName || item.name}`, { duration: 800 });
+    toast.success(`Added ${displayName || item.name}`, { duration: 500 });
     return returnedId;
   };
 
@@ -1502,38 +1629,40 @@ export default function SubPOSTerminal() {
     });
   };
 
-  const handleSaveQuickEdit = async () => {
+  const handleSaveQuickEdit = async (overrides?: Partial<QuickEditState>) => {
     if (!quickEditState) return;
-    if (!quickEditState.name.trim()) {
+    const cur = { ...quickEditState, ...(overrides || {}) };
+    if (cur.isSaving) return;
+    if (!cur.name.trim()) {
       toast.error('Product name is required');
       return;
     }
-    const numPrice = Number(quickEditState.sellingPrice) > 0 
-      ? Number(quickEditState.sellingPrice) 
-      : Number(quickEditState.mrp || 0);
+    const numPrice = Number(cur.sellingPrice) > 0 
+      ? Number(cur.sellingPrice) 
+      : Number(cur.mrp || 0);
     if (numPrice <= 0) {
       toast.error('Valid Selling Price or MRP is required');
       return;
     }
-    const targetId = quickEditState.item?.id || quickEditState.item?.menuItemId;
+    const targetId = cur.item?.id || cur.item?.menuItemId;
     if (!targetId) {
       toast.error('Cannot update item: Missing product ID');
       setQuickEditState(prev => prev ? ({ ...prev, isSaving: false }) : null);
       return;
     }
-    setQuickEditState(prev => prev ? ({ ...prev, isSaving: true }) : null);
+    setQuickEditState(prev => prev ? ({ ...prev, ...cur, isSaving: true }) : null);
     try {
       const res = await restaurantApi.post(`/restaurant/menu-items/${targetId}/quick-edit`, {
-        name: quickEditState.name.trim(),
-        categoryId: quickEditState.categoryId ? Number(quickEditState.categoryId) : undefined,
-        productQR: quickEditState.productQR.trim() !== '' ? quickEditState.productQR.trim() : '',
-        salesUnit: quickEditState.salesUnit || undefined,
-        mrp: Number(quickEditState.mrp || 0),
-        purchaseRate: Number(quickEditState.purchaseRate || 0),
+        name: cur.name.trim(),
+        categoryId: cur.categoryId ? Number(cur.categoryId) : undefined,
+        productQR: cur.productQR.trim() !== '' ? cur.productQR.trim() : '',
+        salesUnit: cur.salesUnit || undefined,
+        mrp: Number(cur.mrp || 0),
+        purchaseRate: Number(cur.purchaseRate || 0),
         price: numPrice,
       });
       if (res.data?.success) {
-        toast.success(`⚡ "${quickEditState.name}" updated on the spot!`, { icon: '✅' });
+        toast.success(`⚡ "${cur.name}" updated on the spot!`, { icon: '✅' });
         qc.invalidateQueries({ queryKey: ['subpos-items'] });
         qc.invalidateQueries({ queryKey: ['subpos-categories'] });
         qc.invalidateQueries({ queryKey: ['mainpos-items'] });
@@ -1546,7 +1675,7 @@ export default function SubPOSTerminal() {
           if (cartIt.menuItemId === targetId) {
             return {
               ...cartIt,
-              displayName: quickEditState.name.trim(),
+              displayName: cur.name.trim(),
               price: numPrice,
             };
           }
@@ -1576,11 +1705,19 @@ export default function SubPOSTerminal() {
   };
 
   // ── Instant Item Add ──
-  const handleOpenInstantAdd = async (searchVal?: string) => {
-    const rawVal = (searchVal || searchQuery || '').trim();
-    const isBarcodeLike = /^\d{4,}$/.test(rawVal);
-    let initialBarcode = isBarcodeLike ? rawVal : '';
-    let initialName = !isBarcodeLike ? rawVal : '';
+  const handleOpenInstantAdd = async (searchVal?: string, explicitBarcode?: string) => {
+    let initialBarcode = '';
+    let initialName = '';
+
+    if (explicitBarcode !== undefined && explicitBarcode.trim()) {
+      initialBarcode = explicitBarcode.trim();
+      initialName = (searchVal || '').trim();
+    } else {
+      const rawVal = (searchVal || searchQuery || '').trim();
+      const isBarcodeLike = /^[A-Za-z0-9\-_]{4,}$/.test(rawVal) && /\d/.test(rawVal);
+      initialBarcode = isBarcodeLike ? rawVal : '';
+      initialName = !isBarcodeLike ? rawVal : '';
+    }
 
     const firstNonKotCat = categories.find((c: any) => !c.isKOTEnabled) || categories[0];
 
@@ -1620,6 +1757,7 @@ export default function SubPOSTerminal() {
       instantNameInputRef.current?.select();
     }, 120);
   };
+  handleOpenInstantAddRef.current = handleOpenInstantAdd;
 
   const handleGenerateBarcodeForInstant = async () => {
     setInstantAddState(prev => ({ ...prev, isGeneratingBarcode: true }));
@@ -1635,31 +1773,32 @@ export default function SubPOSTerminal() {
     }
   };
 
-  const handleSaveInstantAdd = async () => {
-    if (isSavingInstantRef.current || instantAddState.isSaving) return;
-    if (!instantAddState.name.trim()) {
+  const handleSaveInstantAdd = async (overrides?: Partial<InstantAddState>) => {
+    const cur = { ...instantAddState, ...(overrides || {}) };
+    if (isSavingInstantRef.current || cur.isSaving) return;
+    if (!cur.name.trim()) {
       toast.error('Product name is required');
       instantNameInputRef.current?.focus();
       return;
     }
-    const numPrice = Number(instantAddState.sellingPrice) > 0 
-      ? Number(instantAddState.sellingPrice) 
-      : Number(instantAddState.mrp || 0);
+    const numPrice = Number(cur.sellingPrice) > 0 
+      ? Number(cur.sellingPrice) 
+      : Number(cur.mrp || 0);
     if (numPrice <= 0) {
       toast.error('Valid Selling Price or MRP is required');
       instantSellingInputRef.current?.focus();
       return;
     }
     isSavingInstantRef.current = true;
-    setInstantAddState(prev => ({ ...prev, isSaving: true }));
+    setInstantAddState(prev => ({ ...prev, ...cur, isSaving: true }));
     try {
       const res = await restaurantApi.post('/restaurant/menu-items/instant-add', {
-        name: instantAddState.name.trim(),
-        categoryId: instantAddState.categoryId ? Number(instantAddState.categoryId) : undefined,
-        productQR: instantAddState.productQR.trim() || undefined,
-        salesUnit: instantAddState.salesUnit || 'Piece (pc)',
-        mrp: Number(instantAddState.mrp || 0),
-        purchaseRate: Number(instantAddState.purchaseRate || 0),
+        name: cur.name.trim(),
+        categoryId: cur.categoryId ? Number(cur.categoryId) : undefined,
+        productQR: cur.productQR.trim() || undefined,
+        salesUnit: cur.salesUnit || 'Piece (pc)',
+        mrp: Number(cur.mrp || 0),
+        purchaseRate: Number(cur.purchaseRate || 0),
         price: numPrice,
       });
       if (res.data?.success && res.data?.data) {
@@ -1827,29 +1966,12 @@ export default function SubPOSTerminal() {
         } as TokenResult;
       }
     },
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       playTokenSound();
       setLastToken(result);
-      // Success modal suppressed per user request - seamlessly ready for next customer
       
       const resolvedCustName = customerName?.trim() || 'Walk-in Customer';
       const pSettings = getPrinterSettings(billSettings as any);
-      if (pSettings.autoPrintBill) {
-        const prevSnap = previousTokenSnapshotRef.current;
-        printTokenSlip(
-          result,
-          localCart,
-          resolvedCustName,
-          customerPhone,
-          terminal?.name || 'SMARTGONEXT Bakery',
-          billSettings,
-          {
-            isAppend: isAppendingRef.current,
-            previousItems: prevSnap?.items,
-            previousTotal: prevSnap?.total,
-          }
-        );
-      }
 
       // Check if cart contains any KOT items and print to dedicated KOT printer
       const isKotCartItem = (i: LocalCartItem) =>
@@ -1875,15 +1997,48 @@ export default function SubPOSTerminal() {
         });
       }
 
-      setLocalCart([]);
-      setCustomerName('');
-      setCustomerPhone('');
-      setSearchQuery('');
       if (!isAppendingRef.current) setTodayCount((c) => c + 1);
-      setLoadedToken(null);
-      setExistingTokenItems([]);
-      isAppendingRef.current = false;
-      toast.success(`Token #${result.tokenNumber} created!`);
+
+      // Snapshot saved token state before print dialog opens
+      const savedSnapshot: LocalCartItem[] = [
+        ...existingTokenItems,
+        ...localCart.map((i, idx) => ({ ...i, id: i.id || `saved-${Date.now()}-${idx}` }))
+      ];
+      const tokenObj = {
+        ...result,
+        id: result.tokenId || (result as any).id,
+        tokenNumber: result.tokenNumber,
+        qrCode: result.qrCode,
+        customerName: resolvedCustName,
+        customerPhone,
+        items: savedSnapshot,
+      };
+
+      if (pSettings.autoPrintBill) {
+        const prevSnap = previousTokenSnapshotRef.current;
+        await printTokenSlip(
+          result,
+          localCart,
+          resolvedCustName,
+          customerPhone,
+          terminal?.name || 'SMARTGONEXT Bakery',
+          billSettings,
+          {
+            isAppend: isAppendingRef.current,
+            previousItems: prevSnap?.items,
+            previousTotal: prevSnap?.total,
+          }
+        );
+      }
+
+      toast.success(`Token #${result.tokenNumber} generated!`, { duration: 1500 });
+
+      // After print preview dialog closes, prompt for completion (Enter = Printed, Esc/add items = Cancelled)
+      setPostPrintPending({
+        tokenNumber: result.tokenNumber,
+        loadedTokenData: tokenObj,
+        savedItems: savedSnapshot,
+      });
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to create token');
@@ -2296,7 +2451,7 @@ export default function SubPOSTerminal() {
               activeCategoryId={selectedCategoryId}
               onSelectCategory={(id) => setSelectedCategoryId(id === 'all' || id === null ? null : (id === 'kot' ? 'kot' : Number(id)))}
               isLight={isLight}
-              storageKey="pos_category_order"
+              storageKey="pos_category_order_v2"
               className="w-full max-w-full min-w-0"
             />
 
@@ -2843,7 +2998,7 @@ export default function SubPOSTerminal() {
                         }
                       }}
                       placeholder="Cust Name (Optional - Walk-in)"
-                      className={cn("w-full pl-8 pr-16 py-2 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm", isLight ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400" : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400")}
+                      className={cn("w-full pl-8 pr-16 py-2 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm", isLight ? "bg-white border-purple-600 text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-purple-400" : "bg-slate-900 border-purple-500 text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-400")}
                     />
                     <button
                       type="button"
@@ -2870,11 +3025,11 @@ export default function SubPOSTerminal() {
                           e.stopPropagation();
                           setShowCustomerDropdown(false);
                           (e.target as HTMLElement).blur();
-                          createTokenBtnRef.current?.focus();
+                          createTokenBtnRef.current?.click();
                         }
                       }}
                       placeholder="Phone (Opt)"
-                      className={cn("w-full pl-8 pr-3 py-2 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm", isLight ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400" : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400")}
+                      className={cn("w-full pl-8 pr-3 py-2 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm", isLight ? "bg-white border-purple-600 text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-purple-400" : "bg-slate-900 border-purple-500 text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-400")}
                     />
                     {showCustomerDropdown && customerSuggestions.length > 0 && (
                       <div className={cn("absolute bottom-full mb-1 right-0 w-64 border rounded-xl z-50 shadow-2xl overflow-hidden", isLight ? "bg-white border-slate-300" : "bg-[#1a1c23] border-gray-800")}>
@@ -2938,22 +3093,40 @@ export default function SubPOSTerminal() {
 
                 {/* Generate Token button */}
                 <div className="p-3">
-                  <button
-                    ref={createTokenBtnRef}
-                    id="btn-create-token"
-                    onClick={() => {
-                      isAppendingRef.current = Boolean(loadedToken);
-                      createToken.mutate();
-                    }}
-                    disabled={localCart.length === 0 || createToken.isPending}
-                    className="w-full py-4 bg-[#7c5cfc] hover:bg-[#6b4ce6] disabled:bg-gray-800/50 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-black text-[15px] uppercase tracking-wider rounded-xl transition-all duration-200 shadow-[0_4px_20px_rgba(124,92,252,0.3)] disabled:shadow-none flex items-center justify-center gap-2 group border border-[#7c5cfc]/20 disabled:border-transparent"
-                  >
-                    {createToken.isPending ? (
-                      <><span className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" /> CREATING...</>
-                    ) : (
-                      <><Printer className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" /> GENERATE TOKEN <span className="text-[10px] font-bold opacity-60 bg-black/20 px-1.5 py-0.5 rounded ml-1 normal-case">(F12)</span></>
-                    )}
-                  </button>
+                  {postPrintPending ? (
+                    <div className="space-y-2">
+                      <button
+                        autoFocus
+                        onClick={finalizeSubposOrder}
+                        className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Check size={18} /> PRINTED — CLOSE BILL & NEXT ORDER (Enter)
+                      </button>
+                      <button
+                        onClick={cancelPostPrintAndKeepCart}
+                        className="w-full py-2.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <RotateCcw size={14} /> CANCELLED PRINT — KEEP CART & ADD MORE (Esc)
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      ref={createTokenBtnRef}
+                      id="btn-create-token"
+                      onClick={() => {
+                        isAppendingRef.current = Boolean(loadedToken);
+                        createToken.mutate();
+                      }}
+                      disabled={localCart.length === 0 || createToken.isPending}
+                      className="w-full py-4 bg-[#7c5cfc] hover:bg-[#6b4ce6] disabled:bg-gray-800/50 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-black text-[15px] uppercase tracking-wider rounded-xl transition-all duration-200 shadow-[0_4px_20px_rgba(124,92,252,0.3)] disabled:shadow-none flex items-center justify-center gap-2 group border border-[#7c5cfc]/20 disabled:border-transparent"
+                    >
+                      {createToken.isPending ? (
+                        <><span className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" /> CREATING...</>
+                      ) : (
+                        <><Printer className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" /> GENERATE TOKEN <span className="text-[10px] font-bold opacity-60 bg-black/20 px-1.5 py-0.5 rounded ml-1 normal-case">(F12)</span></>
+                      )}
+                    </button>
+                  )}
 
                   {/* Reprint last token */}
                   {lastToken && (
@@ -3148,10 +3321,13 @@ export default function SubPOSTerminal() {
       {/* ── ON-THE-SPOT QUICK PRODUCT EDIT MODAL ── */}
       {quickEditState && (
         <div data-enter-ignore="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className={cn(
-            "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
-            isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
-          )}>
+          <form
+            onSubmit={(e) => { e.preventDefault(); handleSaveQuickEdit(); }}
+            className={cn(
+              "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
+              isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
+            )}
+          >
             {/* Header */}
             <div className={cn(
               "px-5 py-4 border-b flex items-center justify-between",
@@ -3184,6 +3360,12 @@ export default function SubPOSTerminal() {
                   type="text"
                   value={quickEditState.name}
                   onChange={(e) => setQuickEditState(prev => prev ? ({ ...prev, name: e.target.value }) : null)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSaveQuickEdit();
+                    }
+                  }}
                   className={cn(
                     "w-full px-3 py-2 rounded-xl border text-sm font-bold outline-none transition-all",
                     isLight ? "bg-white border-slate-300 focus:border-purple-600 text-slate-900" : "bg-black/30 border-gray-700 focus:border-purple-500 text-white"
@@ -3229,6 +3411,12 @@ export default function SubPOSTerminal() {
                     type="text"
                     value={quickEditState.productQR}
                     onChange={(e) => setQuickEditState(prev => prev ? ({ ...prev, productQR: e.target.value }) : null)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveQuickEdit();
+                      }
+                    }}
                     className={cn(
                       "w-full px-3 py-2 rounded-xl border text-xs font-mono font-bold outline-none",
                       isLight ? "bg-white border-slate-300 focus:border-purple-600 text-slate-900" : "bg-black/30 border-gray-700 focus:border-purple-500 text-white"
@@ -3269,6 +3457,12 @@ export default function SubPOSTerminal() {
                       const profit = cost > 0 && spNum > cost ? String(Number((((spNum - cost) / cost) * 100).toFixed(2))) : quickEditState.profitPercent;
                       setQuickEditState(prev => prev ? ({ ...prev, sellingPrice: sp, profitPercent: profit }) : null);
                     }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveQuickEdit({ sellingPrice: (e.target as HTMLInputElement).value });
+                      }
+                    }}
                     className={cn(
                       "w-full px-3 py-2 rounded-xl border text-sm font-black outline-none",
                       isLight ? "bg-white border-slate-300 focus:border-emerald-600 text-emerald-700" : "bg-black/30 border-gray-700 focus:border-emerald-500 text-emerald-400"
@@ -3303,6 +3497,13 @@ export default function SubPOSTerminal() {
                         };
                       });
                     }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const val = (e.target as HTMLInputElement).value;
+                        handleSaveQuickEdit({ mrp: val, sellingPrice: quickEditState.sellingPrice || val });
+                      }
+                    }}
                     className={cn(
                       "w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold outline-none",
                       isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/40 border-gray-700 text-white"
@@ -3330,6 +3531,12 @@ export default function SubPOSTerminal() {
                           profitPercent: profit
                         };
                       });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveQuickEdit({ purchaseRate: (e.target as HTMLInputElement).value });
+                      }
                     }}
                     className={cn(
                       "w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold outline-none",
@@ -3367,26 +3574,29 @@ export default function SubPOSTerminal() {
                 Cancel
               </button>
               <button
-                type="button"
-                onClick={handleSaveQuickEdit}
+                type="submit"
+                data-submit-btn="true"
                 disabled={quickEditState.isSaving}
                 className="px-5 py-2 rounded-xl text-xs font-black bg-purple-600 hover:bg-purple-500 text-white flex items-center gap-1.5 shadow-md transition disabled:opacity-50 cursor-pointer"
               >
                 {quickEditState.isSaving ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
-                <span>{quickEditState.isSaving ? 'Updating...' : 'Save Changes'}</span>
+                <span>{quickEditState.isSaving ? 'Updating...' : 'Save Changes (Enter)'}</span>
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
       {/* ── ⚡ INSTANT ITEM ADD MODAL (KEYBOARD OPTIMIZED) ── */}
       {instantAddState.isOpen && (
         <div data-enter-ignore="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className={cn(
-            "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
-            isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
-          )}>
+          <form
+            onSubmit={(e) => { e.preventDefault(); handleSaveInstantAdd(); }}
+            className={cn(
+              "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
+              isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
+            )}
+          >
             {/* Header */}
             <div className={cn(
               "px-5 py-4 border-b flex items-center justify-between",
@@ -3464,7 +3674,14 @@ export default function SubPOSTerminal() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      instantCategorySelectRef.current?.focus();
+                      const nameVal = (e.target as HTMLInputElement).value;
+                      const effectiveSp = instantAddState.sellingPrice || instantAddState.mrp;
+                      if (nameVal.trim() && Number(effectiveSp) > 0) {
+                        handleSaveInstantAdd({ name: nameVal });
+                      } else {
+                        instantMrpInputRef.current?.focus();
+                        instantMrpInputRef.current?.select();
+                      }
                     }
                   }}
                   className={cn(
@@ -3563,11 +3780,17 @@ export default function SubPOSTerminal() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        if (!instantAddState.sellingPrice && instantAddState.mrp) {
-                          setInstantAddState(prev => ({ ...prev, sellingPrice: prev.mrp }));
+                        const val = (e.target as HTMLInputElement).value;
+                        const effectiveSp = instantAddState.sellingPrice || val;
+                        if (instantAddState.name.trim() && Number(val || effectiveSp) > 0) {
+                          handleSaveInstantAdd({ mrp: val, sellingPrice: val || effectiveSp });
+                        } else if (!instantAddState.name.trim()) {
+                          toast.error('Product name is required');
+                          instantNameInputRef.current?.focus();
+                        } else {
+                          instantSellingInputRef.current?.focus();
+                          instantSellingInputRef.current?.select();
                         }
-                        instantSellingInputRef.current?.focus();
-                        instantSellingInputRef.current?.select();
                       }
                     }}
                     className={cn(
@@ -3598,7 +3821,7 @@ export default function SubPOSTerminal() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        handleSaveInstantAdd();
+                        handleSaveInstantAdd({ sellingPrice: (e.target as HTMLInputElement).value });
                       }
                     }}
                     className={cn(
@@ -3629,7 +3852,7 @@ export default function SubPOSTerminal() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        handleSaveInstantAdd();
+                        handleSaveInstantAdd({ purchaseRate: (e.target as HTMLInputElement).value });
                       }
                     }}
                     className={cn(
@@ -3657,7 +3880,7 @@ export default function SubPOSTerminal() {
                 isLight ? "bg-amber-50/50 border-amber-200 text-amber-900" : "bg-amber-950/20 border-amber-900/30 text-amber-300"
               )}>
                 <span className="text-xs">⚡</span>
-                <span>Type <strong>Name</strong> ↵, <strong>Category/Unit</strong> ↵, <strong>Price</strong> ↵ to immediately save & bill!</span>
+                <span>Type <strong>Name</strong> ↵, <strong>Price</strong> ↵ to immediately save & bill!</span>
               </div>
             </div>
 
@@ -3677,18 +3900,20 @@ export default function SubPOSTerminal() {
                 Cancel
               </button>
               <button
-                type="button"
-                onClick={handleSaveInstantAdd}
+                type="submit"
+                data-submit-btn="true"
                 disabled={instantAddState.isSaving}
                 className="px-5 py-2.5 rounded-xl text-xs font-black bg-amber-500 hover:bg-amber-400 text-black flex items-center gap-1.5 shadow-lg transition disabled:opacity-50 cursor-pointer"
               >
                 {instantAddState.isSaving ? <RefreshCw size={14} className="animate-spin" /> : <Zap size={14} className="fill-black" />}
-                <span>{instantAddState.isSaving ? 'Adding Item...' : 'Save & Add to Cart ↵'}</span>
+                <span>{instantAddState.isSaving ? 'Adding Item...' : 'Save & Add to Cart (Enter)'}</span>
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
+
+
     </div>
   );
 }

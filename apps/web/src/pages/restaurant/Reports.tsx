@@ -80,14 +80,14 @@ export default function Reports() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
         {[
           { title: "Revenue", value: formatCurrency(summary.totalSales), icon: TrendingUp, color: "text-blue-400" },
           { title: "Orders", value: summary.orderCount || 0, icon: PieChart, color: "text-purple-400" },
           { title: "AOV", value: formatCurrency(summary.avgOrderValue), icon: CreditCard, color: "text-success" },
           { title: "Tax", value: formatCurrency(summary.taxTotal), icon: Calendar, color: "text-warning" }
         ].map((stat, i) => (
-          <Card key={i} className="flex flex-col gap-1.5 p-3">
+          <Card key={i} className="flex flex-col gap-1.5 p-2.5 sm:p-3">
             <div className="flex items-center gap-3">
               <div className={`p-2 rounded-lg bg-bg-tertiary ${stat.color} border border-border`}>
                 <stat.icon className="w-4 h-4" />

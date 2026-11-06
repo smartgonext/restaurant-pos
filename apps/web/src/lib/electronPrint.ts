@@ -159,12 +159,18 @@ export async function printHtmlOrFallback(html: string, options?: any): Promise<
       if (hasPrinted) return;
       hasPrinted = true;
       try {
+        if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
         iframe.contentWindow?.focus();
         iframe.contentWindow?.print();
         resolve();
       } catch (e) {
         reject(e);
       } finally {
+        if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
         setTimeout(() => {
           try { document.body.removeChild(iframe); } catch {}
         }, 1500);

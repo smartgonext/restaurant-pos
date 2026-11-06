@@ -8,7 +8,7 @@ import {
   ChefHat, Warehouse, Calendar, Truck, Bell, Brain, Building,
   DollarSign, ExternalLink, Globe, MonitorSmartphone,
   BedDouble, Bed, ClipboardCheck, LogIn, LogOut, Tags, Sparkles, SlidersHorizontal,
-  Activity,
+  Activity, Printer,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { usePermission } from '@/hooks/usePermission';
@@ -118,6 +118,7 @@ const restaurantNav: NavItem[] = [
     { label: 'Main POS Billing', path: '/mainpos' },
     { label: 'Waiter Terminal', path: '/waiter' }
   ] },
+  { id: 'barcode_print', label: 'Barcode Print', icon: Printer, path: '/admin/barcode', module: 'settings' },
   { id: 'settings', label: 'Settings', icon: Settings, path: '/admin/settings', module: 'settings', children: [
     { label: 'General Settings', path: '/admin/settings' },
     { label: 'Role Permissions', path: '/admin/settings/roles' },

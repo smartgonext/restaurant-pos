@@ -34,6 +34,7 @@ import Staff from '@/pages/restaurant/Staff';
 import Customers from '@/pages/restaurant/Customers';
 import KitchenKOT from '@/pages/restaurant/kitchens/KitchenKOT';
 import Settings from '@/pages/restaurant/settings/Settings';
+const BarcodeSettings = lazy(() => import('@/pages/restaurant/settings/BarcodeSettings'));
 const BillSettings = lazy(() => import('@/pages/restaurant/settings/BillSettings'));
 const RoleSettings = lazy(() => import('@/pages/restaurant/settings/RoleSettings'));
 import Modifiers from '@/pages/restaurant/menu/Modifiers';
@@ -425,6 +426,7 @@ const routes = [
       { path: 'hotel/room-service', element: <PermissionGuard module="hotel"><RoomService /></PermissionGuard> },
       { path: 'hotel/stay-history', element: <PermissionGuard module="hotel"><Stays /></PermissionGuard> },
       { path: 'hotel/banquet-events', element: <PermissionGuard module="hotel"><Banquets /></PermissionGuard> },
+      { path: 'barcode', element: <PermissionGuard permission="settings"><BarcodeSettings /></PermissionGuard> },
       { path: 'settings', element: <PermissionGuard module="settings"><Settings /></PermissionGuard> },
     ],
   },

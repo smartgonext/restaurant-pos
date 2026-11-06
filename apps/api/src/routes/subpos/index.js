@@ -32,13 +32,15 @@ export async function subposRoutes(app) {
             return m;
         const purchase = Number(m.purchaseRate ?? 0);
         const profit = Number(m.profitPercent ?? 0);
-        let selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
-        if (selling <= 0) {
-            if (Number(m.mrp ?? 0) > 0) {
-                selling = Number(m.mrp);
-            } else if (Number(fallbackPrice ?? 0) > 0) {
-                selling = Number(fallbackPrice);
-            }
+        let selling = 0;
+        if (profit > 0 && purchase > 0) {
+            selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+        } else if (Number(m.mrp ?? 0) > 0) {
+            selling = Number(m.mrp);
+        } else if (Number(fallbackPrice ?? 0) > 0) {
+            selling = Number(fallbackPrice);
+        } else if (purchase > 0) {
+            selling = purchase;
         }
         return { ...m, sellingPrice: selling };
     };
@@ -627,6 +629,34 @@ export async function subposRoutes(app) {
             return reply.status(400).send({ success: false, error: err?.message });
         }
     });
+    // ── POST /api/subpos/token/:qr/cancel ── cancel unpaid draft token if print cancelled
+    app.post('/token/:qr/cancel', async (request, reply) => {
+        const restaurantId = request.restaurantId;
+        const { qr } = request.params;
+        try {
+            const token = await prisma.bakeryToken.findFirst({ where: { qrCode: qr, restaurantId } });
+            if (!token) return reply.status(404).send({ success: false, error: 'Token not found' });
+            if (token.status === 'paid') return reply.status(400).send({ success: false, error: 'Cannot cancel paid token' });
+            
+            await prisma.bakeryToken.update({
+                where: { id: token.id },
+                data: { status: 'cancelled' },
+            });
+
+            if (token.orderId) {
+                await prisma.order.update({
+                    where: { id: token.orderId },
+                    data: { status: 'cancelled' },
+                }).catch(() => {});
+            }
+
+            emitToRestaurant(restaurantId, 'token_updated', { id: token.id, qrCode: qr, status: 'cancelled' });
+            return { success: true, message: 'Draft token cancelled' };
+        } catch (err) {
+            return reply.status(400).send({ success: false, error: err?.message });
+        }
+    });
+
     // ── GET /api/subpos/token/:qr ── get full token details
     app.get('/token/:qr', async (request, reply) => {
         const restaurantId = request.restaurantId;

@@ -154,16 +154,16 @@ export function TopBar() {
 
   return (
     <>
-      <header className="h-[var(--topbar-height)] bg-bg-secondary/80 backdrop-blur-xl border-b border-border flex items-center justify-between px-6 sticky top-0 z-30">
+      <header className="h-[var(--topbar-height)] bg-bg-secondary/80 backdrop-blur-xl border-b border-border flex items-center justify-between px-3 sm:px-6 sticky top-0 z-30">
         {/* Search */}
-        <div className="relative w-64">
+        <div className="relative w-36 sm:w-64">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
           <input
             type="text"
-            placeholder="Search anything..."
-            className="glass-input w-full pl-10 text-xs h-8"
+            placeholder="Search..."
+            className="glass-input w-full pl-9 sm:pl-10 text-xs h-8"
           />
-          <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-text-muted bg-bg-tertiary px-1.5 py-0.5 rounded border border-border">
+          <kbd className="hidden sm:inline-block absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-text-muted bg-bg-tertiary px-1.5 py-0.5 rounded border border-border">
             ⌘K
           </kbd>
         </div>

@@ -15,7 +15,7 @@ import {
   Trash2, Edit, Edit3, CheckCircle, ChevronLeft, ChevronRight,
   History as HistoryIcon, Tag, RefreshCw, Wallet, Printer, Split,
   AlignLeft, LayoutGrid, RotateCcw, ChevronDown, ShoppingCart, RotateCw,
-  Sun, Moon, User, Plus, X, Landmark, Zap, Barcode, Check
+  Sun, Moon, User, Plus, X, Landmark, Zap, Barcode, Check, Percent
 } from 'lucide-react';
 import { Bell } from 'lucide-react';
 import { useThemeStore } from '@/stores/themeStore';
@@ -92,7 +92,7 @@ interface MenuItem {
   };
 }
 
-interface Category { id: number; name: string; }
+interface Category { id: number; name: string; isKOTEnabled?: boolean; sortOrder?: number; }
 
 interface TokenItem {
   id: number; menuItemId: number; menuItemName: string; price: number; linePrice?: number; quantity: number; total: number;
@@ -174,20 +174,23 @@ interface LocalCartItem {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 /** Returns the selling price for an MRP entry.
- *  Backend computes: sellingPrice = purchaseRate × (1 + profitPercent/100)
- *  We never use raw mrp as the cart price. */
+ *  Uses markup over purchaseRate if profitPercent > 0; otherwise sells at MRP (or fallback price). */
 function getMRPSellingPrice(m: InventoryMRP, fallbackPrice: number = 0): number {
   if (m.sellingPrice !== undefined && m.sellingPrice !== null && Number(m.sellingPrice) > 0) {
     return Number(m.sellingPrice);
   }
   const purchase = Number(m.purchaseRate ?? 0);
   const profit = Number(m.profitPercent ?? 0);
-  const computed = Math.round(purchase * (1 + profit / 100) * 100) / 100;
-  if (computed > 0) return computed;
+  if (profit > 0 && purchase > 0) {
+    return Math.round(purchase * (1 + profit / 100) * 100) / 100;
+  }
   if (m.mrp !== undefined && m.mrp !== null && Number(m.mrp) > 0) {
     return Number(m.mrp);
   }
-  return Number(fallbackPrice || 0);
+  if (Number(fallbackPrice || 0) > 0) {
+    return Number(fallbackPrice);
+  }
+  return purchase;
 }
 
 function getActiveMRPs(mrps: InventoryMRP[]): InventoryMRP[] {
@@ -256,6 +259,10 @@ let lastPrintedBillTimestamp = 0;
 // ── Print final bill ──────────────────────────────────────────────────────────
 function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', settings?: BillSettings) {
   if (!token) return;
+  // Blur any active element so touch/virtual keyboard stays closed
+  if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
   const now = Date.now();
   const tokenKey = `${token.id || token.tokenNumber}_${token.total}`;
   if (lastPrintedBillTokenId === tokenKey && (now - lastPrintedBillTimestamp) < 3500) {
@@ -391,9 +398,11 @@ function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
           ${Number(token.cgst) > 0 ? `<tr><td style="text-align:left;padding:2px 0;">CGST</td><td style="text-align:right;padding:2px 0;">₹${fmtAmt(token.cgst)}</td></tr>` : ''}
           ${Number(token.igst) > 0 ? `<tr><td style="text-align:left;padding:2px 0;">IGST</td><td style="text-align:right;padding:2px 0;">₹${fmtAmt(token.igst)}</td></tr>` : ''}
         ` : totalTax > 0 ? `<tr><td style="text-align:left;padding:2px 0;">Tax</td><td style="text-align:right;padding:2px 0;">₹${fmtAmt(totalTax)}</td></tr>` : ''}
-        ${Number(token.discountApplied) > 0 && cfg.loyaltyDiscountFormat !== 'hidden'
-          ? `<tr><td style="text-align:left;padding:2px 0;">Loyalty Discount</td><td style="text-align:right;padding:2px 0;color:green;">-₹${fmtAmt(token.discountApplied)}</td></tr>`
-          : ''}
+        ${Number(token.discountApplied) > 0 ? `
+          <tr>
+            <td style="text-align:left;padding:2px 0;font-weight:700;color:#16a34a;">Discount</td>
+            <td style="text-align:right;padding:2px 0;font-weight:700;color:#16a34a;">-₹${fmtAmt(token.discountApplied)}</td>
+          </tr>` : ''}
       </table>
       <div class="divider"></div>
       <div class="total center">TOTAL: ₹${fmtAmt(token.total)}</div>
@@ -419,7 +428,7 @@ function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
     await printHtmlOrFallback(html, { deviceName: pSettings.billPrinterName || undefined });
   };
 
-  invokePrint().catch((err) => {
+  return invokePrint().catch((err) => {
     toast.error(err?.message || 'Print failed');
   });
 }
@@ -525,6 +534,11 @@ function printTokenSlip(
           </div>
         ` : `
           <div style="font-size:10pt;margin-top:4px;">Total Items: <strong>${totalItems}</strong></div>
+          ${Number(token.discountApplied || 0) > 0 ? `
+            <div style="display:flex; justify-content:space-between; font-size:10pt; color:#16a34a; font-weight:700; margin-top:2px;">
+              <span>Discount:</span><span>-₹${Number(token.discountApplied).toFixed(2)}</span>
+            </div>
+          ` : ''}
           <div style="font-size:12pt;font-weight:700;margin-top:6px;">Total: <strong>${totalAmt}</strong></div>
         `}
         <div style="margin:10px 0;display:flex;justify-content:center;">${qrSvgHtml}</div>
@@ -536,7 +550,7 @@ function printTokenSlip(
     await printHtmlOrFallback(html, { deviceName: pSettings.billPrinterName || undefined });
   };
 
-  invokePrint().catch((err) => {
+  return invokePrint().catch((err) => {
     console.error('Print token failed', err);
     toast.error(err?.message || 'Print failed');
   });
@@ -590,18 +604,20 @@ function PasswordModal({ onConfirm, onCancel, action }: {
 }) {
   const [pwd, setPwd] = useState('');
   const [reason, setReason] = useState('');
+  const { theme } = useThemeStore();
+  const isLight = theme === 'light';
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
-      <div className="bg-[#1a1c23] rounded-2xl p-6 w-full max-w-sm mx-4 border border-gray-800 shadow-2xl">
-        <h3 className="text-white font-bold text-lg mb-4">
+      <div className={cn("rounded-2xl p-6 w-full max-w-sm mx-4 border shadow-2xl transition-colors", isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#1a1c23] border-gray-800 text-white")}>
+        <h3 className={cn("font-bold text-lg mb-4", isLight ? "text-slate-900" : "text-white")}>
           {action === 'delete' ? '🗑 Delete Item' : '✏️ Edit Quantity'} — Enter Admin Password
         </h3>
         <input type="password" autoFocus value={pwd} onChange={(e) => setPwd(e.target.value)} placeholder="Admin Password"
-          className="w-full px-4 py-2.5 bg-[#0f1014] border border-gray-800 rounded-xl text-white placeholder-gray-500 mb-3 focus:outline-none focus:border-purple-500 transition-colors" />
+          className={cn("w-full px-4 py-2.5 border rounded-xl mb-3 focus:outline-none transition-colors", isLight ? "bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-purple-600" : "bg-[#0f1014] border-gray-800 text-white placeholder-gray-500 focus:border-purple-500")} />
         <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (required)" rows={2}
-          className="w-full px-4 py-2.5 bg-[#0f1014] border border-gray-800 rounded-xl text-white placeholder-gray-500 mb-4 resize-none focus:outline-none focus:border-purple-500 text-sm transition-colors" />
+          className={cn("w-full px-4 py-2.5 border rounded-xl mb-4 resize-none focus:outline-none text-sm transition-colors", isLight ? "bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-purple-600" : "bg-[#0f1014] border-gray-800 text-white placeholder-gray-500 focus:border-purple-500")} />
         <div className="flex gap-3">
-          <button onClick={onCancel} className="flex-1 py-2.5 border border-gray-700 text-gray-400 rounded-xl hover:bg-gray-800 transition">Cancel</button>
+          <button onClick={onCancel} className={cn("flex-1 py-2.5 border rounded-xl transition", isLight ? "border-slate-300 text-slate-700 hover:bg-slate-100" : "border-gray-700 text-gray-400 hover:bg-gray-800")}>Cancel</button>
           <button onClick={() => { if (!pwd || !reason) { toast.error('Password and reason required'); return; } onConfirm(pwd, reason); }}
             className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl transition">Confirm</button>
         </div>
@@ -620,26 +636,28 @@ function LoyaltyModal({ customer, pointValue = 0.5, onApply, onCancel }: {
   const available = customer?.loyaltyPoints ?? 0;
   const [points, setPoints] = useState(available);
   const discount = (points * pointValue).toFixed(2);
+  const { theme } = useThemeStore();
+  const isLight = theme === 'light';
   if (!customer) return null;
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
-      <div className="bg-[#1a1c23] rounded-2xl p-6 w-full max-w-sm mx-4 border border-gray-800 shadow-2xl">
-        <h3 className="text-white font-bold text-lg mb-1">🏆 Claim Loyalty Points</h3>
-        <p className="text-gray-400 text-sm mb-4">{customer.name} · Available: <strong className="text-green-400">{available} pts</strong></p>
+      <div className={cn("rounded-2xl p-6 w-full max-w-sm mx-4 border shadow-2xl transition-colors", isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#1a1c23] border-gray-800 text-white")}>
+        <h3 className={cn("font-bold text-lg mb-1", isLight ? "text-slate-900" : "text-white")}>🏆 Claim Loyalty Points</h3>
+        <p className={cn("text-sm mb-4", isLight ? "text-slate-600" : "text-gray-400")}>{customer.name} · Available: <strong className="text-green-500 font-bold">{available} pts</strong></p>
         <div className="mb-4">
-          <label className="text-gray-400 text-sm block mb-1">Points to claim</label>
+          <label className={cn("text-sm block mb-1", isLight ? "text-slate-600" : "text-gray-400")}>Points to claim</label>
           <input type="number" min={0} max={available} value={points}
             onChange={(e) => setPoints(Math.min(available, Math.max(0, +e.target.value)))}
-            className="w-full px-4 py-2.5 bg-[#0f1014] border border-gray-800 rounded-xl text-white focus:outline-none focus:border-purple-500 transition-colors" />
+            className={cn("w-full px-4 py-2.5 border rounded-xl focus:outline-none transition-colors", isLight ? "bg-white border-slate-300 text-slate-900 focus:border-purple-600" : "bg-[#0f1014] border-gray-800 text-white focus:border-purple-500")} />
         </div>
-        <div className="bg-green-900/30 border border-green-700/50 rounded-xl p-3 mb-4 text-center">
-          <span className="text-green-400 text-lg font-bold">₹{discount} discount</span>
-          <span className="text-gray-400 text-sm block">will be applied to this bill</span>
+        <div className={cn("border rounded-xl p-3 mb-4 text-center", isLight ? "bg-green-50 border-green-200" : "bg-green-900/30 border-green-700/50")}>
+          <span className={cn("text-lg font-bold", isLight ? "text-green-700" : "text-green-400")}>₹{discount} discount</span>
+          <span className={cn("text-sm block", isLight ? "text-slate-500" : "text-gray-400")}>will be applied to this bill</span>
         </div>
         <div className="flex gap-3">
-          <button onClick={onCancel} className="flex-1 py-2.5 border border-gray-700 text-gray-400 rounded-xl hover:bg-gray-800 transition">Cancel</button>
+          <button onClick={onCancel} className={cn("flex-1 py-2.5 border rounded-xl transition", isLight ? "border-slate-300 text-slate-700 hover:bg-slate-100" : "border-gray-700 text-gray-400 hover:bg-gray-800")}>Cancel</button>
           <button onClick={() => onApply(points)} disabled={points <= 0}
-            className="flex-1 py-2.5 bg-green-600/80 hover:bg-green-600 text-white font-bold rounded-xl transition disabled:opacity-50">Apply</button>
+            className="flex-1 py-2.5 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl transition disabled:opacity-50">Apply</button>
         </div>
       </div>
     </div>
@@ -812,18 +830,22 @@ function QtyEditorModal({ cartItem, initialValue, onApply, onClose }: QtyEditorM
     onApply(parsed);
   };
 
+  const { theme } = useThemeStore();
+  const isLight = theme === 'light';
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[150]" onClick={onClose}>
       <form
-        className="bg-[#1a1c23] rounded-xl border border-gray-800 p-4 w-full max-w-sm shadow-2xl"
+        data-enter-ignore="true"
+        className={cn("rounded-xl border p-4 w-full max-w-sm shadow-2xl transition-colors", isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#1a1c23] border-gray-800 text-white")}
         onClick={(e) => e.stopPropagation()}
         onSubmit={handleSubmit}
       >
-        <div className="text-white font-black text-sm uppercase tracking-wide mb-2">Edit Quantity</div>
-        <div className="text-gray-400 text-xs mb-3">{cartItem.displayName || cartItem.name}</div>
+        <div className={cn("font-black text-sm uppercase tracking-wide mb-2", isLight ? "text-slate-900" : "text-white")}>Edit Quantity</div>
+        <div className={cn("text-xs mb-3", isLight ? "text-slate-500" : "text-gray-400")}>{cartItem.displayName || cartItem.name}</div>
 
         <select
-          className="w-full bg-[#0f1014] border border-gray-700 text-white text-xs rounded-lg px-2 py-2 mb-2"
+          className={cn("w-full text-xs rounded-lg px-2 py-2 mb-2 border outline-none", isLight ? "bg-slate-50 border-slate-300 text-slate-900" : "bg-[#0f1014] border-gray-700 text-white")}
           value=""
           onChange={(e) => {
             const num = Number(e.target.value);
@@ -842,16 +864,22 @@ function QtyEditorModal({ cartItem, initialValue, onApply, onClose }: QtyEditorM
           onChange={(e) => setVal(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') onClose();
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              e.stopPropagation();
+              handleSubmit(e);
+            }
           }}
           placeholder="Type quantity (e.g. 10, 15, 0.5)"
-          className="w-full bg-[#0f1014] border border-gray-700 text-white text-lg font-bold rounded-lg px-3 py-2 focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+          className={cn("w-full text-lg font-bold rounded-lg px-3 py-2 border outline-none", isLight ? "bg-white border-slate-300 text-slate-900 focus:border-purple-600 focus:ring-1 focus:ring-purple-600" : "bg-[#0f1014] border-gray-700 text-white focus:border-purple-500 focus:ring-1 focus:ring-purple-500")}
         />
-        <div className="mt-2 text-xs text-gray-400">Preview: {formatQtyDisplay(Number(val || 0), cartItem.salesUnit)}</div>
+        <div className={cn("mt-2 text-xs", isLight ? "text-slate-500" : "text-gray-400")}>Preview: {formatQtyDisplay(Number(val || 0), cartItem.salesUnit)}</div>
 
         <div className="mt-4 flex justify-end gap-2">
-          <button type="button" className="px-3 py-1.5 text-xs bg-gray-800 rounded text-gray-300 hover:bg-gray-700" onClick={onClose}>Cancel</button>
+          <button type="button" className={cn("px-3 py-1.5 text-xs rounded transition", isLight ? "bg-slate-100 text-slate-700 hover:bg-slate-200" : "bg-gray-800 text-gray-300 hover:bg-gray-700")} onClick={onClose}>Cancel</button>
           <button
             type="submit"
+            data-submit-btn="true"
             className="px-4 py-2 text-xs bg-purple-600 hover:bg-purple-500 rounded text-white font-bold transition active:scale-95"
           >
             Apply (Enter)
@@ -1150,47 +1178,49 @@ export default function MainPOSTerminal() {
     });
   };
 
-  const handleSaveQuickEdit = async () => {
+  const handleSaveQuickEdit = async (overrides?: Partial<QuickEditState>) => {
     if (!quickEditState) return;
-    if (!quickEditState.name.trim()) {
+    const cur = { ...quickEditState, ...(overrides || {}) };
+    if (cur.isSaving) return;
+    if (!cur.name.trim()) {
       toast.error('Product name is required');
       return;
     }
-    const numPrice = Number(quickEditState.sellingPrice) > 0 
-      ? Number(quickEditState.sellingPrice) 
-      : Number(quickEditState.mrp || 0);
+    const numPrice = Number(cur.sellingPrice) > 0 
+      ? Number(cur.sellingPrice) 
+      : Number(cur.mrp || 0);
     if (numPrice <= 0) {
       toast.error('Valid Selling Price or MRP is required');
       return;
     }
-    const targetId = quickEditState.item?.id || quickEditState.item?.menuItemId;
+    const targetId = cur.item?.id || cur.item?.menuItemId;
     if (!targetId) {
       toast.error('Cannot update item: Missing product ID');
       setQuickEditState(prev => prev ? ({ ...prev, isSaving: false }) : null);
       return;
     }
-    setQuickEditState(prev => prev ? ({ ...prev, isSaving: true }) : null);
+    setQuickEditState(prev => prev ? ({ ...prev, ...cur, isSaving: true }) : null);
     try {
       const res = await restaurantApi.post(`/restaurant/menu-items/${targetId}/quick-edit`, {
-        name: quickEditState.name.trim(),
-        categoryId: quickEditState.categoryId ? Number(quickEditState.categoryId) : undefined,
-        productQR: quickEditState.productQR.trim() !== '' ? quickEditState.productQR.trim() : '',
-        salesUnit: quickEditState.salesUnit || undefined,
-        mrp: Number(quickEditState.mrp || 0),
-        purchaseRate: Number(quickEditState.purchaseRate || 0),
+        name: cur.name.trim(),
+        categoryId: cur.categoryId ? Number(cur.categoryId) : undefined,
+        productQR: cur.productQR.trim() !== '' ? cur.productQR.trim() : '',
+        salesUnit: cur.salesUnit || undefined,
+        mrp: Number(cur.mrp || 0),
+        purchaseRate: Number(cur.purchaseRate || 0),
         price: numPrice,
       });
       if (res.data?.success) {
-        toast.success(`⚡ "${quickEditState.name}" updated on the spot!`, { icon: '✅' });
+        toast.success(`⚡ "${cur.name}" updated on the spot!`, { icon: '✅' });
         qc.invalidateQueries({ queryKey: ['mainpos-items'] });
         qc.invalidateQueries({ queryKey: ['menu-items'] });
         
         // Update item in localCart if present
         setLocalCart(prev => prev.map(cartIt => {
-          if (cartIt.menuItemId === quickEditState.item.id) {
+          if (cartIt.menuItemId === cur.item?.id || cartIt.menuItemId === targetId) {
             return {
               ...cartIt,
-              displayName: quickEditState.name.trim(),
+              displayName: cur.name.trim(),
               price: numPrice,
             };
           }
@@ -1219,11 +1249,19 @@ export default function MainPOSTerminal() {
     }
   };
 
-  const handleOpenInstantAdd = async (searchVal?: string) => {
-    const rawVal = (searchVal || search || '').trim();
-    const isBarcodeLike = /^\d{4,}$/.test(rawVal);
-    let initialBarcode = isBarcodeLike ? rawVal : '';
-    let initialName = !isBarcodeLike ? rawVal : '';
+  const handleOpenInstantAdd = async (searchVal?: string, explicitBarcode?: string) => {
+    let initialBarcode = '';
+    let initialName = '';
+
+    if (explicitBarcode !== undefined && explicitBarcode.trim()) {
+      initialBarcode = explicitBarcode.trim();
+      initialName = (searchVal || '').trim();
+    } else {
+      const rawVal = (searchVal || search || '').trim();
+      const isBarcodeLike = /^[A-Za-z0-9\-_]{4,}$/.test(rawVal) && /\d/.test(rawVal);
+      initialBarcode = isBarcodeLike ? rawVal : '';
+      initialName = !isBarcodeLike ? rawVal : '';
+    }
 
     const firstNonKotCat = categories.find((c: any) => !c.isKOTEnabled) || categories[0];
 
@@ -1280,31 +1318,32 @@ export default function MainPOSTerminal() {
 
   const isSavingInstantRef = useRef(false);
 
-  const handleSaveInstantAdd = async () => {
-    if (isSavingInstantRef.current || instantAddState.isSaving) return;
-    if (!instantAddState.name.trim()) {
+  const handleSaveInstantAdd = async (overrides?: Partial<InstantAddState>) => {
+    const cur = { ...instantAddState, ...(overrides || {}) };
+    if (isSavingInstantRef.current || cur.isSaving) return;
+    if (!cur.name.trim()) {
       toast.error('Product name is required');
       instantNameInputRef.current?.focus();
       return;
     }
-    const numPrice = Number(instantAddState.sellingPrice) > 0 
-      ? Number(instantAddState.sellingPrice) 
-      : Number(instantAddState.mrp || 0);
+    const numPrice = Number(cur.sellingPrice) > 0 
+      ? Number(cur.sellingPrice) 
+      : Number(cur.mrp || 0);
     if (numPrice <= 0) {
       toast.error('Valid Selling Price or MRP is required');
       instantSellingInputRef.current?.focus();
       return;
     }
     isSavingInstantRef.current = true;
-    setInstantAddState(prev => ({ ...prev, isSaving: true }));
+    setInstantAddState(prev => ({ ...prev, ...cur, isSaving: true }));
     try {
       const res = await restaurantApi.post('/restaurant/menu-items/instant-add', {
-        name: instantAddState.name.trim(),
-        categoryId: instantAddState.categoryId ? Number(instantAddState.categoryId) : undefined,
-        productQR: instantAddState.productQR.trim() || undefined,
-        salesUnit: instantAddState.salesUnit || 'Piece (pc)',
-        mrp: Number(instantAddState.mrp || 0),
-        purchaseRate: Number(instantAddState.purchaseRate || 0),
+        name: cur.name.trim(),
+        categoryId: cur.categoryId ? Number(cur.categoryId) : undefined,
+        productQR: cur.productQR.trim() || undefined,
+        salesUnit: cur.salesUnit || 'Piece (pc)',
+        mrp: Number(cur.mrp || 0),
+        purchaseRate: Number(cur.purchaseRate || 0),
         price: numPrice,
       });
       if (res.data?.success && res.data?.data) {
@@ -1384,7 +1423,7 @@ export default function MainPOSTerminal() {
   const searchRef = useRef<HTMLInputElement | null>(null);
   const previousTokenSnapshotRef = useRef<{ items: any[]; total: number } | null>(null);
 
-  const processScannedBarcodeRef = useRef<(rawBarcode: string) => boolean>(() => false);
+  const processScannedBarcodeRef = useRef<(rawBarcode: string, skipTokenLookup?: boolean) => boolean>(() => false);
 
   // Weight-based barcode scanner for Kg-measured items & general barcodes/QRs
   useWeightedBarcodeScanner((scanResult) => {
@@ -1399,7 +1438,75 @@ export default function MainPOSTerminal() {
   const [loyaltyModal, setLoyaltyModal] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [paidSuccess, setPaidSuccess] = useState(false);
+  // Manual Discount State
+  const [manualDiscount, setManualDiscount] = useState<{ type: 'percent' | 'flat'; value: number } | null>(null);
+  const [isDiscountOpen, setIsDiscountOpen] = useState(false);
+  const [discountInputVal, setDiscountInputVal] = useState('');
+  const [discountType, setDiscountType] = useState<'flat' | 'percent'>('flat');
+
+  // ── Post-Payment / Post-Print Workflow State ──
+  const [postPaymentPending, setPostPaymentPending] = useState<{
+    tokenNumber: number | string;
+    currentTokenData: any;
+    isPaid: boolean;
+  } | null>(null);
+  const postPaymentTimerRef = useRef<any>(null);
+
+  const finalizeMainposOrder = useCallback(() => {
+    if (postPaymentTimerRef.current) {
+      clearTimeout(postPaymentTimerRef.current);
+      postPaymentTimerRef.current = null;
+    }
+    setPostPaymentPending(null);
+    setCurrentToken(null);
+    setLocalCart([]);
+    setCustomerName('');
+    setCustomerPhone('');
+    setSearch('');
+    setManualDiscount(null);
+    setIsDiscountOpen(false);
+    setDiscountInputVal('');
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    toast.success('Bill closed! Ready for next order', { duration: 1200, icon: '✓' });
+  }, []);
+
+  const cancelPostPaymentAndKeepCart = useCallback(() => {
+    if (postPaymentTimerRef.current) {
+      clearTimeout(postPaymentTimerRef.current);
+      postPaymentTimerRef.current = null;
+    }
+    setPostPaymentPending(prev => {
+      if (prev) {
+        // If it was an unpaid draft token, cancel it on the server so it doesn't leave ghost tokens
+        if (!prev.isPaid && prev.currentTokenData?.qrCode) {
+          api.post(`/token/${prev.currentTokenData.qrCode}/cancel`).catch(() => {});
+        }
+        if (prev.currentTokenData) {
+          setCurrentToken(prev.currentTokenData);
+        }
+      }
+      return null;
+    });
+    toast.success('Print cancelled — order kept!', { duration: 1500, icon: '🛒' });
+  }, []);
+
+  // ── Keyboard handling for Post-Payment actions (Enter = New Order, Escape = Keep Order) ──
+  useEffect(() => {
+    if (!postPaymentPending) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finalizeMainposOrder();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelPostPaymentAndKeepCart();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [postPaymentPending, finalizeMainposOrder, cancelPostPaymentAndKeepCart]);
   const [awaitingUPIPayment, setAwaitingUPIPayment] = useState(false);
   const [pendingUpiPayment, setPendingUpiPayment] = useState<{ tokenQr: string; amount: number; method: string } | null>(null);
   const [showSplitModal, setShowSplitModal] = useState(false);
@@ -1781,19 +1888,17 @@ export default function MainPOSTerminal() {
           // Normal counter checkout via Cash/Card/UPI button is printed directly in processPayment.
           if (latestToken.status === 'paid' && awaitingUPIPayment) {
             playTokenSound();
-            setPaidSuccess(true);
             setAwaitingUPIPayment(false);
             setPendingUpiPayment(null);
             if (socket) socket.emit('customer_display_reset', { restaurantId: activeRestaurantId });
-            toast.success('🎉 UPI Payment Received! Printing Bill...');
-            printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
-            setTimeout(() => {
-              setPaidSuccess(false);
-              setCurrentToken(null);
-              setLocalCart([]);
-              setCustomerName('');
-              setCustomerPhone('');
-            }, 2500);
+            toast.success('🎉 UPI Payment Received! Printing Bill...', { duration: 1800 });
+            await printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
+            
+            setPostPaymentPending({
+              tokenNumber: latestToken.tokenNumber,
+              currentTokenData: latestToken,
+              isPaid: true,
+            });
           }
         }
       } catch (err) {}
@@ -1840,8 +1945,15 @@ export default function MainPOSTerminal() {
     queryKey: ['mainpos-categories', authToken],
     queryFn: async () => {
       const { data } = await api.get('/categories');
-      if (Array.isArray(data?.data)) setCachedCategories('main', data.data);
-      return data.data;
+      const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+      const sorted = [...list].sort((a: any, b: any) => {
+        const aKot = Boolean(a.isKOTEnabled);
+        const bKot = Boolean(b.isKOTEnabled);
+        if (aKot !== bKot) return aKot ? -1 : 1;
+        return (Number(a.sortOrder || 0)) - (Number(b.sortOrder || 0));
+      });
+      setCachedCategories('main', sorted);
+      return sorted;
     },
     initialData: () => getCachedCategories('main'),
     enabled: !!authToken,
@@ -1951,7 +2063,12 @@ export default function MainPOSTerminal() {
       }));
       if (!currentToken) {
         previousTokenSnapshotRef.current = null;
-        await createTokenMut.mutateAsync({ items: itemsPayload, customerName: resolvedCustName, customerPhone: customerPhone || undefined });
+        await createTokenMut.mutateAsync({
+          items: itemsPayload,
+          customerName: resolvedCustName,
+          customerPhone: customerPhone || undefined,
+          discount: appliedManualDiscountAmount > 0 ? appliedManualDiscountAmount : undefined,
+        });
       } else {
         const prevItems = (currentToken.items || []).filter(i => !i.isRemoved).map((i: any) => ({
           id: i.id,
@@ -1966,6 +2083,11 @@ export default function MainPOSTerminal() {
           total: Number(currentToken.subtotal || currentToken.total || 0),
         };
         await addItemsMut.mutateAsync({ qr: currentToken.qrCode, items: itemsPayload });
+        if (appliedManualDiscountAmount > 0) {
+          await api.post(`/token/${currentToken.qrCode}/discount`, {
+            discount: totalDiscountAmount,
+          }).catch(() => {});
+        }
       }
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to save token');
@@ -2019,7 +2141,7 @@ export default function MainPOSTerminal() {
       } catch { /* silent */ }
     }
 
-    // ─── Open customer display in browser (reuse existing tab if open) ───
+    // ─── Open customer display in browser (positions onto extended secondary monitor) ───
     const isFile = window.location.protocol === 'file:';
     const baseUrl = isFile
       ? `${window.location.origin}${window.location.pathname}`
@@ -2030,9 +2152,32 @@ export default function MainPOSTerminal() {
       displayWindowRef.current.location.href = finalUrl;
       displayWindowRef.current.focus();
     } else {
-      const newTab = window.open(finalUrl, '_blank');
-      if (newTab) {
-        displayWindowRef.current = newTab;
+      // In dual-screen Extend mode, open popup on the secondary extended monitor
+      let targetLeft = window.screen.availWidth || 1920;
+      let targetTop = 0;
+      let targetWidth = 1280;
+      let targetHeight = 800;
+
+      // Chrome/Edge Multi-Screen Window Management API
+      try {
+        if ('getScreenDetails' in window) {
+          const screenDetails = await (window as any).getScreenDetails();
+          const secondary = screenDetails?.screens?.find((s: any) => s !== screenDetails.currentScreen);
+          if (secondary) {
+            targetLeft = secondary.availLeft;
+            targetTop = secondary.availTop;
+            targetWidth = secondary.availWidth;
+            targetHeight = secondary.availHeight;
+          }
+        }
+      } catch {
+        // Fallback to offset left
+      }
+
+      const windowFeatures = `left=${targetLeft},top=${targetTop},width=${targetWidth},height=${targetHeight},menubar=no,toolbar=no,location=no,status=no,resizable=yes`;
+      const newWindow = window.open(finalUrl, 'CustomerFacingDisplay', windowFeatures);
+      if (newWindow) {
+        displayWindowRef.current = newWindow;
       } else {
         window.location.href = finalUrl;
       }
@@ -2100,6 +2245,23 @@ export default function MainPOSTerminal() {
   const lookupToken = async (overrideCode?: string | any) => {
     const raw = (typeof overrideCode === 'string' ? overrideCode : lookupInput).trim();
     if (!raw) return;
+
+    // Fast-path: If user scanned a typical product barcode (6+ digits) into the token search box, check item catalog first!
+    if (raw.length >= 6) {
+      const itemAdded = processScannedBarcodeRef.current(raw, true);
+      if (itemAdded) {
+        setLookupInput('');
+        return;
+      }
+      const isUuidOrToken = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw) || /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(raw);
+      if (!isUuidOrToken) {
+        setLookupInput('');
+        handleOpenInstantAdd('', raw);
+        toast(`⚡ Barcode "${raw}" not in catalog — enter name & MRP to add!`, { icon: '⚡', duration: 2500 });
+        return;
+      }
+    }
+
     try {
       const isNum = /^\d+$/.test(raw);
       const body = isNum ? { tokenNumber: Number(raw) } : { qrCode: raw };
@@ -2132,6 +2294,12 @@ export default function MainPOSTerminal() {
         });
       }
     } catch (err: any) {
+      // Fallback: If token not found, check if staff scanned an item barcode/QR into the token box!
+      const itemAdded = processScannedBarcodeRef.current(raw, true);
+      if (itemAdded) {
+        setLookupInput('');
+        return;
+      }
       toast.error(err?.response?.data?.error || 'Token not found');
     }
   };
@@ -2298,6 +2466,14 @@ export default function MainPOSTerminal() {
     } = options;
 
     let returnedId = id;
+
+    if (postPaymentPending) {
+      if (postPaymentTimerRef.current) {
+        clearTimeout(postPaymentTimerRef.current);
+        postPaymentTimerRef.current = null;
+      }
+      setPostPaymentPending(null);
+    }
     setLocalCart(prev => {
       const resolvedName = displayName || item.name;
       const match = prev.find(p =>
@@ -2330,11 +2506,11 @@ export default function MainPOSTerminal() {
       const el = document.getElementById(`local-${returnedId}`);
       el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 40);
-    toast.success(`Added ${displayName || item.name}`, { duration: 800 });
+    toast.success(`Added ${displayName || item.name}`, { duration: 500 });
     return returnedId;
   };
 
-  const processScannedBarcode = (rawBarcode: string): boolean => {
+  const processScannedBarcode = (rawBarcode: string, skipTokenLookup: boolean = false): boolean => {
     const code = String(rawBarcode || '').trim();
     if (!code) return false;
 
@@ -2346,12 +2522,14 @@ export default function MainPOSTerminal() {
     }
 
     // 1. Token QR code / Token Number detection (UUID, TOK-xxx, TOKEN-xxx, or #xxx)
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(scannedTokenCode);
-    const isTokPrefix = /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(scannedTokenCode);
-    if (isUuid || isTokPrefix) {
-      setSearch('');
-      lookupToken(scannedTokenCode);
-      return true;
+    if (!skipTokenLookup) {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(scannedTokenCode);
+      const isTokPrefix = /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(scannedTokenCode);
+      if (isUuid || isTokPrefix) {
+        setSearch('');
+        lookupToken(scannedTokenCode);
+        return true;
+      }
     }
 
     // 2. Try weight-based barcode parsing
@@ -2383,7 +2561,6 @@ export default function MainPOSTerminal() {
         if (qr && targets.has(qr)) return true;
         if (invSku && targets.has(invSku)) return true;
         if (invBc && targets.has(invBc)) return true;
-        if (targets.has(String(i.id))) return true;
         if (Array.isArray(i.inventoryItem?.inventoryMRPs)) {
           if (i.inventoryItem.inventoryMRPs.some((m: any) => m.barcode && targets.has(String(m.barcode).trim().toLowerCase()))) {
             return true;
@@ -2421,7 +2598,7 @@ export default function MainPOSTerminal() {
           });
         }
         setSearch('');
-        toast.success(`✓ Added ${item.name}: ${qtyToAdd.toFixed(3).replace(/\.?0+$/, '')}kg`, { duration: 1000, icon: '📦' });
+        toast.success(`✓ Added ${item.name}: ${qtyToAdd.toFixed(3).replace(/\.?0+$/, '')}kg`, { duration: 500, icon: '📦' });
         return true;
       }
     }
@@ -2440,7 +2617,7 @@ export default function MainPOSTerminal() {
       });
       void attachInventoryMRPsToCartItem(newId, displayName);
       setSearch('');
-      toast.success(`Scanned: ${displayName}`, { duration: 800, icon: '🏷️' });
+      toast.success(`Scanned: ${displayName}`, { duration: 500, icon: '🏷️' });
       return true;
     }
 
@@ -2450,11 +2627,9 @@ export default function MainPOSTerminal() {
       const qr = String(i.productQR || '').trim().toLowerCase();
       const bc = String(i.inventoryItem?.barcode || '').trim().toLowerCase();
       const sku = String(i.inventoryItem?.sku || '').trim().toLowerCase();
-      const id = String(i.id).trim().toLowerCase();
       if (qr && qr === cleanCode) return true;
       if (bc && bc === cleanCode) return true;
       if (sku && sku === cleanCode) return true;
-      if (id === cleanCode) return true;
       if (Array.isArray(i.inventoryItem?.inventoryMRPs)) {
         if (i.inventoryItem.inventoryMRPs.some((m: any) => String(m.barcode || '').trim().toLowerCase() === cleanCode)) {
           return true;
@@ -2495,25 +2670,35 @@ export default function MainPOSTerminal() {
     if (finalItem) {
       handleAddToCart(finalItem);
       setSearch('');
-      toast.success(`Scanned: ${finalItem.name}`, { duration: 800, icon: '🏷️' });
+      toast.success(`Scanned: ${finalItem.name}`, { duration: 500, icon: '🏷️' });
       return true;
-    } else if (filteredItems.length > 0) {
-      const exactMatch = filteredItems.find(i => String(i.name || '').trim().toLowerCase() === cleanCode);
-      const targetItem = exactMatch || filteredItems[0];
-      handleAddToCart(targetItem);
-      setSearch('');
-      toast.success(`Added ${targetItem.name}`, { duration: 800, icon: '🛒' });
-      return true;
-    } else if (code.length > 0) {
-      // 5. Fallback: If short numeric and no menu items matched, try loading as a token number
-      if (/^\d{1,3}$/.test(code)) {
+    } else {
+      // Check if user entered an exact item name (case-insensitive)
+      const exactNameMatch = allItems.find(i => String(i.name || '').trim().toLowerCase() === cleanCode);
+      if (exactNameMatch) {
+        handleAddToCart(exactNameMatch);
+        setSearch('');
+        toast.success(`Added ${exactNameMatch.name}`, { duration: 500, icon: '🛒' });
+        return true;
+      }
+
+      if (skipTokenLookup) {
+        return false;
+      }
+
+      // Explicit token number / prefix format (#10 or TOK-10)
+      const isExplicitToken = /^(?:TOK(?:EN)?[-_ ]?|#)\d+$/i.test(code);
+      if (isExplicitToken) {
         setSearch('');
         lookupToken(code);
         return true;
       }
-      toast.error(`Item "${code}" not found in catalog`);
+
+      // ── Item NOT found in catalog -> Automatically open Instant Add with scanned barcode pre-filled! ──
       setSearch('');
-      return false;
+      handleOpenInstantAdd('', code);
+      toast(`⚡ Barcode "${code}" not found — enter product name & MRP to add!`, { icon: '⚡', duration: 2500 });
+      return true;
     }
     return false;
   };
@@ -2602,6 +2787,65 @@ export default function MainPOSTerminal() {
     setLocalCart(prev => prev.filter(p => p.id !== id));
   };
 
+  // ── Derived state ──
+  const activeTokenItems = currentToken?.items.filter(i => !i.isRemoved) ?? [];
+  const removedTokenItems = currentToken?.items.filter(i => i.isRemoved) ?? [];
+  const localCartSubtotal = localCart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+  const existingRemaining = currentToken ? Math.max(0, Number(currentToken.total) - currentToken.payments.reduce((s, p) => s + Number(p.amount), 0)) : 0;
+  const isTaxInclusiveMode = 
+    billSettings?.showGST === false || 
+    String((restaurantSettings as any)?.taxMode || (billSettings as any)?.taxMode || '').toLowerCase() === 'inclusive' ||
+    (Number((restaurantSettings as any)?.sgstRate ?? (billSettings as any)?.sgstRate ?? 0) === 0 && 
+     Number((restaurantSettings as any)?.cgstRate ?? (billSettings as any)?.cgstRate ?? 0) === 0 &&
+     Number((restaurantSettings as any)?.igstRate ?? (billSettings as any)?.igstRate ?? 0) === 0);
+
+  const storeTaxRate = (billSettings?.showGST === false || isTaxInclusiveMode)
+    ? 0
+    : ((restaurantSettings as any)?.sgstRate !== undefined && (restaurantSettings as any)?.sgstRate !== null)
+      ? (Number((restaurantSettings as any).sgstRate || 0) + Number((restaurantSettings as any).cgstRate || 0) + Number((restaurantSettings as any).igstRate || 0))
+      : (billSettings ? (Number(billSettings.sgstRate || 0) + Number(billSettings.cgstRate || 0) + Number(billSettings.igstRate || 0)) : null);
+
+  const localCartTax = isTaxInclusiveMode ? 0 : localCart.reduce((sum, item) => {
+    const menu = allItems.find((m) => m.id === item.menuItemId);
+    const itemTaxType = String(menu?.taxType || 'internal').toLowerCase();
+    // In inclusive/internal tax mode, tax is already included inside item price, never added on top
+    if (itemTaxType === 'internal') {
+      return sum;
+    }
+    const taxRate = (storeTaxRate !== null && storeTaxRate !== undefined) ? storeTaxRate : Number(menu?.taxPercent ?? 0);
+    const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), itemTaxType, taxRate);
+    return sum + Number(line.tax || 0);
+  }, 0);
+  const localCartFinal = isTaxInclusiveMode ? localCartSubtotal : localCart.reduce((sum, item) => {
+    const menu = allItems.find((m) => m.id === item.menuItemId);
+    const itemTaxType = String(menu?.taxType || 'internal').toLowerCase();
+    if (itemTaxType === 'internal') {
+      return sum + (Number(item.price) * Number(item.quantity));
+    }
+    const taxRate = (storeTaxRate !== null && storeTaxRate !== undefined) ? storeTaxRate : Number(menu?.taxPercent ?? 0);
+    const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), itemTaxType, taxRate);
+    return sum + Number(line.final || 0);
+  }, 0);
+  const grossSubtotal = (currentToken ? Number(currentToken.subtotal || 0) : 0) + localCartSubtotal;
+  const existingDiscount = currentToken ? Number(currentToken.discountApplied || 0) : 0;
+  const appliedManualDiscountAmount = useMemo(() => {
+    if (!manualDiscount || manualDiscount.value <= 0) return 0;
+    if (manualDiscount.type === 'percent') {
+      const pct = Math.min(100, Math.max(0, manualDiscount.value));
+      return Math.round((grossSubtotal * (pct / 100)) * 100) / 100;
+    }
+    return Math.min(grossSubtotal, Math.max(0, manualDiscount.value));
+  }, [manualDiscount, grossSubtotal]);
+  const totalDiscountAmount = existingDiscount + appliedManualDiscountAmount;
+
+  const rawCalculatedTotal = currentToken ? existingRemaining + localCartFinal : localCartFinal;
+  const calculatedTotal = Math.max(0, Math.round((rawCalculatedTotal - appliedManualDiscountAmount) * 100) / 100);
+  const displayTotal = customTotalOverride !== null ? customTotalOverride : calculatedTotal;
+  const totalActiveQuantity = activeTokenItems.reduce((s, it) => s + Number(it.quantity || 0), 0);
+  const totalLocalQuantity = localCart.reduce((s, it) => s + Number(it.quantity || 0), 0);
+  const combinedCartItemsCount = totalActiveQuantity + totalLocalQuantity;
+  const isCartEmpty = combinedCartItemsCount === 0;
+
   // ── Live customer display sync ──
   useEffect(() => {
     if (!isPresentingRef.current) return;
@@ -2629,8 +2873,8 @@ export default function MainPOSTerminal() {
         const subtotal = localCartSubtotal + (currentToken ? Number(currentToken.subtotal || 0) : 0);
         const currentTokenTax = currentToken ? Number(currentToken.tax ?? (Number(currentToken.sgst || 0) + Number(currentToken.cgst || 0) + Number(currentToken.igst || 0))) : 0;
         const tax = localCartTax + currentTokenTax;
-        const discount = currentToken ? Number(currentToken.discountApplied || 0) : 0;
-        const total = Math.max(0, subtotal + tax - discount);
+        const discount = totalDiscountAmount;
+        const total = calculatedTotal;
         const payload: any = { restaurantId: user?.restaurant?.id, items: combinedItems, subtotal, tax, discount, total };
         if (currentToken) { payload.tokenNumber = currentToken.tokenNumber; payload.tokenId = currentToken.id; }
         if (socket) socket.emit('customer_display_update', payload);
@@ -2638,7 +2882,7 @@ export default function MainPOSTerminal() {
       } catch (e) {}
     }, 300) as unknown as number;
     return () => { if (presentDebounceTimer.current) { window.clearTimeout(presentDebounceTimer.current as number); presentDebounceTimer.current = null; } };
-  }, [localCart, currentToken, socket, user?.restaurant?.id]);
+  }, [localCart, currentToken, socket, user?.restaurant?.id, totalDiscountAmount, calculatedTotal]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -2686,21 +2930,26 @@ export default function MainPOSTerminal() {
   });
 
   const createTokenMut = useMutation({
-    mutationFn: async (payload: { items: any[]; customerName?: string; customerPhone?: string }) => {
+    mutationFn: async (payload: { items: any[]; customerName?: string; customerPhone?: string; discount?: number }) => {
       const { data } = await api.post('/token/create', { ...payload, staffId: user?.id });
       return data.data;
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       playTokenSound();
       setCurrentToken(data); setLocalCart([]);
+      setManualDiscount(null); setIsDiscountOpen(false); setDiscountInputVal('');
       if (data.customerName) setCustomerName(data.customerName);
       if (data.customerPhone) setCustomerPhone(data.customerPhone);
       toast.success('Token saved');
       try { 
-        printTokenSlip(data, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings); 
+        await printTokenSlip(data, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings); 
       } catch (err) {}
       try { api.post(`/token/${data.qrCode}/present`).catch(() => {}); } catch {}
-      setTimeout(() => { setCurrentToken(null); setCustomerName(''); setCustomerPhone(''); }, 700);
+      setPostPaymentPending({
+        tokenNumber: data.tokenNumber,
+        currentTokenData: data,
+        isPaid: false,
+      });
     },
     onError: (err: any) => toast.error(err?.response?.data?.error || 'Failed to create token'),
   });
@@ -2710,13 +2959,13 @@ export default function MainPOSTerminal() {
       const { data } = await api.post(`/token/${payload.qr}/items/bulk`, { items: payload.items, staffId: user?.id });
       return data.data;
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       playTokenSound();
       const prevSnap = previousTokenSnapshotRef.current;
       const addedCart = [...localCart];
       setCurrentToken(data); setLocalCart([]); toast.success('Items added to token');
       try {
-        printTokenSlip(
+        await printTokenSlip(
           data,
           user?.restaurant?.name || 'SMARTGONEXT Bakery',
           billSettings,
@@ -2729,7 +2978,11 @@ export default function MainPOSTerminal() {
         );
       } catch (err) {}
       try { api.post(`/token/${data.qrCode}/present`).catch(() => {}); } catch {}
-      setTimeout(() => { setCurrentToken(null); setCustomerName(''); setCustomerPhone(''); }, 700);
+      setPostPaymentPending({
+        tokenNumber: data.tokenNumber,
+        currentTokenData: data,
+        isPaid: false,
+      });
     },
     onError: (err: any) => toast.error(err?.response?.data?.error || 'Failed to add items to token'),
   });
@@ -2754,6 +3007,7 @@ export default function MainPOSTerminal() {
           })),
           customerName: resolvedCustName, customerPhone: customerPhone || undefined,
           staffId: user?.id,
+          discount: appliedManualDiscountAmount > 0 ? appliedManualDiscountAmount : undefined,
           orderId: loadedWaiterBill?.orderId || undefined,
           orderIds: loadedWaiterBill?.orderIds || undefined,
           tableId: loadedWaiterBill?.tableId || undefined,
@@ -2763,18 +3017,25 @@ export default function MainPOSTerminal() {
           isEntireTable: loadedWaiterBill?.isEntireTable ?? undefined,
         });
         targetQrCode = createRes.data.data.qrCode;
-      } else if (localCart.length > 0) {
-        await api.post(`/token/${currentToken.qrCode}/items/bulk`, {
-          items: localCart.map(i => ({
-            menuItemId: i.menuItemId,
-            quantity: i.quantity,
-            inventoryItemMRPId: i.inventoryItemMRPId,
-            purchaseRate: i.purchaseRate,
-            linePrice: i.price,
-            menuItemName: i.displayName || i.name,
-          })),
-          staffId: user?.id,
-        });
+      } else {
+        if (localCart.length > 0) {
+          await api.post(`/token/${currentToken.qrCode}/items/bulk`, {
+            items: localCart.map(i => ({
+              menuItemId: i.menuItemId,
+              quantity: i.quantity,
+              inventoryItemMRPId: i.inventoryItemMRPId,
+              purchaseRate: i.purchaseRate,
+              linePrice: i.price,
+              menuItemName: i.displayName || i.name,
+            })),
+            staffId: user?.id,
+          });
+        }
+        if (appliedManualDiscountAmount > 0) {
+          await api.post(`/token/${currentToken.qrCode}/discount`, {
+            discount: totalDiscountAmount,
+          }).catch(() => {});
+        }
       }
 
       // If user typed customer info but did not press Save, attach before taking payment.
@@ -2821,22 +3082,27 @@ export default function MainPOSTerminal() {
         }
 
         if (finalToken?.status === 'paid') {
-          setPaidSuccess(true); setAwaitingUPIPayment(false); setPendingUpiPayment(null);
+          setAwaitingUPIPayment(false); setPendingUpiPayment(null);
           if (socket) socket.emit('customer_display_payment_ok', { restaurantId: user?.restaurant?.id, paid: payAmount, amount: payAmount, customerName: finalToken?.customerName });
+          
+          toast.success(
+            finalToken?.loyaltyPointsEarned 
+              ? `Payment Successful! 🏆 ${finalToken.loyaltyPointsEarned} pts earned` 
+              : 'Payment Successful! ✓', 
+            { icon: '💰', duration: 1800 }
+          );
+
           if (getPrinterSettings(billSettings).autoPrintBill) {
-            printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
+            await printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
           }
           setLoadedWaiterBill(null);
           refetchPendingWaiterBills();
-          setTimeout(() => {
-            setPaidSuccess(false);
-            setCurrentToken(null);
-            setCustomerName('');
-            setCustomerPhone('');
-            setSearch('');
-            searchRef.current?.focus();
-            searchRef.current?.select();
-          }, 1200);
+
+          setPostPaymentPending({
+            tokenNumber: finalToken.tokenNumber,
+            currentTokenData: finalToken,
+            isPaid: true,
+          });
         } else {
           toast.success(`Partial payment of ₹${payAmount.toFixed(2)} (${method.toUpperCase()}) recorded!`);
         }
@@ -2866,6 +3132,7 @@ export default function MainPOSTerminal() {
           })),
           customerName: customerName || undefined, customerPhone: customerPhone || undefined,
           staffId: user?.id,
+          discount: appliedManualDiscountAmount > 0 ? appliedManualDiscountAmount : undefined,
           orderId: loadedWaiterBill?.orderId || undefined,
           orderIds: loadedWaiterBill?.orderIds || undefined,
           tableId: loadedWaiterBill?.tableId || undefined,
@@ -2875,18 +3142,25 @@ export default function MainPOSTerminal() {
           isEntireTable: loadedWaiterBill?.isEntireTable ?? undefined,
         });
         targetQrCode = createRes.data.data.qrCode;
-      } else if (localCart.length > 0) {
-        await api.post(`/token/${currentToken.qrCode}/items/bulk`, {
-          items: localCart.map(i => ({
-            menuItemId: i.menuItemId,
-            quantity: i.quantity,
-            inventoryItemMRPId: i.inventoryItemMRPId,
-            purchaseRate: i.purchaseRate,
-            linePrice: i.price,
-            menuItemName: i.displayName || i.name,
-          })),
-          staffId: user?.id,
-        });
+      } else {
+        if (localCart.length > 0) {
+          await api.post(`/token/${currentToken.qrCode}/items/bulk`, {
+            items: localCart.map(i => ({
+              menuItemId: i.menuItemId,
+              quantity: i.quantity,
+              inventoryItemMRPId: i.inventoryItemMRPId,
+              purchaseRate: i.purchaseRate,
+              linePrice: i.price,
+              menuItemName: i.displayName || i.name,
+            })),
+            staffId: user?.id,
+          });
+        }
+        if (appliedManualDiscountAmount > 0) {
+          await api.post(`/token/${currentToken.qrCode}/discount`, {
+            discount: totalDiscountAmount,
+          }).catch(() => {});
+        }
       }
 
       if (targetQrCode && (customerPhone || customerName)) {
@@ -2930,22 +3204,26 @@ export default function MainPOSTerminal() {
       setLocalCart([]);
 
       if (latestToken?.status === 'paid') {
-        setPaidSuccess(true);
         setAwaitingUPIPayment(false);
         setPendingUpiPayment(null);
         if (socket) socket.emit('customer_display_payment_ok', { restaurantId: activeRestaurantId, paid: latestToken.total, amount: latestToken.total, customerName: latestToken.customerName });
-        toast.success('Split payment completed successfully!');
+        toast.success(
+          latestToken?.loyaltyPointsEarned 
+            ? `Payment Successful! 🏆 ${latestToken.loyaltyPointsEarned} pts earned` 
+            : 'Payment Successful! ✓', 
+          { icon: '💰', duration: 1800 }
+        );
         if (getPrinterSettings(billSettings).autoPrintBill) {
-          printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
+          await printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
         }
         setLoadedWaiterBill(null);
         refetchPendingWaiterBills();
-        setTimeout(() => {
-          setPaidSuccess(false);
-          setCurrentToken(null);
-          setCustomerName('');
-          setCustomerPhone('');
-        }, 1200);
+
+        setPostPaymentPending({
+          tokenNumber: latestToken.tokenNumber,
+          currentTokenData: latestToken,
+          isPaid: true,
+        });
       } else {
         toast.success(`Split payment recorded!`);
       }
@@ -2966,12 +3244,22 @@ export default function MainPOSTerminal() {
       if (!finalToken) throw new Error('Payment response missing final token data');
       setCurrentToken(finalToken); setLocalCart([]); setAwaitingUPIPayment(false); setPendingUpiPayment(null);
       if (finalToken?.status === 'paid') {
-        setPaidSuccess(true);
         if (socket) socket.emit('customer_display_payment_ok', { restaurantId: user?.restaurant?.id, paid: pendingUpiPayment.amount, amount: pendingUpiPayment.amount, customerName: finalToken?.customerName });
+        toast.success(
+          finalToken?.loyaltyPointsEarned 
+            ? `Payment Successful! 🏆 ${finalToken.loyaltyPointsEarned} pts earned` 
+            : 'Payment Successful! ✓', 
+          { icon: '💰', duration: 1800 }
+        );
         if (getPrinterSettings(billSettings).autoPrintBill) {
-          printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
+          await printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
         }
-        setTimeout(() => { setPaidSuccess(false); setCurrentToken(null); setCustomerName(''); setCustomerPhone(''); }, 1200);
+
+        setPostPaymentPending({
+          tokenNumber: finalToken.tokenNumber,
+          currentTokenData: finalToken,
+          isPaid: true,
+        });
       }
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'UPI confirmation failed');
@@ -2995,51 +3283,6 @@ export default function MainPOSTerminal() {
     };
   }, [socket, pendingUpiPayment]);
 
-  // ── Derived state ──
-  const activeTokenItems = currentToken?.items.filter(i => !i.isRemoved) ?? [];
-  const removedTokenItems = currentToken?.items.filter(i => i.isRemoved) ?? [];
-  const localCartSubtotal = localCart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-  const existingRemaining = currentToken ? Math.max(0, Number(currentToken.total) - currentToken.payments.reduce((s, p) => s + Number(p.amount), 0)) : 0;
-  const isTaxInclusiveMode = 
-    billSettings?.showGST === false || 
-    String((restaurantSettings as any)?.taxMode || (billSettings as any)?.taxMode || '').toLowerCase() === 'inclusive' ||
-    (Number((restaurantSettings as any)?.sgstRate ?? (billSettings as any)?.sgstRate ?? 0) === 0 && 
-     Number((restaurantSettings as any)?.cgstRate ?? (billSettings as any)?.cgstRate ?? 0) === 0 &&
-     Number((restaurantSettings as any)?.igstRate ?? (billSettings as any)?.igstRate ?? 0) === 0);
-
-  const storeTaxRate = (billSettings?.showGST === false || isTaxInclusiveMode)
-    ? 0
-    : ((restaurantSettings as any)?.sgstRate !== undefined && (restaurantSettings as any)?.sgstRate !== null)
-      ? (Number((restaurantSettings as any).sgstRate || 0) + Number((restaurantSettings as any).cgstRate || 0) + Number((restaurantSettings as any).igstRate || 0))
-      : (billSettings ? (Number(billSettings.sgstRate || 0) + Number(billSettings.cgstRate || 0) + Number(billSettings.igstRate || 0)) : null);
-
-  const localCartTax = isTaxInclusiveMode ? 0 : localCart.reduce((sum, item) => {
-    const menu = allItems.find((m) => m.id === item.menuItemId);
-    const itemTaxType = String(menu?.taxType || 'internal').toLowerCase();
-    // In inclusive/internal tax mode, tax is already included inside item price, never added on top
-    if (itemTaxType === 'internal') {
-      return sum;
-    }
-    const taxRate = (storeTaxRate !== null && storeTaxRate !== undefined) ? storeTaxRate : Number(menu?.taxPercent ?? 0);
-    const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), itemTaxType, taxRate);
-    return sum + Number(line.tax || 0);
-  }, 0);
-  const localCartFinal = isTaxInclusiveMode ? localCartSubtotal : localCart.reduce((sum, item) => {
-    const menu = allItems.find((m) => m.id === item.menuItemId);
-    const itemTaxType = String(menu?.taxType || 'internal').toLowerCase();
-    if (itemTaxType === 'internal') {
-      return sum + (Number(item.price) * Number(item.quantity));
-    }
-    const taxRate = (storeTaxRate !== null && storeTaxRate !== undefined) ? storeTaxRate : Number(menu?.taxPercent ?? 0);
-    const line = getLineTaxBreakdown(Number(item.price) * Number(item.quantity), itemTaxType, taxRate);
-    return sum + Number(line.final || 0);
-  }, 0);
-  const calculatedTotal = currentToken ? existingRemaining + localCartFinal : localCartFinal;
-  const displayTotal = customTotalOverride !== null ? customTotalOverride : calculatedTotal;
-  const totalActiveQuantity = activeTokenItems.reduce((s, it) => s + Number(it.quantity || 0), 0);
-  const totalLocalQuantity = localCart.reduce((s, it) => s + Number(it.quantity || 0), 0);
-  const combinedCartItemsCount = totalActiveQuantity + totalLocalQuantity;
-  const isCartEmpty = combinedCartItemsCount === 0;
   const heldCount = (Array.isArray(terminalKots) && terminalKots.length > 0)
     ? terminalKots.filter((k: any) => k.status === 'pending').length
     : heldKots.filter(k => k.status === 'pending').length;
@@ -3770,7 +4013,7 @@ export default function MainPOSTerminal() {
               activeCategoryId={activeCategory}
               onSelectCategory={(id) => setActiveCategory(id ? id.toString() : 'all')}
               isLight={isLight}
-              storageKey="pos_category_order"
+              storageKey="pos_category_order_v2"
               className="w-full max-w-full min-w-0"
             />
             {filteredItems.length === 0 && search.trim() && (
@@ -4270,8 +4513,8 @@ export default function MainPOSTerminal() {
                         className={cn(
                           "w-full pl-3 pr-16 py-1.5 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm",
                           isLight
-                            ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400"
-                            : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400"
+                            ? "bg-white border-purple-600 text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-purple-400"
+                            : "bg-slate-900 border-purple-500 text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-400"
                         )}
                       />
                       <button
@@ -4333,15 +4576,15 @@ export default function MainPOSTerminal() {
                             e.stopPropagation();
                             setActiveCustomerDropdown(null);
                             (e.target as HTMLElement).blur();
-                            cashBtnRef.current?.focus();
+                            cashBtnRef.current?.click();
                           }
                         }}
                         placeholder="Phone (Opt)"
                         className={cn(
                           "w-full px-3 py-1.5 border-2 rounded-md text-[11px] font-bold focus:outline-none transition shadow-sm",
                           isLight
-                            ? "bg-slate-900 border-purple-600 text-white placeholder-slate-400 focus:ring-2 focus:ring-purple-400"
-                            : "bg-slate-100 border-purple-500 text-slate-950 placeholder-slate-500 focus:ring-2 focus:ring-purple-400"
+                            ? "bg-white border-purple-600 text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-purple-400"
+                            : "bg-slate-900 border-purple-500 text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-400"
                         )}
                       />
                       {matchedCustomer && (
@@ -4392,7 +4635,160 @@ export default function MainPOSTerminal() {
                   {currentToken && <div className="flex justify-between"><span>Existing Subtotal</span><span>₹{Number(currentToken.subtotal).toFixed(2)}</span></div>}
                   {localCartSubtotal > 0 && <div className={cn("flex justify-between", isLight ? "text-slate-800" : "text-gray-300")}><span>New Items Subtotal</span><span>{formatCurrency(localCartSubtotal)}</span></div>}
                   {localCartTax > 0 && <div className={cn("flex justify-between", isLight ? "text-slate-800" : "text-gray-300")}><span>New Items GST/TAX</span><span>{formatCurrency(localCartTax)}</span></div>}
-                  {Number(currentToken?.discountApplied) > 0 && <div className="flex justify-between text-green-600"><span>🏆 Loyalty Discount</span><span>-₹{Number(currentToken!.discountApplied).toFixed(2)}</span></div>}
+
+                  {/* Active Discount Display */}
+                  {totalDiscountAmount > 0 && (
+                    <div className="flex justify-between items-center text-emerald-500 font-extrabold bg-emerald-500/10 px-2 py-1.5 rounded-lg border border-emerald-500/30">
+                      <span className="flex items-center gap-1">
+                        <Tag className="w-3.5 h-3.5" />
+                        Discount {manualDiscount?.type === 'percent' ? `(${manualDiscount.value}%)` : ''}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-emerald-500 text-xs font-black">-₹{totalDiscountAmount.toFixed(2)}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setManualDiscount(null);
+                            setDiscountInputVal('');
+                            if (currentToken && Number(currentToken.discountApplied) > 0) {
+                              api.post(`/token/${currentToken.qrCode}/discount`, { discount: 0 }).then(res => {
+                                if (res.data?.data) setCurrentToken(res.data.data);
+                              }).catch(() => {});
+                            }
+                          }}
+                          className="hover:text-red-400 text-gray-400 ml-1 p-0.5 text-xs font-black"
+                          title="Remove discount"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Add / Edit Discount Inline Control */}
+                  {currentToken?.status !== 'paid' && !isCartEmpty && (
+                    <div className="pt-0.5">
+                      {!isDiscountOpen ? (
+                        <button
+                          type="button"
+                          onClick={() => setIsDiscountOpen(true)}
+                          className={cn(
+                            "w-full py-1 text-[10px] font-extrabold uppercase rounded-md border border-dashed flex items-center justify-center gap-1.5 transition active:scale-[0.99]",
+                            isLight 
+                              ? "border-purple-300 text-purple-700 hover:bg-purple-50" 
+                              : "border-purple-500/40 text-purple-400 hover:bg-purple-950/20"
+                          )}
+                        >
+                          <Percent className="w-3 h-3" />
+                          <span>{totalDiscountAmount > 0 ? 'Edit Discount' : '+ Add Discount'}</span>
+                        </button>
+                      ) : (
+                        <div className={cn(
+                          "p-2.5 rounded-xl border space-y-2 mt-1 shadow-md animate-in fade-in duration-150",
+                          isLight ? "bg-slate-50 border-slate-300" : "bg-[#14161f] border-purple-500/30"
+                        )}>
+                          <div className="flex items-center justify-between text-[11px] font-black">
+                            <span className="flex items-center gap-1 text-purple-400">
+                              <Tag className="w-3.5 h-3.5" /> Discount Option
+                            </span>
+                            <div className="flex bg-black/40 rounded p-0.5 border border-gray-800 text-[10px]">
+                              <button
+                                type="button"
+                                onClick={() => setDiscountType('flat')}
+                                className={cn("px-2 py-0.5 rounded font-black transition", discountType === 'flat' ? "bg-purple-600 text-white shadow-sm" : "text-gray-400 hover:text-white")}
+                              >
+                                ₹ Flat
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDiscountType('percent')}
+                                className={cn("px-2 py-0.5 rounded font-black transition", discountType === 'percent' ? "bg-purple-600 text-white shadow-sm" : "text-gray-400 hover:text-white")}
+                              >
+                                % Percent
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Quick Preset Chips */}
+                          <div className="grid grid-cols-4 gap-1">
+                            {(discountType === 'percent' ? [5, 10, 15, 20] : [10, 20, 50, 100]).map((num) => (
+                              <button
+                                key={`chip-${num}`}
+                                type="button"
+                                onClick={() => {
+                                  const val = num;
+                                  setManualDiscount({ type: discountType, value: val });
+                                  setDiscountInputVal(String(val));
+                                  setIsDiscountOpen(false);
+                                  toast.success(`Discount of ${discountType === 'percent' ? `${val}%` : `₹${val}`} applied!`);
+                                }}
+                                className={cn(
+                                  "py-1 rounded font-black text-[10px] border transition active:scale-95",
+                                  isLight ? "bg-white border-slate-300 text-slate-800 hover:bg-purple-50" : "bg-gray-800/80 border-gray-700 text-gray-200 hover:bg-purple-900/40"
+                                )}
+                              >
+                                {discountType === 'percent' ? `${num}%` : `₹${num}`}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Custom Amount/Percent Input */}
+                          <div className="flex gap-1.5">
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              value={discountInputVal}
+                              onChange={(e) => setDiscountInputVal(e.target.value)}
+                              placeholder={discountType === 'percent' ? 'Enter % (e.g. 10)' : 'Enter ₹ (e.g. 50)'}
+                              className={cn(
+                                "flex-1 px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold outline-none border",
+                                isLight ? "bg-white border-slate-300 text-slate-900 focus:border-purple-600" : "bg-[#1a1c23] border-gray-700 text-white focus:border-purple-500"
+                              )}
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  const val = Number(discountInputVal);
+                                  if (isNaN(val) || val <= 0) {
+                                    toast.error('Enter a valid discount');
+                                    return;
+                                  }
+                                  setManualDiscount({ type: discountType, value: val });
+                                  setIsDiscountOpen(false);
+                                  toast.success(`Discount of ${discountType === 'percent' ? `${val}%` : `₹${val}`} applied!`);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const val = Number(discountInputVal);
+                                if (isNaN(val) || val <= 0) {
+                                  toast.error('Enter a valid discount');
+                                  return;
+                                }
+                                setManualDiscount({ type: discountType, value: val });
+                                setIsDiscountOpen(false);
+                                toast.success(`Discount of ${discountType === 'percent' ? `${val}%` : `₹${val}`} applied!`);
+                              }}
+                              className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-black text-[10px] uppercase shadow-sm transition active:scale-95"
+                            >
+                              Apply
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsDiscountOpen(false)}
+                              className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold text-[10px] transition"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {currentToken?.status === 'paid' && (
                     <div className="flex justify-between text-emerald-600 font-bold">
                       <span>Status</span>
@@ -4433,7 +4829,23 @@ export default function MainPOSTerminal() {
 
                 {/* Payment buttons */}
                 <div className="p-2.5">
-                  {currentToken?.status === 'paid' && localCart.length === 0 ? (
+                  {postPaymentPending ? (
+                    <div className="space-y-2">
+                      <button
+                        autoFocus
+                        onClick={finalizeMainposOrder}
+                        className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Check size={18} /> PRINTED — CLOSE BILL & NEXT ORDER (Enter)
+                      </button>
+                      <button
+                        onClick={cancelPostPaymentAndKeepCart}
+                        className="w-full py-2.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <RotateCcw size={14} /> CANCELLED PRINT — KEEP BILL (Esc)
+                      </button>
+                    </div>
+                  ) : currentToken?.status === 'paid' && localCart.length === 0 ? (
                     <div className="space-y-2">
                       <div className="w-full py-2.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-md font-bold uppercase tracking-widest text-center text-[10px] flex items-center justify-center gap-2">
                         <CheckCircle size={14} /> Paid Successfully
@@ -4576,22 +4988,7 @@ export default function MainPOSTerminal() {
         );
       })()}
 
-      {/* Payment success overlay */}
-      {paidSuccess && (
-        <div
-          onClick={() => { setPaidSuccess(false); setCurrentToken(null); setCustomerName(''); setCustomerPhone(''); }}
-          className="fixed inset-0 bg-black/90 flex items-center justify-center z-[200] backdrop-blur-sm cursor-pointer"
-        >
-          <div className="text-center animate-in fade-in zoom-in duration-300">
-            <div className="w-32 h-32 rounded-full bg-green-500/10 flex items-center justify-center mx-auto mb-6">
-              <CheckCircle className="w-16 h-16 text-green-400" />
-            </div>
-            <p className="text-white text-4xl font-black uppercase tracking-widest bg-gradient-to-r from-green-400 to-emerald-400 text-transparent bg-clip-text">Payment Successful!</p>
-            {currentToken?.loyaltyPointsEarned ? <p className="text-green-400/80 mt-4 text-sm font-bold uppercase tracking-widest">🏆 {currentToken.loyaltyPointsEarned} loyalty points earned</p> : null}
-            <p className="text-gray-500 mt-6 text-xs font-bold uppercase tracking-widest animate-pulse">Ready for next order</p>
-          </div>
-        </div>
-      )}
+
 
       {/* ── Modifiers Selection Modal ── */}
       {activeModifierItem && (
@@ -4718,10 +5115,13 @@ export default function MainPOSTerminal() {
       {/* ── ON-THE-SPOT QUICK PRODUCT EDIT MODAL ── */}
       {quickEditState && (
         <div data-enter-ignore="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className={cn(
-            "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
-            isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
-          )}>
+          <form
+            onSubmit={(e) => { e.preventDefault(); handleSaveQuickEdit(); }}
+            className={cn(
+              "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
+              isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
+            )}
+          >
             {/* Header */}
             <div className={cn(
               "px-5 py-4 border-b flex items-center justify-between",
@@ -4754,6 +5154,12 @@ export default function MainPOSTerminal() {
                   type="text"
                   value={quickEditState.name}
                   onChange={(e) => setQuickEditState(prev => prev ? ({ ...prev, name: e.target.value }) : null)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSaveQuickEdit();
+                    }
+                  }}
                   className={cn(
                     "w-full px-3 py-2 rounded-xl border text-sm font-bold outline-none transition-all",
                     isLight ? "bg-white border-slate-300 focus:border-purple-600 text-slate-900" : "bg-black/30 border-gray-700 focus:border-purple-500 text-white"
@@ -4799,6 +5205,12 @@ export default function MainPOSTerminal() {
                     type="text"
                     value={quickEditState.productQR}
                     onChange={(e) => setQuickEditState(prev => prev ? ({ ...prev, productQR: e.target.value }) : null)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveQuickEdit();
+                      }
+                    }}
                     className={cn(
                       "w-full px-3 py-2 rounded-xl border text-xs font-mono font-bold outline-none",
                       isLight ? "bg-white border-slate-300 focus:border-purple-600 text-slate-900" : "bg-black/30 border-gray-700 focus:border-purple-500 text-white"
@@ -4839,6 +5251,12 @@ export default function MainPOSTerminal() {
                       const profit = cost > 0 && spNum > cost ? String(Number((((spNum - cost) / cost) * 100).toFixed(2))) : quickEditState.profitPercent;
                       setQuickEditState(prev => prev ? ({ ...prev, sellingPrice: sp, profitPercent: profit }) : null);
                     }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveQuickEdit({ sellingPrice: (e.target as HTMLInputElement).value });
+                      }
+                    }}
                     className={cn(
                       "w-full px-3 py-2 rounded-xl border text-sm font-black outline-none",
                       isLight ? "bg-white border-slate-300 focus:border-emerald-600 text-emerald-700" : "bg-black/30 border-gray-700 focus:border-emerald-500 text-emerald-400"
@@ -4873,6 +5291,13 @@ export default function MainPOSTerminal() {
                         };
                       });
                     }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const val = (e.target as HTMLInputElement).value;
+                        handleSaveQuickEdit({ mrp: val, sellingPrice: quickEditState.sellingPrice || val });
+                      }
+                    }}
                     className={cn(
                       "w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold outline-none",
                       isLight ? "bg-white border-slate-300 text-slate-900" : "bg-black/40 border-gray-700 text-white"
@@ -4900,6 +5325,12 @@ export default function MainPOSTerminal() {
                           profitPercent: profit
                         };
                       });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSaveQuickEdit({ purchaseRate: (e.target as HTMLInputElement).value });
+                      }
                     }}
                     className={cn(
                       "w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold outline-none",
@@ -4937,26 +5368,29 @@ export default function MainPOSTerminal() {
                 Cancel
               </button>
               <button
-                type="button"
-                onClick={handleSaveQuickEdit}
+                type="submit"
+                data-submit-btn="true"
                 disabled={quickEditState.isSaving}
                 className="px-5 py-2 rounded-xl text-xs font-black bg-purple-600 hover:bg-purple-500 text-white flex items-center gap-1.5 shadow-md transition disabled:opacity-50 cursor-pointer"
               >
                 {quickEditState.isSaving ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
-                <span>{quickEditState.isSaving ? 'Updating...' : 'Save Changes'}</span>
+                <span>{quickEditState.isSaving ? 'Updating...' : 'Save Changes (Enter)'}</span>
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
       {/* ── ⚡ INSTANT ITEM ADD MODAL (KEYBOARD OPTIMIZED) ── */}
       {instantAddState.isOpen && (
         <div data-enter-ignore="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className={cn(
-            "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
-            isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
-          )}>
+          <form
+            onSubmit={(e) => { e.preventDefault(); handleSaveInstantAdd(); }}
+            className={cn(
+              "w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]",
+              isLight ? "bg-white border-slate-200 text-slate-900" : "bg-[#14161f] border-gray-800 text-white"
+            )}
+          >
             {/* Header */}
             <div className={cn(
               "px-5 py-4 border-b flex items-center justify-between",
@@ -5034,7 +5468,14 @@ export default function MainPOSTerminal() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      instantCategorySelectRef.current?.focus();
+                      const nameVal = (e.target as HTMLInputElement).value;
+                      const effectiveSp = instantAddState.sellingPrice || instantAddState.mrp;
+                      if (nameVal.trim() && Number(effectiveSp) > 0) {
+                        handleSaveInstantAdd({ name: nameVal });
+                      } else {
+                        instantMrpInputRef.current?.focus();
+                        instantMrpInputRef.current?.select();
+                      }
                     }
                   }}
                   className={cn(
@@ -5133,11 +5574,17 @@ export default function MainPOSTerminal() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        if (!instantAddState.sellingPrice && instantAddState.mrp) {
-                          setInstantAddState(prev => ({ ...prev, sellingPrice: prev.mrp }));
+                        const val = (e.target as HTMLInputElement).value;
+                        const effectiveSp = instantAddState.sellingPrice || val;
+                        if (instantAddState.name.trim() && Number(val || effectiveSp) > 0) {
+                          handleSaveInstantAdd({ mrp: val, sellingPrice: val || effectiveSp });
+                        } else if (!instantAddState.name.trim()) {
+                          toast.error('Product name is required');
+                          instantNameInputRef.current?.focus();
+                        } else {
+                          instantSellingInputRef.current?.focus();
+                          instantSellingInputRef.current?.select();
                         }
-                        instantSellingInputRef.current?.focus();
-                        instantSellingInputRef.current?.select();
                       }
                     }}
                     className={cn(
@@ -5168,7 +5615,7 @@ export default function MainPOSTerminal() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        handleSaveInstantAdd();
+                        handleSaveInstantAdd({ sellingPrice: (e.target as HTMLInputElement).value });
                       }
                     }}
                     className={cn(
@@ -5199,7 +5646,7 @@ export default function MainPOSTerminal() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        handleSaveInstantAdd();
+                        handleSaveInstantAdd({ purchaseRate: (e.target as HTMLInputElement).value });
                       }
                     }}
                     className={cn(
@@ -5227,7 +5674,7 @@ export default function MainPOSTerminal() {
                 isLight ? "bg-amber-50/50 border-amber-200 text-amber-900" : "bg-amber-950/20 border-amber-900/30 text-amber-300"
               )}>
                 <span className="text-xs">⚡</span>
-                <span>Type <strong>Name</strong> ↵, <strong>Category/Unit</strong> ↵, <strong>Price</strong> ↵ to immediately save & bill!</span>
+                <span>Type <strong>Name</strong> ↵, <strong>Price</strong> ↵ to immediately save & bill!</span>
               </div>
             </div>
 
@@ -5247,18 +5694,20 @@ export default function MainPOSTerminal() {
                 Cancel
               </button>
               <button
-                type="button"
-                onClick={handleSaveInstantAdd}
+                type="submit"
+                data-submit-btn="true"
                 disabled={instantAddState.isSaving}
                 className="px-5 py-2.5 rounded-xl text-xs font-black bg-amber-500 hover:bg-amber-400 text-black flex items-center gap-1.5 shadow-lg transition disabled:opacity-50 cursor-pointer"
               >
                 {instantAddState.isSaving ? <RefreshCw size={14} className="animate-spin" /> : <Zap size={14} className="fill-black" />}
-                <span>{instantAddState.isSaving ? 'Adding Item...' : 'Save & Add to Cart ↵'}</span>
+                <span>{instantAddState.isSaving ? 'Adding Item...' : 'Save & Add to Cart (Enter)'}</span>
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
+
+
     </div>
   );
 }

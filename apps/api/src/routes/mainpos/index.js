@@ -55,13 +55,15 @@ export async function mainposRoutes(app) {
             return m;
         const purchase = Number(m.purchaseRate ?? 0);
         const profit = Number(m.profitPercent ?? 0);
-        let selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
-        if (selling <= 0) {
-            if (Number(m.mrp ?? 0) > 0) {
-                selling = Number(m.mrp);
-            } else if (Number(fallbackPrice ?? 0) > 0) {
-                selling = Number(fallbackPrice);
-            }
+        let selling = 0;
+        if (profit > 0 && purchase > 0) {
+            selling = Math.round(purchase * (1 + profit / 100) * 100) / 100;
+        } else if (Number(m.mrp ?? 0) > 0) {
+            selling = Number(m.mrp);
+        } else if (Number(fallbackPrice ?? 0) > 0) {
+            selling = Number(fallbackPrice);
+        } else if (purchase > 0) {
+            selling = purchase;
         }
         return { ...m, sellingPrice: selling };
     };
@@ -460,6 +462,34 @@ export async function mainposRoutes(app) {
             return reply.status(400).send({ success: false, error: err?.message });
         }
     });
+    // ── POST /api/mainpos/token/:qr/cancel ── cancel unpaid draft token if print cancelled
+    app.post('/token/:qr/cancel', async (request, reply) => {
+        const restaurantId = request.restaurantId;
+        const { qr } = request.params;
+        try {
+            const token = await prisma.bakeryToken.findFirst({ where: { qrCode: qr, restaurantId } });
+            if (!token) return reply.status(404).send({ success: false, error: 'Token not found' });
+            if (token.status === 'paid') return reply.status(400).send({ success: false, error: 'Cannot cancel paid token' });
+            
+            await prisma.bakeryToken.update({
+                where: { id: token.id },
+                data: { status: 'cancelled' },
+            });
+
+            if (token.orderId) {
+                await prisma.order.update({
+                    where: { id: token.orderId },
+                    data: { status: 'cancelled' },
+                }).catch(() => {});
+            }
+
+            emitToRestaurant(restaurantId, 'token_updated', { id: token.id, qrCode: qr, status: 'cancelled' });
+            return { success: true, message: 'Draft token cancelled' };
+        } catch (err) {
+            return reply.status(400).send({ success: false, error: err?.message });
+        }
+    });
+
     // ── GET /api/mainpos/token/:qr ── full token details
     app.get('/token/:qr', async (request, reply) => {
         const restaurantId = request.restaurantId;
@@ -498,6 +528,7 @@ export async function mainposRoutes(app) {
             tableId: z.number().optional(),
             chairNumbers: z.array(z.number()).optional(),
             isEntireTable: z.boolean().optional(),
+            discount: z.number().min(0).optional(),
         });
         try {
             const body = schema.parse(request.body);
@@ -574,6 +605,7 @@ export async function mainposRoutes(app) {
                         customerName: resolvedCustomerName || (body.customerName && body.customerName.trim()) || 'Walk-in Customer',
                         customerPhone: body.customerPhone ? normalizePhone(body.customerPhone) : undefined,
                         customerId,
+                        discountApplied: Number(body.discount || 0),
                         items: {
                             create: menuItems.map((mi) => ({
                                 menuItemId: mi.id,
@@ -1203,6 +1235,36 @@ export async function mainposRoutes(app) {
             return reply.status(400).send({ success: false, error: err?.message });
         }
     });
+    // ── POST /api/mainpos/token/:qr/discount ── apply manual discount to token
+    app.post('/token/:qr/discount', async (request, reply) => {
+        const restaurantId = request.restaurantId;
+        const { qr } = request.params;
+        const schema = z.object({
+            discount: z.number().min(0),
+            reason: z.string().optional(),
+        });
+        try {
+            const body = schema.parse(request.body);
+            const token = await prisma.bakeryToken.findFirst({ where: { qrCode: qr, restaurantId } });
+            if (!token)
+                return reply.status(404).send({ success: false, error: 'Token not found' });
+            if (token.status === 'paid')
+                return reply.status(400).send({ success: false, error: 'Cannot apply discount to a paid token' });
+
+            await prisma.bakeryToken.update({
+                where: { id: token.id },
+                data: { discountApplied: Number(body.discount || 0) },
+            });
+            await recalculateTokenTotals(token.id, prisma);
+            const updated = await prisma.bakeryToken.findUnique({
+                where: { id: token.id },
+                include: { items: { where: { isRemoved: false }, include: { menuItem: true } }, payments: true, customer: true },
+            });
+            return { success: true, data: updated };
+        } catch (err) {
+            return reply.status(400).send({ success: false, error: err?.message });
+        }
+    });
     // ── POST /api/mainpos/token/:qr/payment ── record payment, mark paid, award loyalty
     app.post('/token/:qr/payment', async (request, reply) => {
         const restaurantId = request.restaurantId;
@@ -1212,10 +1274,11 @@ export async function mainposRoutes(app) {
             amount: z.number().positive(),
             transactionId: z.string().optional(),
             staffId: z.number().optional(),
+            discount: z.number().min(0).optional(),
         });
         try {
             const body = schema.parse(request.body);
-            const token = await prisma.bakeryToken.findFirst({
+            let token = await prisma.bakeryToken.findFirst({
                 where: { qrCode: qr, restaurantId },
                 include: {
                     items: { where: { isRemoved: false } },
@@ -1227,6 +1290,22 @@ export async function mainposRoutes(app) {
                 return reply.status(404).send({ success: false, error: 'Token not found' });
             if (token.status === 'paid')
                 return reply.status(400).send({ success: false, error: 'Already paid' });
+
+            if (body.discount !== undefined && Number(body.discount) >= 0) {
+                await prisma.bakeryToken.update({
+                    where: { id: token.id },
+                    data: { discountApplied: Number(body.discount) },
+                });
+                await recalculateTokenTotals(token.id, prisma);
+                token = await prisma.bakeryToken.findFirst({
+                    where: { id: token.id },
+                    include: {
+                        items: { where: { isRemoved: false } },
+                        payments: true,
+                        customer: true,
+                    },
+                });
+            }
             const tokenTotal = Number(token.total);
             if (isNaN(tokenTotal) || tokenTotal <= 0) {
                 return reply.status(400).send({ success: false, error: 'Invalid token total' });

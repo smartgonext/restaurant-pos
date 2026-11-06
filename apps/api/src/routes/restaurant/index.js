@@ -3623,7 +3623,12 @@ export async function restaurantRoutes(app) {
         const normalized = categories.map((cat) => ({
             ...cat,
             isKOTEnabled: cat.group ? Boolean(cat.group.isKOTEnabled) : Boolean(cat.isKOTEnabled),
-        }));
+        })).sort((a, b) => {
+            const aKot = a.isKOTEnabled ? 1 : 0;
+            const bKot = b.isKOTEnabled ? 1 : 0;
+            if (aKot !== bKot) return bKot - aKot; // KOT first
+            return (Number(a.sortOrder || 0)) - (Number(b.sortOrder || 0));
+        });
         return { success: true, data: normalized };
     });
     app.post('/item-categories', async (request, reply) => {

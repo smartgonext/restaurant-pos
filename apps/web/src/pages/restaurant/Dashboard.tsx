@@ -142,10 +142,10 @@ export default function RestaurantDashboard() {
   if (!stats) return null;
 
   return (
-    <div data-testid="restaurant-dashboard-page" className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-var(--topbar-height))] animate-in p-4 overflow-hidden bg-bg-primary">
+    <div data-testid="restaurant-dashboard-page" className="flex flex-col gap-4 min-h-[calc(100vh-var(--topbar-height))] animate-in p-3 sm:p-5 bg-bg-primary overflow-y-auto custom-scrollbar">
 
-      {/* Main Content Space - Statistics & Chart (Very Big Side) */}
-      <div className="flex-[2.5] flex flex-col gap-4 overflow-y-auto custom-scrollbar pr-2 pb-4">
+      {/* Main Content Space - Statistics & Chart (Full width) */}
+      <div className="w-full flex flex-col gap-4 pb-6">
         
         {/* Top Section: Title, Date Filter & Quick Action */}
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
@@ -161,14 +161,14 @@ export default function RestaurantDashboard() {
 
           <div className="flex flex-wrap items-center gap-2">
             {/* Quick Date Presets */}
-            <div className="flex bg-[#0f111a] border border-border/60 rounded-xl p-1 gap-1">
+            <div className="flex bg-[#0f111a] border border-border/60 rounded-xl p-1 gap-1 overflow-x-auto no-scrollbar max-w-full flex-nowrap">
               {(['Today', 'Yesterday', 'Current Week', 'Current Month', 'Custom'] as DatePreset[]).map((preset) => (
                 <button
                   key={preset}
                   type="button"
                   onClick={() => setDateRange(preset)}
                   className={cn(
-                    "px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all",
+                    "px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap",
                     dateRange === preset
                       ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20"
                       : "text-text-muted hover:text-text-primary hover:bg-white/5"
@@ -222,7 +222,7 @@ export default function RestaurantDashboard() {
         </div>
 
         {/* Professional Stats Row */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
           {[
             { 
               label: dateRange === 'Today' ? "Today's Orders" : dateRange === 'Yesterday' ? "Yesterday's Orders" : `Orders (${periodLabel})`, 
@@ -540,68 +540,6 @@ export default function RestaurantDashboard() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-        </div>
-      </div>
-
-      {/* Right Sidebar - Active Order Feed (Responsive sizing) */}
-      <div className="flex-[1] min-w-0 sm:min-w-[340px] flex flex-col bg-bg-secondary rounded-xl overflow-hidden border border-border shadow-2xl backdrop-blur-md">
-        <div className="p-4 border-b border-border bg-bg-tertiary flex items-center justify-between">
-          <h2 data-testid="live-order-header" className="text-[10px] font-black text-text-primary uppercase tracking-[0.2em] flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            Live Order Stream
-          </h2>
-          <Badge variant="secondary" className="text-[9px] font-black uppercase tracking-widest bg-white/5 border-white/5">Auto-update</Badge>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-4">
-          {(stats.recentOrders || []).map((order: any) => (
-            <div 
-                key={order.id} 
-                data-testid={`order-card-${order.id}`}
-                onClick={() => openOrder(order.id)}
-                className="bg-bg-tertiary border border-border rounded-xl p-4 relative flex flex-col group hover:shadow-glow-sm transition-all hover:border-blue-500/50 cursor-pointer"
-            >
-
-              <div className="absolute top-2 right-2 flex gap-1.5 flex-col items-end">
-                <div className={cn(
-                    "text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-widest border",
-                    order.status === 'paid' ? "bg-emerald-500/5 text-emerald-400 border-emerald-500/20" :
-                    order.status === 'cancelled' ? "bg-rose-500/5 text-rose-400 border-rose-500/20" :
-                    "bg-blue-500/5 text-blue-400 border-blue-500/20"
-                )}>
-                    {order.status || 'NEW'}
-                </div>
-              </div>
-
-              <div className="flex gap-4 items-center mb-4">
-                <div className="w-10 h-10 rounded-xl bg-bg-secondary border border-border flex flex-col items-center justify-center font-black text-text-secondary shadow-inner">
-                    <span className="text-[7px] uppercase opacity-40">T-ID</span>
-                    <span className="text-sm leading-none">{order.table?.name || 'WA'}</span>
-                </div>
-                <div className="min-w-0 flex-1">
-                    <h4 className="text-[11px] font-black text-text-primary mb-0.5 truncate uppercase tracking-tighter">
-                        {order.customer || `Order #${order.orderNumber.split('-')[1]}`}
-                    </h4>
-                    <p className="text-[9px] text-text-muted font-bold uppercase tracking-wider">
-                        {order.items} ITEMS <span className="mx-1 opacity-20">•</span> {order.timeAgo || 'Just now'}
-                    </p>
-                </div>
-              </div>
-
-              <div className="flex items-end justify-between pt-3 border-t border-border/20">
-                <span className="text-sm font-black text-text-primary">{formatCurrency(order.total || order.amount)}</span>
-                <div className="text-[10px] font-black text-text-muted group-hover:text-blue-400 transition-colors uppercase tracking-tight flex items-center gap-1">
-                  Full Details <ChevronRight size={14} />
-                </div>
-              </div>
-            </div>
-          ))}
-            {(stats.recentOrders || []).length === 0 && (
-              <div data-testid="order-stream-idle" className="text-center py-24 opacity-20 filter grayscale">
-                <Package size={40} className="mx-auto mb-4" />
-                <p className="text-[10px] font-black uppercase tracking-widest">Stream Idle</p>
-              </div>
-            )}
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -76,7 +76,21 @@ const tabGroups = [
 
 export default function Settings() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('general');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') || 'general';
+  const [activeTab, setActiveTabState] = useState(initialTab);
+
+  const setActiveTab = (tab: string) => {
+    setActiveTabState(tab);
+    setSearchParams({ tab });
+  };
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab && tab !== activeTab) {
+      setActiveTabState(tab);
+    }
+  }, [searchParams]);
   const setTheme = useThemeStore((s) => s.setTheme);
   const [shifts, setShifts] = useState<any[]>([]);
 
@@ -515,24 +529,24 @@ export default function Settings() {
       </div>
 
       <div className="flex flex-col lg:flex-row gap-4">
-        {/* Sidebar Tabs */}
-        <div className="w-full lg:w-56 shrink-0 space-y-4">
+        {/* Sidebar Tabs (Scrollable pills on mobile, vertical groups on desktop) */}
+        <div className="w-full lg:w-56 shrink-0 flex lg:flex-col overflow-x-auto lg:overflow-visible no-scrollbar gap-2 lg:space-y-4 pb-2 lg:pb-0">
           {tabGroups.map((group, idx) => (
-            <div key={idx} className="space-y-1">
-              <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest px-3 mb-2">{group.title}</p>
+            <div key={idx} className="flex lg:flex-col items-center lg:items-stretch gap-1.5 shrink-0">
+              <p className="hidden lg:block text-[10px] font-bold text-text-muted uppercase tracking-widest px-3 mb-1">{group.title}</p>
               {group.tabs.map((tab) => (
                 <button 
                   key={tab.id} 
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                    'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all whitespace-nowrap shrink-0 border border-transparent',
                     activeTab === tab.id 
-                      ? 'bg-blue-500/10 text-blue-400' 
-                      : 'text-text-muted hover:bg-bg-tertiary hover:text-text-primary'
+                      ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/20 lg:bg-blue-500/10 lg:text-blue-400 lg:shadow-none' 
+                      : 'bg-bg-secondary text-text-muted hover:bg-bg-tertiary hover:text-text-primary border-border/50 lg:bg-transparent lg:border-transparent'
                   )}
                 >
-                  <tab.icon className="w-4 h-4" />
-                  {tab.label}
+                  <tab.icon className="w-3.5 h-3.5 shrink-0" />
+                  <span>{tab.label}</span>
                 </button>
               ))}
             </div>

@@ -209,13 +209,10 @@ export function useEnterKeyNavigation() {
           (nextEl as HTMLInputElement).select?.();
         }
       } else if (currentFieldIndex === fields.length - 1) {
-        // Last field reached -> Advance to Primary Action / OK button
+        // Last field reached -> Advance to Primary Action / OK button and trigger submit
         if (primaryButton && !primaryButton.hasAttribute('disabled')) {
           primaryButton.focus();
-          primaryButton.classList.add('ring-2', 'ring-[#a87fff]', 'ring-offset-2');
-          setTimeout(() => {
-            primaryButton.classList.remove('ring-2', 'ring-[#a87fff]', 'ring-offset-2');
-          }, 1500);
+          primaryButton.click();
         }
       } else {
         // Field not directly matched in fields array: find first field positioned after activeEl in DOM
@@ -227,6 +224,7 @@ export function useEnterKeyNavigation() {
           }
         } else if (primaryButton && !primaryButton.hasAttribute('disabled')) {
           primaryButton.focus();
+          primaryButton.click();
         }
       }
     };
