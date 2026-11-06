@@ -424,7 +424,13 @@ function printFinalBill(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
   });
 }
 
-function printTokenSlip(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', settings?: BillSettings) {
+function printTokenSlip(
+  token: TokenData | any,
+  bakeryName = 'SMARTGONEXT Bakery',
+  settings?: BillSettings,
+  items?: any[],
+  options?: { isAppend?: boolean; isReprint?: boolean; previousItems?: any[]; previousTotal?: number }
+) {
   const invokePrint = async () => {
     const userRest = useAuthStore.getState().user?.restaurant as any;
     const finalRestaurantName = (settings as any)?.restaurantName || userRest?.name || (bakeryName !== 'SMARTGONEXT Bakery' ? bakeryName : '') || 'SMARTGONEXT Bakery';
@@ -443,16 +449,84 @@ function printTokenSlip(token: TokenData, bakeryName = 'SMARTGONEXT Bakery', set
     } catch (_) {
       qrSvgHtml = `<img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(token.qrCode)}" alt="QR"/>`;
     }
+
+    const tokenItemsList = (items && items.length > 0) ? items : ((token as any)?.items || []);
+    const totalItems = token.itemCount ?? tokenItemsList.length;
+    const totalAmt = formatCurrency(Number(token.token?.total ?? (token as any)?.total ?? 0));
+    const tokenNum = token.tokenNumber || token.id;
+    const resolvedCustName = token.customerName || '';
+    const resolvedCustPhone = token.customerPhone || '';
+    const isAppend = Boolean(options?.isAppend);
+    const isReprint = Boolean(options?.isReprint);
+    const previousItemsList = Array.isArray(options?.previousItems) ? options.previousItems : [];
+    const previousTotalAmt = options?.previousTotal !== undefined 
+      ? Number(options.previousTotal) 
+      : previousItemsList.reduce((sum: number, it: any) => sum + Number(it.total || (Number(it.price || 0) * Number(it.quantity || 1))), 0);
+
+    const slipItemsSubtotal = tokenItemsList.reduce((sum: number, it: any) => {
+      const p = Number(it.price || 0);
+      const q = Number(it.quantity || 1);
+      return sum + Number(it.total || (p * q));
+    }, 0);
+
     const html = `
-      <!doctype html><html><head><meta charset="utf-8"><title>Token ${token.tokenNumber}</title>
-      <style>body{font-family:Arial,Helvetica,sans-serif;padding:12px;text-align:center;color:#000} img.logo{max-height:45px;max-width:120px;margin:0 auto 4px auto;display:block;} svg{display:block;margin:0 auto;}</style>
+      <!doctype html><html><head><meta charset="utf-8"><title>Token ${tokenNum}</title>
+      <style>body{font-family:Arial,Helvetica,sans-serif;padding:12px;text-align:center;color:#000;margin:0} img.logo{max-height:45px;max-width:120px;margin:0 auto 4px auto;display:block;} svg{display:block;margin:0 auto;}</style>
       </head><body>
         ${cfg.showLogo && cfg.logoUrl ? `<img class="logo" src="${cfg.logoUrl}" alt="Logo" />` : ''}
         ${cfg.showRestaurantInfo ? `<div style="font-size:12pt;font-weight:700;">${finalRestaurantName}</div>` : ''}
         ${cfg.showRestaurantInfo && cfg.restaurantAddress ? `<div style="font-size:8pt;color:#333;">${cfg.restaurantAddress}</div>` : ''}
         ${cfg.showPhoneNumber && cfg.restaurantPhone ? `<div style="font-size:8pt;color:#333;">Ph: ${cfg.restaurantPhone}</div>` : ''}
-        ${cfg.showTokenNumber ? `<div style="font-size:14pt;font-weight:700;margin-top:4px;">Token #${token.tokenNumber}</div>` : ''}
-        ${token.customerName ? `<div style="font-size:10pt;margin-top:4px;">${token.customerName}${cfg.showPhoneNumber && token.customerPhone ? ` · ${token.customerPhone}` : ''}</div>` : ''}
+        ${cfg.showTokenNumber ? `<div style="font-size:15pt;font-weight:900;margin-top:4px;">Token #${tokenNum} ${isReprint ? '<span style="font-size:10pt;color:#555;">[REPRINT]</span>' : ''}</div>` : ''}
+        ${isAppend ? `<div style="font-size:9.5pt;font-weight:800;color:#1e3a8a;background:#dbeafe;padding:3px 8px;border-radius:4px;display:inline-block;margin:4px 0;letter-spacing:0.5px;">*** UPDATED TOKEN / ADDED ITEMS ***</div>` : ''}
+        ${resolvedCustName ? `<div style="font-size:10pt;margin-top:4px;">${resolvedCustName}${cfg.showPhoneNumber && resolvedCustPhone ? ` · ${resolvedCustPhone}` : ''}</div>` : ''}
+        
+        ${isAppend && previousItemsList.length > 0 ? `
+          <div style="margin: 8px 0 4px 0; border-top: 1px dashed #aaa; padding: 6px 0 2px 0; font-size: 9pt; text-align: left;">
+            <div style="font-size:8pt;font-weight:700;color:#555;margin-bottom:4px;text-transform:uppercase;">1. Previous Items</div>
+            ${previousItemsList.map((it: any) => `
+              <div style="display:flex; justify-content:space-between; margin-bottom: 3px;">
+                <span>${it.displayName || it.menuItemName || it.name || 'Item'} x ${it.quantity}</span>
+                <span>₹${Number(it.total || (Number(it.price || 0) * Number(it.quantity || 1))).toFixed(2)}</span>
+              </div>
+            `).join('')}
+            <div style="display:flex; justify-content:space-between; font-size:8.5pt; font-weight:700; color:#555; border-top: 1px dotted #ccc; margin-top:3px; padding-top:2px;">
+              <span>Old Items Total:</span><span>₹${Number(previousTotalAmt).toFixed(2)}</span>
+            </div>
+          </div>
+        ` : ''}
+
+        ${tokenItemsList.length > 0 ? `
+          <div style="margin: ${isAppend ? '4px 0 8px 0' : '8px 0'}; border-top: 1px dashed #aaa; border-bottom: 1px dashed #aaa; padding: 6px 0; font-size: 9pt; text-align: left;">
+            <div style="font-size:8pt;font-weight:700;color:${isAppend ? '#b91c1c' : '#666'};margin-bottom:4px;text-transform:uppercase;">${isAppend ? '2. Newly Added Items' : 'Order Items'}</div>
+            ${tokenItemsList.map((it: any) => `
+              <div style="display:flex; justify-content:space-between; margin-bottom: 3px; font-weight: ${isAppend ? '700' : 'normal'};">
+                <span>${it.displayName || it.menuItemName || it.name || 'Item'} x ${it.quantity}</span>
+                <span>₹${Number(it.total || (Number(it.price || 0) * Number(it.quantity || 1))).toFixed(2)}</span>
+              </div>
+            `).join('')}
+            ${isAppend ? `
+              <div style="display:flex; justify-content:space-between; font-size:8.5pt; font-weight:700; color:#b91c1c; border-top: 1px dotted #ccc; margin-top:3px; padding-top:2px;">
+                <span>Added Items Total:</span><span>₹${Number(slipItemsSubtotal).toFixed(2)}</span>
+              </div>
+            ` : ''}
+          </div>
+        ` : ''}
+
+        ${isAppend ? `
+          <div style="display:flex; justify-content:space-between; font-size:9.5pt; color:#444; margin-top:4px;">
+            <span>Old Total:</span><strong>₹${Number(previousTotalAmt).toFixed(2)}</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:9.5pt; color:#b91c1c; margin-top:2px; font-weight:700;">
+            <span>Added Amount:</span><strong>+₹${Number(slipItemsSubtotal).toFixed(2)}</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:12.5pt; font-weight:900; margin-top:6px; border-top:2px solid #000; padding-top:4px;">
+            <span>FINAL TOKEN TOTAL:</span><strong>${totalAmt}</strong>
+          </div>
+        ` : `
+          <div style="font-size:10pt;margin-top:4px;">Total Items: <strong>${totalItems}</strong></div>
+          <div style="font-size:12pt;font-weight:700;margin-top:6px;">Total: <strong>${totalAmt}</strong></div>
+        `}
         <div style="margin:10px 0;display:flex;justify-content:center;">${qrSvgHtml}</div>
         <div style="font-size:10pt;color:#555">Scan to retrieve order</div>
         <div style="font-size:8pt;color:#777;margin-top:8px;font-weight:600;">Powered by SmartGoNext</div>
@@ -626,8 +700,8 @@ function MRPDropdown({ mrps, selectedMRPId, onSelect }: {
   );
 }
 
-// ── Touch Menu Item Card Component ──────────────────────────────────────────
-function TouchMenuItemCard({
+// ── Touch Menu Item Card Component (Memoized for high-speed touch response) ──
+const TouchMenuItemCard = memo(function TouchMenuItemCard({
   item,
   isLight,
   isDisabled,
@@ -669,6 +743,8 @@ function TouchMenuItemCard({
     >
       <div className={cn("relative w-full h-32 overflow-hidden flex items-center justify-center p-1.5", isLight ? "bg-slate-50" : "bg-[#14151a]")}>
         <img
+          loading="lazy"
+          decoding="async"
           src={resolveImageUrl(item.image) || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name.charAt(0))}&background=1a1c23&color=fff`}
           className="w-full h-full object-contain transition-all group-hover:scale-105"
           alt={item.name}
@@ -696,7 +772,7 @@ function TouchMenuItemCard({
       </div>
     </div>
   );
-}
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QUANTITY EDITOR MODAL (Auto-selects on open, permits multi-digit input 10, 15, etc.)
@@ -1306,6 +1382,7 @@ export default function MainPOSTerminal() {
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const previousTokenSnapshotRef = useRef<{ items: any[]; total: number } | null>(null);
 
   const processScannedBarcodeRef = useRef<(rawBarcode: string) => boolean>(() => false);
 
@@ -1856,8 +1933,21 @@ export default function MainPOSTerminal() {
         menuItemName: i.displayName || i.name,
       }));
       if (!currentToken) {
+        previousTokenSnapshotRef.current = null;
         await createTokenMut.mutateAsync({ items: itemsPayload, customerName: resolvedCustName, customerPhone: customerPhone || undefined });
       } else {
+        const prevItems = (currentToken.items || []).filter(i => !i.isRemoved).map((i: any) => ({
+          id: i.id,
+          name: i.menuItem?.name || i.menuItemName || 'Item',
+          displayName: i.menuItemName || i.menuItem?.name || 'Item',
+          price: Number(i.price ?? 0),
+          quantity: Number(i.quantity ?? 1),
+          total: Number(i.total || (Number(i.price ?? 0) * Number(i.quantity ?? 1))),
+        }));
+        previousTokenSnapshotRef.current = {
+          items: prevItems,
+          total: Number(currentToken.subtotal || currentToken.total || 0),
+        };
         await addItemsMut.mutateAsync({ qr: currentToken.qrCode, items: itemsPayload });
       }
     } catch (err: any) {
@@ -2605,8 +2695,22 @@ export default function MainPOSTerminal() {
     },
     onSuccess: (data) => {
       playTokenSound();
+      const prevSnap = previousTokenSnapshotRef.current;
+      const addedCart = [...localCart];
       setCurrentToken(data); setLocalCart([]); toast.success('Items added to token');
-      try { printTokenSlip(data, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings); } catch (err) {}
+      try {
+        printTokenSlip(
+          data,
+          user?.restaurant?.name || 'SMARTGONEXT Bakery',
+          billSettings,
+          addedCart,
+          {
+            isAppend: true,
+            previousItems: prevSnap?.items,
+            previousTotal: prevSnap?.total,
+          }
+        );
+      } catch (err) {}
       try { api.post(`/token/${data.qrCode}/present`).catch(() => {}); } catch {}
       setTimeout(() => { setCurrentToken(null); setCustomerName(''); setCustomerPhone(''); }, 700);
     },

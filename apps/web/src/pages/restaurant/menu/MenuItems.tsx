@@ -1226,7 +1226,6 @@ export default function MenuItems() {
                 <th className="py-4 px-6 text-center">Group</th>
                 <th className="py-4 px-6 text-center">Price</th>
                 <th className="py-4 px-6 text-center">Type</th>
-                <th className="py-4 px-6 text-center">Status</th>
                 <th className="py-4 px-6 text-right">Actions</th>
               </tr>
             </thead>
@@ -1234,11 +1233,11 @@ export default function MenuItems() {
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="hover:bg-bg-tertiary/20 transition-colors">
-                    {Array.from({ length: 8 }).map((_, j) => <td key={j} className="py-4 px-6"><Skeleton className="h-4 w-20" /></td>)}
+                    {Array.from({ length: 7 }).map((_, j) => <td key={j} className="py-4 px-6"><Skeleton className="h-4 w-20" /></td>)}
                   </tr>
                 ))
               ) : items?.length === 0 ? (
-                <tr><td colSpan={8} className="py-20 text-center text-text-muted uppercase text-xs font-black italic">No items found. Create your signature dish now!</td></tr>
+                <tr><td colSpan={7} className="py-20 text-center text-text-muted uppercase text-xs font-black italic">No items found. Create your signature dish now!</td></tr>
               ) : (
                 items?.map((item: any) => (
                   <tr key={item.id} className={cn("hover:bg-bg-tertiary/20 transition-colors group", selectedIds.includes(item.id) && "bg-red-500/5")}>
@@ -1364,13 +1363,6 @@ export default function MenuItems() {
                           );
                         }
                       })()}
-                    </td>
-                    <td className="py-4 px-6 text-center">
-                      <button onClick={() => toggleAvailability(item.id, item.isAvailable)} className="hover:scale-105 transition-transform">
-                        <Badge variant={item.isAvailable ? 'success' : 'danger'} className="uppercase font-black text-[9px] px-3 py-1">
-                          {item.isAvailable ? 'Visible' : 'Hidden'}
-                        </Badge>
-                      </button>
                     </td>
                     <td className="py-4 px-6 text-right">
                       <div className="flex gap-2 justify-end opacity-40 group-hover:opacity-100 transition-opacity">

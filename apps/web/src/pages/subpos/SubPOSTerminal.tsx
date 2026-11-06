@@ -204,7 +204,7 @@ function printTokenSlip(
   customerPhone?: string,
   bakeryName = 'SMARTGONEXT Bakery',
   settings?: BillSettings,
-  options?: { isAppend?: boolean; isReprint?: boolean }
+  options?: { isAppend?: boolean; isReprint?: boolean; previousItems?: any[]; previousTotal?: number }
 ) {
   const invokePrint = async () => {
     const userRest = useAuthStore.getState().user?.restaurant as any;
@@ -233,6 +233,10 @@ function printTokenSlip(
     const resolvedCustPhone = customerPhone || token.customerPhone || '';
     const isAppend = Boolean(options?.isAppend);
     const isReprint = Boolean(options?.isReprint);
+    const previousItemsList = Array.isArray(options?.previousItems) ? options.previousItems : [];
+    const previousTotalAmt = options?.previousTotal !== undefined 
+      ? Number(options.previousTotal) 
+      : previousItemsList.reduce((sum: number, it: any) => sum + Number(it.total || (Number(it.price || 0) * Number(it.quantity || 1))), 0);
 
     // Subtotal of newly printed items on this slip
     const slipItemsSubtotal = tokenItemsList.reduce((sum: number, it: any) => {
@@ -250,28 +254,50 @@ function printTokenSlip(
         ${cfg.showRestaurantInfo && cfg.restaurantAddress ? `<div style="font-size:8pt;color:#333;">${cfg.restaurantAddress}</div>` : ''}
         ${cfg.showPhoneNumber && cfg.restaurantPhone ? `<div style="font-size:8pt;color:#333;">Ph: ${cfg.restaurantPhone}</div>` : ''}
         ${cfg.showTokenNumber ? `<div style="font-size:15pt;font-weight:900;margin-top:4px;">Token #${tokenNum} ${isReprint ? '<span style="font-size:10pt;color:#555;">[REPRINT]</span>' : ''}</div>` : ''}
-        ${isAppend ? `<div style="font-size:9.5pt;font-weight:800;color:#b91c1c;background:#fee2e2;padding:2px 8px;border-radius:4px;display:inline-block;margin:4px 0;letter-spacing:0.5px;">*** ADD-ON / NEW ITEMS ONLY ***</div>` : ''}
+        ${isAppend ? `<div style="font-size:9.5pt;font-weight:800;color:#1e3a8a;background:#dbeafe;padding:3px 8px;border-radius:4px;display:inline-block;margin:4px 0;letter-spacing:0.5px;">*** UPDATED TOKEN / ADDED ITEMS ***</div>` : ''}
         ${resolvedCustName ? `<div style="font-size:10pt;margin-top:4px;">${resolvedCustName}${cfg.showPhoneNumber && resolvedCustPhone ? ` · ${resolvedCustPhone}` : ''}</div>` : ''}
-        ${tokenItemsList.length > 0 ? `
-          <div style="margin: 8px 0; border-top: 1px dashed #aaa; border-bottom: 1px dashed #aaa; padding: 6px 0; font-size: 9pt; text-align: left;">
-            <div style="font-size:8pt;font-weight:700;color:#666;margin-bottom:4px;text-transform:uppercase;">${isAppend ? 'Newly Added Items' : 'Order Items'}</div>
-            ${tokenItemsList.map((it: any) => `
+        
+        ${isAppend && previousItemsList.length > 0 ? `
+          <div style="margin: 8px 0 4px 0; border-top: 1px dashed #aaa; padding: 6px 0 2px 0; font-size: 9pt; text-align: left;">
+            <div style="font-size:8pt;font-weight:700;color:#555;margin-bottom:4px;text-transform:uppercase;">1. Previous Items</div>
+            ${previousItemsList.map((it: any) => `
               <div style="display:flex; justify-content:space-between; margin-bottom: 3px;">
                 <span>${it.displayName || it.menuItemName || it.name || 'Item'} x ${it.quantity}</span>
                 <span>₹${Number(it.total || (Number(it.price || 0) * Number(it.quantity || 1))).toFixed(2)}</span>
               </div>
             `).join('')}
+            <div style="display:flex; justify-content:space-between; font-size:8.5pt; font-weight:700; color:#555; border-top: 1px dotted #ccc; margin-top:3px; padding-top:2px;">
+              <span>Old Items Total:</span><span>₹${Number(previousTotalAmt).toFixed(2)}</span>
+            </div>
           </div>
         ` : ''}
+
+        ${tokenItemsList.length > 0 ? `
+          <div style="margin: ${isAppend ? '4px 0 8px 0' : '8px 0'}; border-top: 1px dashed #aaa; border-bottom: 1px dashed #aaa; padding: 6px 0; font-size: 9pt; text-align: left;">
+            <div style="font-size:8pt;font-weight:700;color:${isAppend ? '#b91c1c' : '#666'};margin-bottom:4px;text-transform:uppercase;">${isAppend ? '2. Newly Added Items' : 'Order Items'}</div>
+            ${tokenItemsList.map((it: any) => `
+              <div style="display:flex; justify-content:space-between; margin-bottom: 3px; font-weight: ${isAppend ? '700' : 'normal'};">
+                <span>${it.displayName || it.menuItemName || it.name || 'Item'} x ${it.quantity}</span>
+                <span>₹${Number(it.total || (Number(it.price || 0) * Number(it.quantity || 1))).toFixed(2)}</span>
+              </div>
+            `).join('')}
+            ${isAppend ? `
+              <div style="display:flex; justify-content:space-between; font-size:8.5pt; font-weight:700; color:#b91c1c; border-top: 1px dotted #ccc; margin-top:3px; padding-top:2px;">
+                <span>Added Items Total:</span><span>₹${Number(slipItemsSubtotal).toFixed(2)}</span>
+              </div>
+            ` : ''}
+          </div>
+        ` : ''}
+
         ${isAppend ? `
-          <div style="display:flex; justify-content:space-between; font-size:9pt; color:#444; margin-top:2px;">
-            <span>New Items Count:</span><strong>${tokenItemsList.length}</strong>
+          <div style="display:flex; justify-content:space-between; font-size:9.5pt; color:#444; margin-top:4px;">
+            <span>Old Total:</span><strong>₹${Number(previousTotalAmt).toFixed(2)}</strong>
           </div>
-          <div style="display:flex; justify-content:space-between; font-size:9.5pt; color:#444; margin-top:2px;">
-            <span>New Items Total:</span><strong>₹${slipItemsSubtotal.toFixed(2)}</strong>
+          <div style="display:flex; justify-content:space-between; font-size:9.5pt; color:#b91c1c; margin-top:2px; font-weight:700;">
+            <span>Added Amount:</span><strong>+₹${Number(slipItemsSubtotal).toFixed(2)}</strong>
           </div>
-          <div style="display:flex; justify-content:space-between; font-size:12pt; font-weight:800; margin-top:6px; border-top:1px solid #333; padding-top:4px;">
-            <span>Overall Token Total:</span><strong>${totalAmt}</strong>
+          <div style="display:flex; justify-content:space-between; font-size:12.5pt; font-weight:900; margin-top:6px; border-top:2px solid #000; padding-top:4px;">
+            <span>FINAL TOKEN TOTAL:</span><strong>${totalAmt}</strong>
           </div>
         ` : `
           <div style="font-size:10pt;margin-top:4px;">Total Items: <strong>${totalItems}</strong></div>
@@ -331,6 +357,8 @@ const TouchMenuItemCard = memo(function TouchMenuItemCard({
     >
       <div className={cn("relative w-full h-32 overflow-hidden flex items-center justify-center p-1.5", isLight ? "bg-slate-50" : "bg-[#14151a]")}>
         <img
+          loading="lazy"
+          decoding="async"
           src={resolveImageUrl(item.image) || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name.charAt(0))}&background=1a1c23&color=fff`}
           className="w-full h-full object-contain transition-all group-hover:scale-105"
           alt={item.name}
@@ -800,6 +828,7 @@ export default function SubPOSTerminal() {
   const searchRef = useRef<HTMLInputElement>(null);
   const cartScrollRef = useRef<HTMLDivElement | null>(null);
   const isAppendingRef = useRef(false);
+  const previousTokenSnapshotRef = useRef<{ items: any[]; total: number } | null>(null);
   const displayWindowRef = useRef<Window | null>(null);
   const isPresentingRef = useRef(sessionStorage.getItem('subpos_is_presenting') === 'true');
   const [isCustomerDisplayActive, setIsCustomerDisplayActive] = useState(sessionStorage.getItem('subpos_is_presenting') === 'true');
@@ -1745,6 +1774,7 @@ export default function SubPOSTerminal() {
 
       if (!loadedToken) {
         isAppendingRef.current = false;
+        previousTokenSnapshotRef.current = null;
         const { data } = await subposApi.post('/token/create', {
           items: itemsPayload,
           customerName: resolvedCustName,
@@ -1754,6 +1784,20 @@ export default function SubPOSTerminal() {
         return { ...(data.data as TokenResult), itemCount: localCart.length };
       } else {
         isAppendingRef.current = true;
+        const prevItems = (existingTokenItems && existingTokenItems.length > 0)
+          ? [...existingTokenItems]
+          : ((loadedToken.items || []).filter((i: any) => !i.isRemoved).map((i: any) => ({
+              id: i.id,
+              name: i.menuItem?.name || i.menuItemName || 'Item',
+              displayName: i.menuItemName || i.menuItem?.name || 'Item',
+              price: Number(i.price ?? 0),
+              quantity: Number(i.quantity ?? 1),
+              total: Number(i.total || (Number(i.price ?? 0) * Number(i.quantity ?? 1))),
+            })));
+        previousTokenSnapshotRef.current = {
+          items: prevItems,
+          total: existingSubtotal || Number(loadedToken.subtotal || loadedToken.total || 0),
+        };
         const { data } = await subposApi.post(`/token/${loadedToken.qrCode}/items/bulk`, {
           items: itemsPayload,
           staffId: user?.id,
@@ -1774,6 +1818,7 @@ export default function SubPOSTerminal() {
       const resolvedCustName = customerName?.trim() || 'Walk-in Customer';
       const pSettings = getPrinterSettings(billSettings as any);
       if (pSettings.autoPrintBill) {
+        const prevSnap = previousTokenSnapshotRef.current;
         printTokenSlip(
           result,
           localCart,
@@ -1781,7 +1826,11 @@ export default function SubPOSTerminal() {
           customerPhone,
           terminal?.name || 'SMARTGONEXT Bakery',
           billSettings,
-          { isAppend: isAppendingRef.current }
+          {
+            isAppend: isAppendingRef.current,
+            previousItems: prevSnap?.items,
+            previousTotal: prevSnap?.total,
+          }
         );
       }
 
