@@ -7,6 +7,11 @@ import { getNextTokenNumber } from '../../utils/tokenCounter.js';
 import { recalculateTokenTotals } from '../../utils/taxCalculator.js';
 import { applyKOTConsumption } from '../../utils/inventory.js';
 import { emitToRestaurant } from '../../plugins/socket.js';
+import {
+    getMainposItems,
+    getMainposCategories,
+    invalidatePosCache,
+} from '../../utils/posItemsCache.js';
 export async function mainposRoutes(app) {
     const normalizeKotQty = (qty) => Math.max(1, Math.round(Number(qty || 0)));
     const normalizePhone = (value) => String(value ?? '').replace(/\D/g, '').trim();
@@ -319,45 +324,17 @@ export async function mainposRoutes(app) {
         });
         return { success: true, data: kots };
     });
-    // ── GET /api/mainpos/items ── all items (Main POS sees everything)
-    app.get('/items', async (request) => {
+    // ── GET /api/mainpos/items ── all items (Main POS sees everything, ultra-fast in-memory cache)
+    app.get('/items', async (request, reply) => {
         const restaurantId = request.restaurantId;
-        const items = await prisma.menuItem.findMany({
-            where: { restaurantId, isAvailable: true, isDeleted: false },
-            include: { 
-                category: true, 
-                inventoryItem: { include: { inventoryMRPs: { where: { isActive: true }, orderBy: { createdAt: 'desc' } } } },
-                itemModifiers: { include: { modifierGroup: true } }
-            },
-            orderBy: [{ categoryId: 'asc' }, { sortOrder: 'asc' }],
-        });
-        const enriched = items.map((it) => ({
-            ...it,
-            inventoryItem: it.inventoryItem
-                ? {
-                    ...it.inventoryItem,
-                    inventoryMRPs: activeMrps(it.inventoryItem.inventoryMRPs || []).map((m) => computeSellingPrice(m, it.price)),
-                }
-                : it.inventoryItem,
-            itemModifiers: (it.itemModifiers || []).map((im) => {
-                let options = [];
-                if (im.modifierGroup) {
-                    try {
-                        options = typeof im.modifierGroup.options === 'string'
-                            ? JSON.parse(im.modifierGroup.options)
-                            : (Array.isArray(im.modifierGroup.options) ? im.modifierGroup.options : []);
-                    }
-                    catch (e) {}
-                }
-                return {
-                    ...im,
-                    modifierGroup: im.modifierGroup
-                        ? { ...im.modifierGroup, options }
-                        : im.modifierGroup
-                };
-            })
-        }));
-        return { success: true, data: enriched };
+        const clientEtag = request.headers['if-none-match'];
+        const { data, etag } = await getMainposItems(restaurantId);
+        if (clientEtag && clientEtag === etag) {
+            return reply.status(304).send();
+        }
+        reply.header('ETag', etag);
+        reply.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+        return { success: true, data };
     });
     // ── GET /api/mainpos/customers ──
     app.get('/customers', async (request, reply) => {
@@ -387,14 +364,17 @@ export async function mainposRoutes(app) {
         }));
         return { success: true, data: normalized };
     });
-    // ── GET /api/mainpos/categories ── all categories
-    app.get('/categories', async (request) => {
+    // ── GET /api/mainpos/categories ── all categories (cached)
+    app.get('/categories', async (request, reply) => {
         const restaurantId = request.restaurantId;
-        const categories = await prisma.itemCategory.findMany({
-            where: { restaurantId },
-            orderBy: { sortOrder: 'asc' },
-        });
-        return { success: true, data: categories };
+        const clientEtag = request.headers['if-none-match'];
+        const { data, etag } = await getMainposCategories(restaurantId);
+        if (clientEtag && clientEtag === etag) {
+            return reply.status(304).send();
+        }
+        reply.header('ETag', etag);
+        reply.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+        return { success: true, data };
     });
     // ── POST /api/mainpos/token/lookup ── find token by QR or number (INSTANT)
     app.post('/token/lookup', async (request, reply) => {

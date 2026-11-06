@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { startCloudSyncWorker } from './utils/cloudSync.js';
 import { LanPeerDiscovery } from './utils/lanPeerDiscovery.js';
+import { prewarmPosCache } from './utils/posItemsCache.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
@@ -184,6 +185,15 @@ async function start() {
   }
 
   serverLog('[server] READY — backend healthy & ultra-fast startup complete');
+
+  // Pre-warm in-memory POS cache in background for 0ms initial load
+  setTimeout(() => {
+    prewarmPosCache().then(() => {
+      serverLog('[server] POS items & categories in-memory cache pre-warmed successfully');
+    }).catch((err) => {
+      serverLog('[server] POS cache pre-warm warning:', err.message);
+    });
+  }, 300);
 
   // ── Global Uncaught Exception & Promise Rejection Handlers ───────────────
   process.on('uncaughtException', (err) => {

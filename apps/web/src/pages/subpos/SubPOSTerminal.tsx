@@ -896,7 +896,7 @@ export default function SubPOSTerminal() {
     gcTime: 24 * 60 * 60 * 1000,
   });
 
-  const { data: allItems = [], refetch: refetchItems } = useQuery<MenuItem[]>({
+  const { data: allItems = [], refetch: refetchItems, isLoading: isItemsLoading, isFetching: isItemsFetching } = useQuery<MenuItem[]>({
     queryKey: ['subpos-items', authToken],
     queryFn: async () => {
       const { data } = await subposApi.get('/items', { headers: { Authorization: `Bearer ${authToken}` } });
@@ -1123,6 +1123,23 @@ export default function SubPOSTerminal() {
       weightResult?.productQR
     );
   }, [allItems, searchQuery, selectedCategoryId]);
+
+  const [displayCount, setDisplayCount] = useState(48);
+
+  useEffect(() => {
+    setDisplayCount(48);
+  }, [searchQuery, selectedCategoryId]);
+
+  const displayedItems = useMemo(() => {
+    return filteredItems.slice(0, displayCount);
+  }, [filteredItems, displayCount]);
+
+  const handleItemsScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 250) {
+      setDisplayCount(prev => (prev < filteredItems.length ? prev + 48 : prev));
+    }
+  }, [filteredItems.length]);
 
   const filteredItemsRef = useRef<MenuItem[]>(filteredItems);
   filteredItemsRef.current = filteredItems;
@@ -2306,18 +2323,31 @@ export default function SubPOSTerminal() {
           </div>
 
           {/* Items grid */}
-          <div className="flex-1 overflow-y-auto custom-scrollbar pb-3 rounded-md pr-1">
+          <div
+            onScroll={handleItemsScroll}
+            className="flex-1 overflow-y-auto custom-scrollbar pb-3 rounded-md pr-1"
+          >
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 content-start">
-              {filteredItems.map(item => (
-                <TouchMenuItemCard
-                  key={item.id}
-                  item={item}
-                  isLight={isLight}
-                  onTap={(it) => handleAddToCart(it)}
-                  onLongPress={(it) => setOptionsModalTarget({ item: it })}
-                />
-              ))}
-              {filteredItems.length === 0 && (
+              {allItems.length === 0 && (isItemsLoading || isItemsFetching) ? (
+                Array.from({ length: 24 }).map((_, idx) => (
+                  <div
+                    key={`sub-skeleton-${idx}`}
+                    className={cn(
+                      "rounded-xl p-3 border flex flex-col justify-between h-[115px] animate-pulse",
+                      isLight ? "bg-slate-100 border-slate-200" : "bg-[#1c1e27] border-gray-800/80"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className={cn("h-4 rounded w-3/4", isLight ? "bg-slate-200" : "bg-gray-700/60")} />
+                      <div className={cn("h-4 w-6 rounded", isLight ? "bg-slate-200" : "bg-gray-700/60")} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className={cn("h-3 rounded w-1/2", isLight ? "bg-slate-200" : "bg-gray-700/60")} />
+                      <div className={cn("h-5 rounded w-1/3", isLight ? "bg-slate-300" : "bg-gray-600/60")} />
+                    </div>
+                  </div>
+                ))
+              ) : filteredItems.length === 0 ? (
                 <div className="col-span-full text-center text-gray-500 py-10 flex flex-col items-center">
                   <Search className="w-12 h-12 text-gray-400 mb-4 opacity-50" />
                   <p className="text-lg font-medium">No items found</p>
@@ -2333,6 +2363,16 @@ export default function SubPOSTerminal() {
                     </button>
                   )}
                 </div>
+              ) : (
+                displayedItems.map(item => (
+                  <TouchMenuItemCard
+                    key={item.id}
+                    item={item}
+                    isLight={isLight}
+                    onTap={(it) => handleAddToCart(it)}
+                    onLongPress={(it) => setOptionsModalTarget({ item: it })}
+                  />
+                ))
               )}
             </div>
           </div>

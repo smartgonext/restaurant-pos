@@ -8,6 +8,7 @@ import { useEffect } from 'react';
 import { useThemeStore } from '@/stores/themeStore';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
+import { setCachedMenuItems, setCachedCategories } from '@/lib/posCache';
 import { setupElectronPrintNotifications } from '@/lib/electronPrint';
 import { startOfflineSync } from '@/lib/offlineQueue';
 import { useEnterKeyNavigation } from '@/hooks/useEnterKeyNavigation';
@@ -42,6 +43,42 @@ export default function App() {
       } catch (err) {
         // non-fatal
         console.warn('Failed to fetch restaurant settings', err);
+      }
+
+      // Background prefetch POS items and categories so MainPOS and SubPOS open with zero delay
+      try {
+        const authToken = useAuthStore.getState().token;
+        if (authToken) {
+          api.get('/mainpos/items').then((res) => {
+            if (Array.isArray(res.data?.data) && res.data.data.length > 0) {
+              setCachedMenuItems('main', res.data.data);
+              queryClient.setQueryData(['mainpos-items', authToken], res.data.data);
+            }
+          }).catch(() => {});
+
+          api.get('/mainpos/categories').then((res) => {
+            if (Array.isArray(res.data?.data) && res.data.data.length > 0) {
+              setCachedCategories('main', res.data.data);
+              queryClient.setQueryData(['mainpos-categories', authToken], res.data.data);
+            }
+          }).catch(() => {});
+
+          api.get('/subpos/items').then((res) => {
+            if (Array.isArray(res.data?.data) && res.data.data.length > 0) {
+              setCachedMenuItems('subpos', res.data.data);
+              queryClient.setQueryData(['subpos-items', authToken], res.data.data);
+            }
+          }).catch(() => {});
+
+          api.get('/subpos/categories').then((res) => {
+            if (Array.isArray(res.data?.data) && res.data.data.length > 0) {
+              setCachedCategories('subpos', res.data.data);
+              queryClient.setQueryData(['subpos-categories', authToken], res.data.data);
+            }
+          }).catch(() => {});
+        }
+      } catch (prefetchErr) {
+        // non-fatal background prefetch
       }
     })();
   }, [user, setTheme]);

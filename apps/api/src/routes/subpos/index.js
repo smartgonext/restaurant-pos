@@ -6,6 +6,11 @@ import { subposAuth } from '../../middleware/posAuth.js';
 import { getNextTokenNumber } from '../../utils/tokenCounter.js';
 import { recalculateTokenTotals } from '../../utils/taxCalculator.js';
 import { emitToRestaurant } from '../../plugins/socket.js';
+import {
+    getSubposItems,
+    getSubposCategories,
+    invalidatePosCache,
+} from '../../utils/posItemsCache.js';
 import { applyKOTConsumption } from '../../utils/inventory.js';
 export async function subposRoutes(app) {
     const normalizeKotQty = (qty) => Math.max(1, Math.round(Number(qty || 0)));
@@ -97,65 +102,31 @@ export async function subposRoutes(app) {
     });
     // All routes below require Sub POS auth
     app.addHook('onRequest', subposAuth);
-    // ── GET /api/subpos/items ── returns only items in terminal's groupIds
-    app.get('/items', async (request) => {
+    // ── GET /api/subpos/items ── returns items in terminal's groupIds (cached)
+    app.get('/items', async (request, reply) => {
         const restaurantId = request.restaurantId;
         const groupIds = getGroupIds(request.user);
-        const items = await prisma.menuItem.findMany({
-            where: {
-                restaurantId,
-                isAvailable: true,
-                isDeleted: false,
-                ...(groupIds.length > 0 ? { categoryId: { in: groupIds } } : {}),
-            },
-            include: { 
-                category: true, 
-                inventoryItem: { include: { inventoryMRPs: { where: { isActive: true }, orderBy: { createdAt: 'desc' } }, unit: true } },
-                itemModifiers: { include: { modifierGroup: true } }
-            },
-            orderBy: [{ categoryId: 'asc' }, { sortOrder: 'asc' }],
-        });
-        // enrich inventoryMRPs with computed sellingPrice and parse modifiers
-        const enriched = items.map((it) => ({
-            ...it,
-            inventoryItem: it.inventoryItem
-                ? {
-                    ...it.inventoryItem,
-                    inventoryMRPs: activeMrps(it.inventoryItem.inventoryMRPs || []).map((m) => computeSellingPrice(m, it.price)),
-                }
-                : it.inventoryItem,
-            itemModifiers: (it.itemModifiers || []).map((im) => {
-                let options = [];
-                if (im.modifierGroup) {
-                    try {
-                        options = typeof im.modifierGroup.options === 'string'
-                            ? JSON.parse(im.modifierGroup.options)
-                            : (Array.isArray(im.modifierGroup.options) ? im.modifierGroup.options : []);
-                    }
-                    catch (e) {}
-                }
-                return {
-                    ...im,
-                    modifierGroup: im.modifierGroup
-                        ? { ...im.modifierGroup, options }
-                        : im.modifierGroup
-                };
-            })
-        }));
-        return { success: true, data: enriched };
+        const clientEtag = request.headers['if-none-match'];
+        const { data, etag } = await getSubposItems(restaurantId, groupIds);
+        if (clientEtag && clientEtag === etag) {
+            return reply.status(304).send();
+        }
+        reply.header('ETag', etag);
+        reply.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+        return { success: true, data };
     });
-    // ── GET /api/subpos/categories ── only accessible categories
-    app.get('/categories', async (request) => {
+    // ── GET /api/subpos/categories ── only accessible categories (cached)
+    app.get('/categories', async (request, reply) => {
         const restaurantId = request.restaurantId;
         const groupIds = getGroupIds(request.user);
-        const categories = await prisma.itemCategory.findMany({
-            where: {
-                restaurantId,
-                ...(groupIds.length > 0 ? { id: { in: groupIds } } : {}),
-            },
-            orderBy: { sortOrder: 'asc' },
-        });
-        return { success: true, data: categories };
+        const clientEtag = request.headers['if-none-match'];
+        const { data, etag } = await getSubposCategories(restaurantId, groupIds);
+        if (clientEtag && clientEtag === etag) {
+            return reply.status(304).send();
+        }
+        reply.header('ETag', etag);
+        reply.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+        return { success: true, data };
     });
     // ── GET /api/subpos/bill-settings ──
     app.get('/bill-settings', async (request) => {

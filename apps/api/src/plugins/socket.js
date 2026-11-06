@@ -1,4 +1,5 @@
 let ioInstance = null;
+import { invalidatePosCache } from '../utils/posItemsCache.js';
 export function setupSocketIO(io) {
     ioInstance = io;
     io.on('connection', (socket) => {
@@ -101,6 +102,15 @@ export function getIO() {
 // ── Emit Helpers ─────────────────────────
 export function emitToRestaurant(restaurantId, event, data) {
     if (!ioInstance) return;
+    if (
+        event === 'menu_items_updated' ||
+        event === 'menu_updated' ||
+        event === 'inventory.item.updated' ||
+        event === 'purchaseOrder.received' ||
+        event === 'supplier.updated'
+    ) {
+        invalidatePosCache(restaurantId);
+    }
     try {
         const payload = sanitizeForSocket(data);
         getIO().to(`restaurant:${restaurantId}`).emit(event, payload);
