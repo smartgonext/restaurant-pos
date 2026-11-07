@@ -18,24 +18,22 @@ build/
 logs/
 **/logs/
 
-# SQLite & Data files
+# SQLite & Data files - IGNORE ALL DBs to protect live production data
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite-journal
 *.sqlite3
-**/prisma/database.sqlite
 **/prisma/*.db
+**/prisma/database.sqlite
 offline-data.json
 sync-state.json
 uploads/
 **/uploads/
 tmp/
 **/tmp/
-
-# Whitelist production SQLite template and seeded DB
-!api/prisma/maligai.db
-!api/prisma/sqlite-template/
-!api/prisma/sqlite-template/**
 
 # Whitelist production compiled web dist
 !web/dist/

@@ -12,13 +12,15 @@ logs/
 **/release/
 **/.history/
 
-# SQLite databases (ignore local temporary DBs, but preserve seeded templates)
+# SQLite databases - IGNORE ALL DBs to protect live production data
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
-!apps/api/prisma/maligai.db
-!apps/api/prisma/sqlite-template/
-!apps/api/prisma/sqlite-template/**
+apps/api/prisma/*.db
+api/prisma/*.db
 
 # Production compiled web assets
 !apps/web/dist/
