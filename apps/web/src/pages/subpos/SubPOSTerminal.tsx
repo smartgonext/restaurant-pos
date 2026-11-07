@@ -1030,21 +1030,6 @@ export default function SubPOSTerminal() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // ── Keyboard handling for Post-Print actions (Enter = New Order, Escape = Keep Cart) ──
-  useEffect(() => {
-    if (!postPrintPending) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        finalizeSubposOrder();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        cancelPostPrintAndKeepCart();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [postPrintPending, finalizeSubposOrder, cancelPostPrintAndKeepCart]);
 
   // ── KOT detail popup ──
   useEffect(() => {
@@ -1460,21 +1445,6 @@ export default function SubPOSTerminal() {
     const { item, price, mrpId, purchaseRate, profitPercent, displayName, salesUnit, quantity = 1, inventoryItemName, inventoryMRPs } = options;
     let returnedId = id;
 
-    // If print dialog was cancelled and staff immediately clicks/scans a new item, preserve order state
-    if (postPrintPending) {
-      if (postPrintTimerRef.current) {
-        clearTimeout(postPrintTimerRef.current);
-        postPrintTimerRef.current = null;
-      }
-      const qr = postPrintPending.loadedTokenData?.qrCode;
-      if (qr) {
-        subposApi.post(`/token/${qr}/cancel`, {}, { headers }).catch(() => {});
-      }
-      setLoadedToken(null);
-      setExistingTokenItems([]);
-      isAppendingRef.current = false;
-      setPostPrintPending(null);
-    }
     setLocalCart(prev => {
       const resolvedName = displayName || item.name;
       const match = prev.find(p =>
@@ -2033,12 +2003,8 @@ export default function SubPOSTerminal() {
 
       toast.success(`Token #${result.tokenNumber} generated!`, { duration: 1500 });
 
-      // After print preview dialog closes, prompt for completion (Enter = Printed, Esc/add items = Cancelled)
-      setPostPrintPending({
-        tokenNumber: result.tokenNumber,
-        loadedTokenData: tokenObj,
-        savedItems: savedSnapshot,
-      });
+      // Once bill is printed, automatically close bill and reset for next customer
+      finalizeSubposOrder();
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to create token');
@@ -3093,40 +3059,22 @@ export default function SubPOSTerminal() {
 
                 {/* Generate Token button */}
                 <div className="p-3">
-                  {postPrintPending ? (
-                    <div className="space-y-2">
-                      <button
-                        autoFocus
-                        onClick={finalizeSubposOrder}
-                        className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <Check size={18} /> PRINTED — CLOSE BILL & NEXT ORDER (Enter)
-                      </button>
-                      <button
-                        onClick={cancelPostPrintAndKeepCart}
-                        className="w-full py-2.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <RotateCcw size={14} /> CANCELLED PRINT — KEEP CART & ADD MORE (Esc)
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      ref={createTokenBtnRef}
-                      id="btn-create-token"
-                      onClick={() => {
-                        isAppendingRef.current = Boolean(loadedToken);
-                        createToken.mutate();
-                      }}
-                      disabled={localCart.length === 0 || createToken.isPending}
-                      className="w-full py-4 bg-[#7c5cfc] hover:bg-[#6b4ce6] disabled:bg-gray-800/50 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-black text-[15px] uppercase tracking-wider rounded-xl transition-all duration-200 shadow-[0_4px_20px_rgba(124,92,252,0.3)] disabled:shadow-none flex items-center justify-center gap-2 group border border-[#7c5cfc]/20 disabled:border-transparent"
-                    >
-                      {createToken.isPending ? (
-                        <><span className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" /> CREATING...</>
-                      ) : (
-                        <><Printer className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" /> GENERATE TOKEN <span className="text-[10px] font-bold opacity-60 bg-black/20 px-1.5 py-0.5 rounded ml-1 normal-case">(F12)</span></>
-                      )}
-                    </button>
-                  )}
+                  <button
+                    ref={createTokenBtnRef}
+                    id="btn-create-token"
+                    onClick={() => {
+                      isAppendingRef.current = Boolean(loadedToken);
+                      createToken.mutate();
+                    }}
+                    disabled={localCart.length === 0 || createToken.isPending}
+                    className="w-full py-4 bg-[#7c5cfc] hover:bg-[#6b4ce6] disabled:bg-gray-800/50 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-black text-[15px] uppercase tracking-wider rounded-xl transition-all duration-200 shadow-[0_4px_20px_rgba(124,92,252,0.3)] disabled:shadow-none flex items-center justify-center gap-2 group border border-[#7c5cfc]/20 disabled:border-transparent"
+                  >
+                    {createToken.isPending ? (
+                      <><span className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" /> CREATING...</>
+                    ) : (
+                      <><Printer className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" /> GENERATE TOKEN <span className="text-[10px] font-bold opacity-60 bg-black/20 px-1.5 py-0.5 rounded ml-1 normal-case">(F12)</span></>
+                    )}
+                  </button>
 
                   {/* Reprint last token */}
                   {lastToken && (

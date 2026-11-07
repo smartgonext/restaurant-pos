@@ -1492,21 +1492,7 @@ export default function MainPOSTerminal() {
     toast.success('Print cancelled — order kept!', { duration: 1500, icon: '🛒' });
   }, []);
 
-  // ── Keyboard handling for Post-Payment actions (Enter = New Order, Escape = Keep Order) ──
-  useEffect(() => {
-    if (!postPaymentPending) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        finalizeMainposOrder();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        cancelPostPaymentAndKeepCart();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [postPaymentPending, finalizeMainposOrder, cancelPostPaymentAndKeepCart]);
+
   const [awaitingUPIPayment, setAwaitingUPIPayment] = useState(false);
   const [pendingUpiPayment, setPendingUpiPayment] = useState<{ tokenQr: string; amount: number; method: string } | null>(null);
   const [showSplitModal, setShowSplitModal] = useState(false);
@@ -1894,11 +1880,7 @@ export default function MainPOSTerminal() {
             toast.success('🎉 UPI Payment Received! Printing Bill...', { duration: 1800 });
             await printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
             
-            setPostPaymentPending({
-              tokenNumber: latestToken.tokenNumber,
-              currentTokenData: latestToken,
-              isPaid: true,
-            });
+            finalizeMainposOrder();
           }
         }
       } catch (err) {}
@@ -2467,13 +2449,6 @@ export default function MainPOSTerminal() {
 
     let returnedId = id;
 
-    if (postPaymentPending) {
-      if (postPaymentTimerRef.current) {
-        clearTimeout(postPaymentTimerRef.current);
-        postPaymentTimerRef.current = null;
-      }
-      setPostPaymentPending(null);
-    }
     setLocalCart(prev => {
       const resolvedName = displayName || item.name;
       const match = prev.find(p =>
@@ -2945,11 +2920,7 @@ export default function MainPOSTerminal() {
         await printTokenSlip(data, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings); 
       } catch (err) {}
       try { api.post(`/token/${data.qrCode}/present`).catch(() => {}); } catch {}
-      setPostPaymentPending({
-        tokenNumber: data.tokenNumber,
-        currentTokenData: data,
-        isPaid: false,
-      });
+      finalizeMainposOrder();
     },
     onError: (err: any) => toast.error(err?.response?.data?.error || 'Failed to create token'),
   });
@@ -2978,11 +2949,7 @@ export default function MainPOSTerminal() {
         );
       } catch (err) {}
       try { api.post(`/token/${data.qrCode}/present`).catch(() => {}); } catch {}
-      setPostPaymentPending({
-        tokenNumber: data.tokenNumber,
-        currentTokenData: data,
-        isPaid: false,
-      });
+      finalizeMainposOrder();
     },
     onError: (err: any) => toast.error(err?.response?.data?.error || 'Failed to add items to token'),
   });
@@ -3098,11 +3065,7 @@ export default function MainPOSTerminal() {
           setLoadedWaiterBill(null);
           refetchPendingWaiterBills();
 
-          setPostPaymentPending({
-            tokenNumber: finalToken.tokenNumber,
-            currentTokenData: finalToken,
-            isPaid: true,
-          });
+          finalizeMainposOrder();
         } else {
           toast.success(`Partial payment of ₹${payAmount.toFixed(2)} (${method.toUpperCase()}) recorded!`);
         }
@@ -3219,11 +3182,7 @@ export default function MainPOSTerminal() {
         setLoadedWaiterBill(null);
         refetchPendingWaiterBills();
 
-        setPostPaymentPending({
-          tokenNumber: latestToken.tokenNumber,
-          currentTokenData: latestToken,
-          isPaid: true,
-        });
+        finalizeMainposOrder();
       } else {
         toast.success(`Split payment recorded!`);
       }
@@ -3255,11 +3214,7 @@ export default function MainPOSTerminal() {
           await printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
         }
 
-        setPostPaymentPending({
-          tokenNumber: finalToken.tokenNumber,
-          currentTokenData: finalToken,
-          isPaid: true,
-        });
+        finalizeMainposOrder();
       }
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'UPI confirmation failed');
@@ -4829,23 +4784,7 @@ export default function MainPOSTerminal() {
 
                 {/* Payment buttons */}
                 <div className="p-2.5">
-                  {postPaymentPending ? (
-                    <div className="space-y-2">
-                      <button
-                        autoFocus
-                        onClick={finalizeMainposOrder}
-                        className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <Check size={18} /> PRINTED — CLOSE BILL & NEXT ORDER (Enter)
-                      </button>
-                      <button
-                        onClick={cancelPostPaymentAndKeepCart}
-                        className="w-full py-2.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <RotateCcw size={14} /> CANCELLED PRINT — KEEP BILL (Esc)
-                      </button>
-                    </div>
-                  ) : currentToken?.status === 'paid' && localCart.length === 0 ? (
+                  {currentToken?.status === 'paid' && localCart.length === 0 ? (
                     <div className="space-y-2">
                       <div className="w-full py-2.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-md font-bold uppercase tracking-widest text-center text-[10px] flex items-center justify-center gap-2">
                         <CheckCircle size={14} /> Paid Successfully
