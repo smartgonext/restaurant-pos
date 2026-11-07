@@ -1868,20 +1868,19 @@ export default function MainPOSTerminal() {
         }
 
         if (latestToken) {
-          setCurrentToken(latestToken);
-
-          // Only auto-print from socket if terminal was actively waiting for customer QR UPI scan!
-          // Normal counter checkout via Cash/Card/UPI button is printed directly in processPayment.
-          if (latestToken.status === 'paid' && awaitingUPIPayment) {
-            playTokenSound();
-            setAwaitingUPIPayment(false);
-            setPendingUpiPayment(null);
-            if (socket) socket.emit('customer_display_reset', { restaurantId: activeRestaurantId });
-            toast.success('🎉 UPI Payment Received! Printing Bill...', { duration: 1800 });
-            await printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
-            
+          if (latestToken.status === 'paid') {
+            if (awaitingUPIPayment) {
+              playTokenSound();
+              setAwaitingUPIPayment(false);
+              setPendingUpiPayment(null);
+              if (socket) socket.emit('customer_display_reset', { restaurantId: activeRestaurantId });
+              toast.success('🎉 UPI Payment Received! Printing Bill...', { duration: 1800 });
+              await printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
+            }
             finalizeMainposOrder();
+            return;
           }
+          setCurrentToken(latestToken);
         }
       } catch (err) {}
     };
@@ -3041,7 +3040,6 @@ export default function MainPOSTerminal() {
         const responseData = payRes.data?.data || payRes.data;
         const finalToken = responseData?.token ?? responseData;
         if (!finalToken) throw new Error('Payment response missing final token data');
-        setCurrentToken(finalToken); setLocalCart([]);
 
         // Open cash drawer if method is cash
         if (method === 'cash') {
@@ -3059,17 +3057,19 @@ export default function MainPOSTerminal() {
             { icon: '💰', duration: 1800 }
           );
 
-          if (getPrinterSettings(billSettings).autoPrintBill) {
-            await printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
-          }
+          await printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
           setLoadedWaiterBill(null);
           refetchPendingWaiterBills();
 
           finalizeMainposOrder();
         } else {
+          setCurrentToken(finalToken); setLocalCart([]);
           toast.success(`Partial payment of ₹${payAmount.toFixed(2)} (${method.toUpperCase()}) recorded!`);
         }
-      } else { toast.success('Token is already fully paid'); setLocalCart([]); setCurrentToken(latestToken); }
+      } else { 
+        toast.success('Token is already fully paid'); 
+        finalizeMainposOrder(); 
+      }
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'Payment process failed');
     } finally { setIsSubmitting(false); }
@@ -3176,14 +3176,14 @@ export default function MainPOSTerminal() {
             : 'Payment Successful! ✓', 
           { icon: '💰', duration: 1800 }
         );
-        if (getPrinterSettings(billSettings).autoPrintBill) {
-          await printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
-        }
+        await printFinalBill(latestToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
         setLoadedWaiterBill(null);
         refetchPendingWaiterBills();
 
         finalizeMainposOrder();
       } else {
+        setCurrentToken(latestToken);
+        setLocalCart([]);
         toast.success(`Split payment recorded!`);
       }
     } catch (err: any) {
@@ -3210,10 +3210,7 @@ export default function MainPOSTerminal() {
             : 'Payment Successful! ✓', 
           { icon: '💰', duration: 1800 }
         );
-        if (getPrinterSettings(billSettings).autoPrintBill) {
-          await printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
-        }
-
+        await printFinalBill(finalToken, user?.restaurant?.name || 'SMARTGONEXT Bakery', billSettings);
         finalizeMainposOrder();
       }
     } catch (err: any) {
