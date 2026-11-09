@@ -51,7 +51,7 @@ case "$DATABASE_URL" in
         echo "[entrypoint] Created empty sqlite database file at $DB_FILE"
       fi
     else
-      echo "[entrypoint] Verified existing SQLite database at $DB_FILE"
+      echo "[entrypoint] Verified existing SQLite database at $DB_FILE (Persistent Storage Active)"
     fi
 
     # Ensure full read/write permissions on database directory and file for WAL journals
