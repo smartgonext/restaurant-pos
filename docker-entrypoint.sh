@@ -34,7 +34,21 @@ case "$DATABASE_URL" in
     DB_DIR=$(dirname "$DB_FILE")
     mkdir -p "$DB_DIR"
 
-    # If database file doesn't exist or is empty, initialize from template
+    # Auto-detect the most complete database file in the persistent directory
+    LARGEST_DB=$(find "$DB_DIR" -maxdepth 3 -type f \( -name "*.db" -o -name "*.sqlite" \) ! -name "*backup*" ! -name "*bak*" -exec ls -S {} + 2>/dev/null | head -n 1)
+    if [ -n "$LARGEST_DB" ] && [ -s "$LARGEST_DB" ]; then
+      LARGEST_BYTES=$(wc -c < "$LARGEST_DB" 2>/dev/null || echo 0)
+      CURRENT_BYTES=0
+      if [ -f "$DB_FILE" ]; then
+        CURRENT_BYTES=$(wc -c < "$DB_FILE" 2>/dev/null || echo 0)
+      fi
+      if [ "$LARGEST_BYTES" -gt "$CURRENT_BYTES" ]; then
+        echo "[entrypoint] Upgrading database $DB_FILE ($CURRENT_BYTES bytes) from larger $LARGEST_DB ($LARGEST_BYTES bytes)..."
+        cp -f "$LARGEST_DB" "$DB_FILE"
+      fi
+    fi
+
+    # If database file still doesn't exist or is empty, initialize from template
     if [ ! -f "$DB_FILE" ] || [ ! -s "$DB_FILE" ]; then
       echo "[entrypoint] SQLite database $DB_FILE not found or empty. Initializing from template..."
       if [ -f "/app/apps/api/prisma/maligai.db" ] && [ -s "/app/apps/api/prisma/maligai.db" ]; then
@@ -60,14 +74,15 @@ case "$DATABASE_URL" in
       chmod 666 "$DB_FILE" 2>/dev/null || true
     fi
 
-    # Defensive duplicate and symlinks for Prisma relative resolution quirk
-    ln -sf "$DB_FILE" /app/apps/api/maligai.db 2>/dev/null || true
-    ln -sf "$DB_FILE" /app/maligai.db 2>/dev/null || true
+    # Synchronize and link all target database names to prevent any split or stale reads
     mkdir -p "$DB_DIR/prisma" 2>/dev/null || true
-    if [ -f "$DB_FILE" ]; then
-      cp -f "$DB_FILE" "$DB_DIR/prisma/$(basename "$DB_FILE")" 2>/dev/null || true
-      chmod -R 777 "$DB_DIR/prisma" 2>/dev/null || true
-    fi
+    for target in "$DB_DIR/dev.db" "$DB_DIR/maligai.db" "$DB_DIR/prisma/dev.db" "$DB_DIR/prisma/maligai.db" /app/apps/api/maligai.db /app/apps/api/dev.db /app/maligai.db; do
+      mkdir -p "$(dirname "$target")" 2>/dev/null || true
+      if [ "$target" != "$DB_FILE" ]; then
+        ln -f "$DB_FILE" "$target" 2>/dev/null || cp -f "$DB_FILE" "$target" 2>/dev/null || true
+      fi
+    done
+    chmod -R 777 "$DB_DIR" 2>/dev/null || true
     ;;
   postgres:*|postgresql:*)
     echo "[entrypoint] PostgreSQL database detected. Updating schema provider..."
