@@ -42,7 +42,7 @@ try {
   console.warn('[dotenv] Module not available, skipping:', dotenvErr.message);
 }
 
-// ── Validate and normalize DATABASE_URL to verified absolute path ───────────
+// ── Normalize DATABASE_URL strictly to absolute path without searching/copying ──
 function getNormalizedDatabaseUrl() {
   const raw = process.env.DATABASE_URL || '';
   if (!raw.startsWith('file:') && raw !== '') {
@@ -50,63 +50,16 @@ function getNormalizedDatabaseUrl() {
     return raw;
   }
 
-  const schemaPrismaDir = path.resolve(__dirname, '..', 'prisma');
-
-  // Search all candidate database files and pick the LARGEST valid file (most complete data)
-  const candidateDirs = [
-    schemaPrismaDir,
-    path.join(schemaPrismaDir, 'prisma'),
-    process.cwd(),
-    path.join(process.cwd(), 'prisma'),
-    '/app/apps/api/prisma',
-    '/app/apps/api/prisma/prisma',
-    '/data/restaurant-db',
-    '/data/restaurant-db/prisma',
-  ];
-
-  const dbFileNames = ['dev.db', 'maligai.db'];
-  const candidates = [];
-  const seenPaths = new Set();
-
-  for (const dir of candidateDirs) {
-    for (const name of dbFileNames) {
-      const fullPath = path.resolve(dir, name);
-      if (!seenPaths.has(fullPath) && fs.existsSync(fullPath)) {
-        seenPaths.add(fullPath);
-        try {
-          const stats = fs.statSync(fullPath);
-          if (stats.size > 1000) {
-            candidates.push({ path: fullPath, size: stats.size });
-          }
-        } catch { /**/ }
-      }
-    }
-  }
-
-  // Also include the raw path from DATABASE_URL if provided
   if (raw.startsWith('file:')) {
     const rawPath = raw.replace(/^file:/, '');
-    const resolvedRaw = path.isAbsolute(rawPath) ? rawPath : path.resolve(process.cwd(), rawPath);
-    if (!seenPaths.has(resolvedRaw) && fs.existsSync(resolvedRaw)) {
-      seenPaths.add(resolvedRaw);
-      try {
-        const stats = fs.statSync(resolvedRaw);
-        if (stats.size > 1000) {
-          candidates.push({ path: resolvedRaw, size: stats.size });
-        }
-      } catch { /**/ }
-    }
+    const absPath = path.isAbsolute(rawPath)
+      ? path.normalize(rawPath)
+      : path.resolve(process.cwd(), rawPath);
+    return `file:${absPath.replace(/\\/g, '/')}`;
   }
 
-  if (candidates.length > 0) {
-    // Sort descending by size so the container ALWAYS connects to the most complete data
-    candidates.sort((a, b) => b.size - a.size);
-    const chosen = candidates[0].path.replace(/\\/g, '/');
-    console.info(`[db] Selected largest database candidate: ${chosen} (${candidates[0].size} bytes)`);
-    return `file:${chosen}`;
-  }
-
-  const defaultTarget = path.join(schemaPrismaDir, 'maligai.db');
+  // Fallback default if DATABASE_URL is not set at all
+  const defaultTarget = path.resolve(__dirname, '..', 'prisma', 'maligai.db');
   return `file:${defaultTarget.replace(/\\/g, '/')}`;
 }
 

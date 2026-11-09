@@ -34,55 +34,25 @@ case "$DATABASE_URL" in
     DB_DIR=$(dirname "$DB_FILE")
     mkdir -p "$DB_DIR"
 
-    # Auto-detect the most complete database file in the persistent directory
-    LARGEST_DB=$(find "$DB_DIR" -maxdepth 3 -type f \( -name "*.db" -o -name "*.sqlite" \) ! -name "*backup*" ! -name "*bak*" -exec ls -S {} + 2>/dev/null | head -n 1)
-    if [ -n "$LARGEST_DB" ] && [ -s "$LARGEST_DB" ]; then
-      LARGEST_BYTES=$(wc -c < "$LARGEST_DB" 2>/dev/null || echo 0)
-      CURRENT_BYTES=0
-      if [ -f "$DB_FILE" ]; then
-        CURRENT_BYTES=$(wc -c < "$DB_FILE" 2>/dev/null || echo 0)
-      fi
-      if [ "$LARGEST_BYTES" -gt "$CURRENT_BYTES" ]; then
-        echo "[entrypoint] Upgrading database $DB_FILE ($CURRENT_BYTES bytes) from larger $LARGEST_DB ($LARGEST_BYTES bytes)..."
-        cp -f "$LARGEST_DB" "$DB_FILE"
-      fi
-    fi
-
-    # If database file still doesn't exist or is empty, initialize from template
+    # Only initialize if database file does not exist or is 0 bytes
     if [ ! -f "$DB_FILE" ] || [ ! -s "$DB_FILE" ]; then
-      echo "[entrypoint] SQLite database $DB_FILE not found or empty. Initializing from template..."
-      if [ -f "/app/apps/api/prisma/maligai.db" ] && [ -s "/app/apps/api/prisma/maligai.db" ]; then
-        cp "/app/apps/api/prisma/maligai.db" "$DB_FILE"
-        echo "[entrypoint] Seeded from /app/apps/api/prisma/maligai.db"
-      elif [ -f "/app/apps/api/prisma/sqlite-template/dev.db" ] && [ -s "/app/apps/api/prisma/sqlite-template/dev.db" ]; then
+      echo "[entrypoint] SQLite database $DB_FILE not found or empty. Initializing..."
+      if [ -f "/app/apps/api/prisma/sqlite-template/dev.db" ] && [ -s "/app/apps/api/prisma/sqlite-template/dev.db" ]; then
         cp "/app/apps/api/prisma/sqlite-template/dev.db" "$DB_FILE"
-        echo "[entrypoint] Seeded from /app/apps/api/prisma/sqlite-template/dev.db"
-      elif [ -f "./prisma/maligai.db" ] && [ -s "./prisma/maligai.db" ]; then
-        cp "./prisma/maligai.db" "$DB_FILE"
-        echo "[entrypoint] Seeded from ./prisma/maligai.db"
+        echo "[entrypoint] Initialized from template to $DB_FILE"
       else
         touch "$DB_FILE"
-        echo "[entrypoint] Created empty sqlite database file at $DB_FILE"
+        echo "[entrypoint] Created new sqlite file at $DB_FILE"
       fi
     else
-      echo "[entrypoint] Verified existing SQLite database at $DB_FILE (Persistent Storage Active)"
+      echo "[entrypoint] Using existing SQLite database at $DB_FILE (Persistent Storage Active)"
     fi
 
-    # Ensure full read/write permissions on database directory and file for WAL journals
+    # Set permissions for SQLite WAL mode
     chmod -R 777 "$DB_DIR" 2>/dev/null || true
     if [ -f "$DB_FILE" ]; then
       chmod 666 "$DB_FILE" 2>/dev/null || true
     fi
-
-    # Synchronize and link all target database names to prevent any split or stale reads
-    mkdir -p "$DB_DIR/prisma" 2>/dev/null || true
-    for target in "$DB_DIR/dev.db" "$DB_DIR/maligai.db" "$DB_DIR/prisma/dev.db" "$DB_DIR/prisma/maligai.db" /app/apps/api/maligai.db /app/apps/api/dev.db /app/maligai.db; do
-      mkdir -p "$(dirname "$target")" 2>/dev/null || true
-      if [ "$target" != "$DB_FILE" ]; then
-        ln -f "$DB_FILE" "$target" 2>/dev/null || cp -f "$DB_FILE" "$target" 2>/dev/null || true
-      fi
-    done
-    chmod -R 777 "$DB_DIR" 2>/dev/null || true
     ;;
   postgres:*|postgresql:*)
     echo "[entrypoint] PostgreSQL database detected. Updating schema provider..."

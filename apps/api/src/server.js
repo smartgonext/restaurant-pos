@@ -65,19 +65,6 @@ function ensureAppDb() {
   } else {
     serverLog('[db] sqlite file exists at', dbPath, `size=${fs.statSync(dbPath).size} bytes`);
   }
-
-  // Defensive duplicate for Prisma relative resolution quirk (schema.prisma relative directory)
-  try {
-    const extraPrismaDir = path.join(path.dirname(dbPath), 'prisma');
-    if (!fs.existsSync(extraPrismaDir)) {
-      fs.mkdirSync(extraPrismaDir, { recursive: true });
-    }
-    const extraPrismaDb = path.join(extraPrismaDir, path.basename(dbPath));
-    if (!fs.existsSync(extraPrismaDb) || fs.statSync(extraPrismaDb).size === 0) {
-      fs.copyFileSync(dbPath, extraPrismaDb);
-      serverLog('[db] created defensive fallback at', extraPrismaDb);
-    }
-  } catch (e) { /**/ }
 }
 
 // ── Socket.IO origin check — allow Electron packaged (null) and file:// ──────
