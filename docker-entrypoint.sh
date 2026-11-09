@@ -60,7 +60,9 @@ case "$DATABASE_URL" in
       chmod 666 "$DB_FILE" 2>/dev/null || true
     fi
 
-    # Defensive duplicate for Prisma relative resolution quirk
+    # Defensive duplicate and symlinks for Prisma relative resolution quirk
+    ln -sf "$DB_FILE" /app/apps/api/maligai.db 2>/dev/null || true
+    ln -sf "$DB_FILE" /app/maligai.db 2>/dev/null || true
     mkdir -p "$DB_DIR/prisma" 2>/dev/null || true
     if [ -f "$DB_FILE" ]; then
       cp -f "$DB_FILE" "$DB_DIR/prisma/$(basename "$DB_FILE")" 2>/dev/null || true

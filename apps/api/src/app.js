@@ -104,7 +104,13 @@ import { checkAndResetTokenCounters } from './utils/tokenCounter.js';
 import { handleCloudSyncPushRoute } from './utils/cloudSync.js';
 import { startErpSyncEngine } from './routes/restaurant/erpStore.js';
 
-export const prisma = new PrismaClient();
+export const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL,
+    },
+  },
+});
 
 import { idempotencyHook } from './middleware/idempotency.js';
 
