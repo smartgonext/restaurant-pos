@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -94,7 +94,7 @@ interface BarcodeSVGProps {
   height?: number;
 }
 
-function BarcodeSVG({ value, width = 200, height = 60 }: BarcodeSVGProps) {
+const BarcodeSVG = memo(function BarcodeSVG({ value, width = 200, height = 60 }: BarcodeSVGProps) {
   const binaryString = encodeCode39(value);
   
   if (!binaryString) {
@@ -135,7 +135,7 @@ function BarcodeSVG({ value, width = 200, height = 60 }: BarcodeSVGProps) {
       })}
     </svg>
   );
-}
+});
 
 // -------------------------------------------------------------
 // Label Dimension Presets
@@ -749,10 +749,12 @@ export default function BarcodeSettings() {
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Fetch all menu items
+  // Fetch all menu items with high performance memory caching
   const { data: menuItems = [], isLoading } = useQuery<any[]>({
     queryKey: ['menu-items-for-batch-barcodes'],
     queryFn: () => api.get('/restaurant/menu-items').then((r) => r.data.data || []),
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
   });
 
   const activePreset = LABEL_PRESETS.find((p) => p.id === presetId) || LABEL_PRESETS[1];
@@ -898,12 +900,22 @@ export default function BarcodeSettings() {
     return list;
   }, [menuItems]);
 
-  // Filter items in dropdown based on input
-  const filteredDropdownItems = selectableItems.filter(item => {
-    const nameMatch = (item.name || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const qrMatch = (item.barcode || '').toLowerCase().includes(searchTerm.toLowerCase());
-    return nameMatch || qrMatch;
-  });
+  // Filter items in dropdown based on input with high-speed memoization and top-50 cap
+  const filteredDropdownItems = useMemo(() => {
+    if (!searchTerm.trim()) return [];
+    const term = searchTerm.toLowerCase();
+    const results = [];
+    for (let i = 0; i < selectableItems.length; i++) {
+      const item = selectableItems[i];
+      const nameMatch = (item.name || '').toLowerCase().includes(term);
+      const qrMatch = (item.barcode || '').toLowerCase().includes(term);
+      if (nameMatch || qrMatch) {
+        results.push(item);
+        if (results.length >= 40) break;
+      }
+    }
+    return results;
+  }, [selectableItems, searchTerm]);
 
   // Add item from dropdown into batch ledger
   const handleAddMenuItem = (item: any) => {

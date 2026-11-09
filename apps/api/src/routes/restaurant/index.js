@@ -25,6 +25,7 @@ import { pipeline } from 'stream';
 import { promisify } from 'util';
 const pump = promisify(pipeline);
 import { normalizeStringArray, toDbArrayField } from '../../utils/prisma.js';
+import { invalidatePosCache } from '../../utils/posItemsCache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const routeDir = path.dirname(__filename);
@@ -1667,10 +1668,36 @@ export async function restaurantRoutes(app) {
             return reply.status(400).send({ success: false, error: err?.message || String(err) });
         }
     });
+    // ── High-Speed In-Memory Cache for Menu Items ──
+    const adminMenuItemsCache = new Map();
+    const invalidateAdminMenuCache = (restId) => {
+        if (!restId) {
+            adminMenuItemsCache.clear();
+        } else {
+            for (const k of adminMenuItemsCache.keys()) {
+                if (k.startsWith(`${restId}:`)) adminMenuItemsCache.delete(k);
+            }
+        }
+        try { invalidatePosCache(restId); } catch (e) { /**/ }
+    };
+
     // ── Menu Items ──
     app.get('/menu-items', async (request, reply) => {
         const restaurantId = request.restaurantId;
         const { menuId, categoryId, search, isKOT } = request.query;
+
+        // Check in-memory cache for ultra-fast response (<1ms) when not searching
+        if (!search && restaurantId) {
+            const cacheKey = `${restaurantId}:${menuId || ''}:${categoryId || ''}:${isKOT || ''}`;
+            const cached = adminMenuItemsCache.get(cacheKey);
+            if (cached && cached.expiresAt > Date.now()) {
+                if (request.headers['if-none-match'] === cached.etag) {
+                    return reply.code(304).send();
+                }
+                reply.header('ETag', cached.etag);
+                return { success: true, data: cached.data, fromCache: true };
+            }
+        }
         // Build a base where clause but avoid using relation-based filters
         // (prisma relation filters like `where.category` create inner joins and
         //  can inadvertently exclude uncategorized items). We'll fetch without
@@ -1782,6 +1809,16 @@ export async function restaurantRoutes(app) {
                     };
                 })
             }));
+            if (!search && restaurantId) {
+                const cacheKey = `${restaurantId}:${menuId || ''}:${categoryId || ''}:${isKOT || ''}`;
+                const etag = `W/"ami-${restaurantId}-${normalized.length}-${Date.now()}"`;
+                adminMenuItemsCache.set(cacheKey, {
+                    data: normalized,
+                    etag,
+                    expiresAt: Date.now() + 3 * 60 * 1000 // 3 minutes in-memory TTL
+                });
+                reply.header('ETag', etag);
+            }
             return { success: true, data: normalized };
         }
         catch (err) {
@@ -1979,6 +2016,7 @@ export async function restaurantRoutes(app) {
             catch (e) { }
             emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'created', item });
             emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            invalidateAdminMenuCache(restaurantId);
             return { success: true, data: item };
         }
         catch (err) {
@@ -2170,6 +2208,7 @@ export async function restaurantRoutes(app) {
             });
             emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'updated', item });
             emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            invalidateAdminMenuCache(restaurantId);
             return { success: true, data: item };
         }
         catch (err) {
@@ -2196,6 +2235,7 @@ export async function restaurantRoutes(app) {
             });
             emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'deleted', itemId: Number(id) });
             emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            invalidateAdminMenuCache(restaurantId);
             return { success: true, message: 'Item deleted' };
         }
         catch (err) {
@@ -2212,6 +2252,7 @@ export async function restaurantRoutes(app) {
                 });
                 emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'deleted', itemId: Number(id) });
                 emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+                invalidateAdminMenuCache(restaurantId);
                 return { success: true, message: 'Item deleted' };
             }
             if (code === 'P2025') {
@@ -2273,6 +2314,7 @@ export async function restaurantRoutes(app) {
         if (deletedCount > 0) {
             emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'bulk-deleted', count: deletedCount });
             emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            invalidateAdminMenuCache(restaurantId);
         }
 
         return {
@@ -2422,6 +2464,7 @@ export async function restaurantRoutes(app) {
             }
 
             emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'instant_added', item: menuItem });
+            invalidateAdminMenuCache(restaurantId);
             return { success: true, data: menuItem };
         } catch (err) {
             app.log?.error?.(err, 'Failed to instant add item');
@@ -2559,6 +2602,7 @@ export async function restaurantRoutes(app) {
             });
 
             emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'quick_edited', item: fullUpdated || updated });
+            invalidateAdminMenuCache(restaurantId);
             return { success: true, data: fullUpdated || updated };
         } catch (err) {
             app.log?.error?.(err, 'Quick edit failed');
@@ -3337,6 +3381,7 @@ export async function restaurantRoutes(app) {
             }
             emitToRestaurant(restaurantId, 'menu_items_updated', { action: 'bulk-uploaded', summary });
             emitToRestaurant(restaurantId, 'menu_updated', { action: 'refresh' });
+            invalidateAdminMenuCache(restaurantId);
             return { success: true, data: summary };
         }
         catch (err) {

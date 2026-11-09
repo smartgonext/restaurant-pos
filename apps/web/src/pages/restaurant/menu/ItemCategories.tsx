@@ -55,20 +55,28 @@ export default function ItemCategories() {
   const [uploadingItemImage, setUploadingItemImage] = useState(false);
   const itemFileRef = useRef<HTMLInputElement | null>(null);
 
-  // Queries
+  // Queries with high performance memory caching
   const { data: groups = [] } = useQuery({
     queryKey: ['item-groups'],
     queryFn: () => api.get('/restaurant/item-groups').then((r) => (r.data.data || []).sort((a: any, b: any) => a.name.localeCompare(b.name))),
+    staleTime: 10 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
   });
 
   const { data: categories = [], isLoading: categoriesLoading, refetch: refetchCategories } = useQuery({
     queryKey: ['item-categories'],
     queryFn: () => api.get('/restaurant/item-categories').then((r) => (r.data.data || []).sort((a: any, b: any) => a.name.localeCompare(b.name))),
+    staleTime: 5 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    placeholderData: (prev) => prev,
   });
 
   const { data: menuItems = [], isLoading: itemsLoading, refetch: refetchItems } = useQuery({
     queryKey: ['menu-items-all'],
     queryFn: () => api.get('/restaurant/menu-items').then((r) => r.data.data || []),
+    staleTime: 5 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    placeholderData: (prev) => prev,
   });
 
   // Filter Categories for View 1

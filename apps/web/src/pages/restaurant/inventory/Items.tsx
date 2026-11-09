@@ -28,12 +28,23 @@ export default function Items() {
   const [newItem, setNewItem] = useState<any>({ name: '', categoryId: undefined, unitId: undefined, thresholdQty: 0, costPerUnit: 0 });
   const [editItem, setEditItem] = useState<any | null>(null);
 
-  const { data: categories = [] } = useQuery({ queryKey: ['inventory-categories'], queryFn: () => api.get('/restaurant/inventory/categories').then(r => r.data.data) });
-  const { data: units = [] } = useQuery({ queryKey: ['inventory-units'], queryFn: () => api.get('/restaurant/inventory/units').then(r => r.data.data) });
+  const { data: categories = [] } = useQuery({ 
+    queryKey: ['inventory-categories'], 
+    queryFn: () => api.get('/restaurant/inventory/categories').then(r => r.data.data),
+    staleTime: 10 * 60 * 1000,
+  });
+  const { data: units = [] } = useQuery({ 
+    queryKey: ['inventory-units'], 
+    queryFn: () => api.get('/restaurant/inventory/units').then(r => r.data.data),
+    staleTime: 10 * 60 * 1000,
+  });
 
   const { data: items = [], isLoading } = useQuery({
     queryKey: ['inventory-items'],
     queryFn: () => api.get('/restaurant/inventory/items').then(r => r.data.data),
+    staleTime: 3 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+    placeholderData: (prev) => prev,
   });
 
   const handleFile = async (e: any) => {

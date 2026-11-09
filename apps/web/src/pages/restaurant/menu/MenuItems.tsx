@@ -145,21 +145,35 @@ export default function MenuItems() {
       const qs = params.toString();
       return api.get(`/restaurant/menu-items${qs ? `?${qs}` : ''}`).then((r) => r.data.data);
     },
+    staleTime: 3 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+    placeholderData: (prev) => prev,
   });
 
   const { data: menus } = useQuery({
     queryKey: ['menus-list'],
     queryFn: () => api.get('/restaurant/menus').then((r) => r.data.data),
+    staleTime: 10 * 60 * 1000,
   });
 
   const { data: categories } = useQuery({
     queryKey: ['categories-list'],
     queryFn: () => api.get('/restaurant/item-categories').then((r) => r.data.data),
+    staleTime: 10 * 60 * 1000,
   });
 
   // Inventory resources for non-food products
-  const { data: invUnits = [] } = useQuery({ queryKey: ['inventory-units'], queryFn: () => api.get('/restaurant/inventory/units').then(r => r.data.data) });
-  const { data: invItems = [], refetch: refetchInv } = useQuery({ queryKey: ['inventory-items'], queryFn: () => api.get('/restaurant/inventory/items').then(r => r.data.data) });
+  const { data: invUnits = [] } = useQuery({ 
+    queryKey: ['inventory-units'], 
+    queryFn: () => api.get('/restaurant/inventory/units').then(r => r.data.data),
+    staleTime: 10 * 60 * 1000,
+  });
+  const { data: invItems = [], refetch: refetchInv } = useQuery({ 
+    queryKey: ['inventory-items'], 
+    queryFn: () => api.get('/restaurant/inventory/items').then(r => r.data.data),
+    staleTime: 5 * 60 * 1000,
+    placeholderData: (prev) => prev,
+  });
   const [invUnitId, setInvUnitId] = useState<number | null>(null);
   const [mrp, setMrp] = useState<string>('');
   const [purchaseRate, setPurchaseRate] = useState<string>('');
