@@ -8,7 +8,7 @@ import {
   ChefHat, Warehouse, Calendar, Truck, Bell, Brain, Building,
   DollarSign, ExternalLink, Globe, MonitorSmartphone,
   BedDouble, Bed, ClipboardCheck, LogIn, LogOut, Tags, Sparkles, SlidersHorizontal,
-  Activity, Printer,
+  Activity, Printer, X,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { usePermission } from '@/hooks/usePermission';
@@ -127,7 +127,7 @@ const restaurantNav: NavItem[] = [
 ];
 
 export function Sidebar() {
-  const { sidebarCollapsed: collapsed, toggleSidebar: setCollapsed, setSidebarCollapsed } = useLayoutStore();
+  const { sidebarCollapsed: collapsed, toggleSidebar: setCollapsed, setSidebarCollapsed, mobileSidebarOpen, setMobileSidebarOpen } = useLayoutStore();
   const [expandedMenus, setExpandedMenus] = useState<string[]>([]);
   const [flyoutMenu, setFlyoutMenu] = useState<string | null>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
@@ -150,10 +150,11 @@ export function Sidebar() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Close flyout on route change
+  // Close flyout and mobile sidebar on route change
   useEffect(() => {
     setFlyoutMenu(null);
-  }, [location.pathname]);
+    setMobileSidebarOpen(false);
+  }, [location.pathname, setMobileSidebarOpen]);
 
   // Responsive Sidebar auto-collapse hook
   useEffect(() => {
@@ -267,23 +268,44 @@ export function Sidebar() {
   };
 
   return (
-    <aside
-      className={cn(
-        'fixed left-0 top-0 h-screen bg-gradient-sidebar border-r border-border z-40 flex flex-col transition-all duration-300',
-        collapsed ? 'w-[var(--sidebar-collapsed)]' : 'w-[var(--sidebar-width)]'
+    <>
+      {/* Mobile Backdrop Overlay */}
+      {mobileSidebarOpen && (
+        <div
+          onClick={() => setMobileSidebarOpen(false)}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden animate-in fade-in duration-200"
+        />
       )}
-    >
-      {/* Logo */}
-      <div className="flex items-center gap-3 px-4 h-[var(--topbar-height)] border-b border-border/50 shrink-0">
-        <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center shrink-0 bg-emerald-950/40 border border-emerald-500/20">
-          <img src={amoraLogo} alt="Amora" className="w-full h-full object-contain p-0.5" onError={(e) => { e.currentTarget.src = './amora-logo.png'; }} />
-        </div>
-        {!collapsed && (
-          <span className="text-base font-black tracking-wider uppercase truncate text-slate-900 dark:text-white">
-            {user?.restaurant?.name || 'AMORA'}
-          </span>
+
+      <aside
+        className={cn(
+          'fixed left-0 top-0 h-screen bg-gradient-sidebar border-r border-border z-50 md:z-40 flex flex-col transition-all duration-300',
+          // Hidden off-screen on mobile unless mobileSidebarOpen is true. Always visible on desktop.
+          mobileSidebarOpen ? 'translate-x-0 w-[var(--sidebar-width)] shadow-2xl' : '-translate-x-full md:translate-x-0',
+          collapsed ? 'md:w-[var(--sidebar-collapsed)]' : 'md:w-[var(--sidebar-width)]'
         )}
-      </div>
+      >
+        {/* Logo and Mobile Close */}
+        <div className="flex items-center justify-between px-4 h-[var(--topbar-height)] border-b border-border/50 shrink-0">
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center shrink-0 bg-emerald-950/40 border border-emerald-500/20">
+              <img src={amoraLogo} alt="Amora" className="w-full h-full object-contain p-0.5" onError={(e) => { e.currentTarget.src = './amora-logo.png'; }} />
+            </div>
+            {(!collapsed || mobileSidebarOpen) && (
+              <span className="text-base font-black tracking-wider uppercase truncate text-slate-900 dark:text-white">
+                {user?.restaurant?.name || 'AMORA'}
+              </span>
+            )}
+          </div>
+          {/* Mobile close button (X) */}
+          <button
+            onClick={() => setMobileSidebarOpen(false)}
+            aria-label="Close navigation menu"
+            className="md:hidden p-1.5 text-text-muted hover:text-text-primary hover:bg-bg-hover rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
       {/* Nav */}
       <nav ref={navRef} className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5 custom-scrollbar">
@@ -438,14 +460,15 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* Collapse Toggle */}
+      {/* Collapse Toggle (Desktop only) */}
       <button
         onClick={setCollapsed}
-        className="flex items-center justify-center h-10 border-t border-border/50 text-text-muted hover:text-text-primary transition-colors shrink-0"
+        className="hidden md:flex items-center justify-center h-10 border-t border-border/50 text-text-muted hover:text-text-primary transition-colors shrink-0"
         title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
         {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
       </button>
     </aside>
+  </>
   );
 }

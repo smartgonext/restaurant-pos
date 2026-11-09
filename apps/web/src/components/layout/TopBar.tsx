@@ -1,12 +1,13 @@
 import {
   Sun, Moon, Bell, Search, Globe, User, LogOut, ChevronDown, Monitor,
   Layout, MonitorCheck, Building2, Landmark, Check, ShoppingBag, Utensils,
-  AlertTriangle, Trash2, CheckCheck, X
+  AlertTriangle, Trash2, CheckCheck, X, Menu
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { useThemeStore } from '@/stores/themeStore';
+import { useLayoutStore } from '@/stores/layoutStore';
 import { useNotificationStore, NotificationItem } from '@/stores/notificationStore';
 import { cn, getInitials, formatCurrency } from '@/lib/utils';
 import api from '@/lib/api';
@@ -29,6 +30,7 @@ const LANGUAGES = [
 export function TopBar() {
   const { user, logout } = useAuthStore();
   const { theme, toggleTheme } = useThemeStore();
+  const { toggleMobileSidebar } = useLayoutStore();
   const { i18n } = useTranslation();
   const navigate = useNavigate();
 
@@ -155,17 +157,28 @@ export function TopBar() {
   return (
     <>
       <header className="h-[var(--topbar-height)] bg-bg-secondary/80 backdrop-blur-xl border-b border-border flex items-center justify-between px-3 sm:px-6 sticky top-0 z-30">
-        {/* Search */}
-        <div className="relative w-36 sm:w-64">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
-          <input
-            type="text"
-            placeholder="Search..."
-            className="glass-input w-full pl-9 sm:pl-10 text-xs h-8"
-          />
-          <kbd className="hidden sm:inline-block absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-text-muted bg-bg-tertiary px-1.5 py-0.5 rounded border border-border">
-            ⌘K
-          </kbd>
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Mobile hamburger menu (three lines ☰) */}
+          <button
+            onClick={toggleMobileSidebar}
+            aria-label="Toggle Navigation Menu"
+            className="md:hidden p-2 -ml-1.5 text-text-primary hover:bg-bg-hover rounded-lg transition-colors flex items-center justify-center shrink-0"
+          >
+            <Menu className="w-5 h-5 text-text-primary" />
+          </button>
+
+          {/* Search */}
+          <div className="relative w-36 sm:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+            <input
+              type="text"
+              placeholder="Search..."
+              className="glass-input w-full pl-9 sm:pl-10 text-xs h-8"
+            />
+            <kbd className="hidden sm:inline-block absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-text-muted bg-bg-tertiary px-1.5 py-0.5 rounded border border-border">
+              ⌘K
+            </kbd>
+          </div>
         </div>
 
         {/* Right side */}
