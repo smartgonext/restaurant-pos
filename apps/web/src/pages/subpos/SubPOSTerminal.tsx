@@ -2011,10 +2011,14 @@ export default function SubPOSTerminal() {
     },
   });
 
-  const presentToCustomer = async () => {
+  const presentToCustomer = async (tokenOverride?: any) => {
     const activeRid = user?.restaurant?.id || (terminal as any)?.restaurantId || (billSettings as any)?.restaurantId || '';
     const ridParam = activeRid ? `rid=${encodeURIComponent(String(activeRid))}` : '';
-    const displayUrl = `/admin/customer-display${ridParam ? `?${ridParam}` : ''}`;
+    const token = tokenOverride ?? loadedToken ?? lastToken;
+    const tokenNum = token?.tokenNumber;
+    const displayUrl = tokenNum
+      ? `/admin/customer-display?token=${tokenNum}${ridParam ? `&${ridParam}` : ''}`
+      : `/admin/customer-display${ridParam ? `?${ridParam}` : ''}`;
 
     // Electron: use IPC to open dedicated customer display window
     const electron = (window as any).electron || (window as any).electronAPI;
@@ -2057,9 +2061,32 @@ export default function SubPOSTerminal() {
       displayWindowRef.current.location.href = finalUrl;
       displayWindowRef.current.focus();
     } else {
-      const newTab = window.open(finalUrl, '_blank');
-      if (newTab) {
-        displayWindowRef.current = newTab;
+      // In dual-screen Extend mode, open popup on the secondary extended monitor
+      let targetLeft = window.screen.availWidth || 1920;
+      let targetTop = 0;
+      let targetWidth = 1280;
+      let targetHeight = 800;
+
+      // Chrome/Edge Multi-Screen Window Management API
+      try {
+        if ('getScreenDetails' in window) {
+          const screenDetails = await (window as any).getScreenDetails();
+          const secondary = screenDetails?.screens?.find((s: any) => s !== screenDetails.currentScreen);
+          if (secondary) {
+            targetLeft = secondary.availLeft;
+            targetTop = secondary.availTop;
+            targetWidth = secondary.availWidth;
+            targetHeight = secondary.availHeight;
+          }
+        }
+      } catch {
+        // Fallback to offset left
+      }
+
+      const windowFeatures = `left=${targetLeft},top=${targetTop},width=${targetWidth},height=${targetHeight},menubar=no,toolbar=no,location=no,status=no,resizable=yes`;
+      const newWindow = window.open(finalUrl, 'CustomerFacingDisplay', windowFeatures);
+      if (newWindow) {
+        displayWindowRef.current = newWindow;
       } else {
         window.location.href = finalUrl;
       }
@@ -2068,7 +2095,10 @@ export default function SubPOSTerminal() {
     isPresentingRef.current = true;
     setIsCustomerDisplayActive(true);
     sessionStorage.setItem('subpos_is_presenting', 'true');
-    toast.success('Customer display opened', { duration: 2000 });
+    toast.success(
+      tokenNum ? `Bill #${tokenNum} presented on customer display` : 'Customer screen opened on secondary monitor',
+      { duration: 2500 }
+    );
   };
 
   // Auto Broadcast Live Cart to Customer Display
