@@ -92,6 +92,7 @@ model Restaurant {
  erpSyncConfig ErpSyncConfig?
  erpAppliedDispatches ErpAppliedDispatch[]
  deliveryExecutives DeliveryExecutive[]
+ cakeOrders CakeOrder[]
 }
 
 model Subscription {
@@ -1591,4 +1592,35 @@ model ErpAppliedDispatch {
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
   @@unique([restaurantId, dispatchId])
+}
+
+model CakeOrder {
+  id                 Int       @id @default(autoincrement())
+  restaurantId       Int
+  orderNumber        String    @unique
+  customerName       String
+  customerPhone      String
+  deliveryDate       DateTime
+  deliveryTime       String
+  flavor             String
+  weightKg           Decimal   @default(1.0)
+  shape              String    @default("Round")
+  isEggless          Boolean   @default(false)
+  tierCount          Int       @default(1)
+  messageOnCake      String?
+  notes              String?
+  photoUrl           String?
+  totalPrice         Decimal
+  advancePaid        Decimal
+  balanceDue         Decimal
+  advancePaymentMode String    @default("Cash")
+  balancePaymentMode String?
+  status             String    @default("ADVANCE_PAID")
+  erpSyncStatus      String    @default("PENDING")
+  erpOrderId         Int?
+  billNumber         String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  restaurant         Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 }

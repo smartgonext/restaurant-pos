@@ -20,7 +20,8 @@ import {
   Calendar,
   Zap,
   Edit3,
-  Barcode
+  Barcode,
+  Receipt
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { formatCurrency, formatDateTime, cn } from '@/lib/utils';
@@ -222,7 +223,7 @@ export default function RestaurantDashboard() {
         </div>
 
         {/* Professional Stats Row */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 sm:gap-4">
           {[
             { 
               label: dateRange === 'Today' ? "Today's Orders" : dateRange === 'Yesterday' ? "Yesterday's Orders" : `Orders (${periodLabel})`, 
@@ -237,6 +238,14 @@ export default function RestaurantDashboard() {
               change: stats.revenueChange, 
               icon: DollarSign, 
               color: 'emerald' 
+            },
+            { 
+              label: dateRange === 'Today' ? "Token Sales" : `Token Sales (${periodLabel})`, 
+              val: formatCurrency(stats.tokenValue ?? stats.tokenStats?.paidValue ?? stats.bakery?.tokenValue ?? 0), 
+              change: stats.tokenStats?.tokenValueChange, 
+              subtext: `${stats.tokenStats?.paidCount ?? stats.bakery?.tokensPaid ?? 0} Paid • ${stats.tokenStats?.openCount ?? stats.bakery?.tokensPending ?? 0} Open`,
+              icon: Receipt, 
+              color: 'violet' 
             },
             { 
               label: "Total Stock Value", 
@@ -278,7 +287,12 @@ export default function RestaurantDashboard() {
                   <div data-testid={`stat-value-${slug}`} className="text-xl font-black text-text-primary leading-none mb-1.5">{s.val}</div>
                   {s.change !== undefined && (
                     <div className={cn("text-[8px] font-black flex items-center gap-1", s.change >= 0 ? "text-success" : "text-danger")}>
-                      {s.change >= 0 ? '↑' : '↓'} {Math.abs(s.change).toFixed ? Math.abs(s.change).toFixed(1) : Math.abs(s.change)}% <span className="opacity-40 text-text-muted font-normal ml-1 whitespace-nowrap">vs Previous Period</span>
+                      {s.change >= 0 ? '↑' : '↓'} {Math.abs(s.change).toFixed ? Math.abs(s.change).toFixed(1) : Math.abs(s.change)}% <span className="opacity-40 text-text-muted font-normal ml-1 whitespace-nowrap">vs Prev</span>
+                    </div>
+                  )}
+                  {s.subtext && (
+                    <div className="text-[8px] font-bold text-violet-400 mt-0.5 truncate">
+                      {s.subtext}
                     </div>
                   )}
                 </div>
@@ -289,6 +303,93 @@ export default function RestaurantDashboard() {
               </div>
             );
           })}
+        </div>
+
+        {/* ── 🎟️ LIVE TOKEN COMMAND & VALUE HUB ── */}
+        <div data-testid="token-value-hub" className="bg-gradient-to-r from-[#17192b] via-[#141624] to-[#121320] border border-violet-500/30 rounded-xl p-4 sm:p-5 shadow-lg relative overflow-hidden">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 rounded-xl bg-violet-500/15 text-violet-400 border border-violet-500/25 shrink-0 shadow-inner">
+                <Receipt size={22} className="text-violet-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-black text-text-primary uppercase tracking-tight flex items-center gap-2">
+                    <span>Token & Counter POS Value</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  </h3>
+                  <span className="text-[9px] bg-violet-500/20 text-violet-300 border border-violet-500/30 font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                    {periodLabel}
+                  </span>
+                </div>
+                <p className="text-[10px] text-text-muted font-bold mt-0.5">
+                  Live Bakery & POS Token revenue, active tokens and counter balance
+                </p>
+              </div>
+            </div>
+
+            {/* Metric pills */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 flex-1 lg:max-w-2xl">
+              <div className="bg-bg-secondary/80 border border-border/60 rounded-xl p-2.5 flex flex-col justify-between">
+                <span className="text-[9px] font-black uppercase text-text-muted tracking-wider">Paid Token Value</span>
+                <span className="text-base sm:text-lg font-black text-emerald-400 mt-1">
+                  {formatCurrency(stats.tokenValue ?? stats.tokenStats?.paidValue ?? stats.bakery?.tokenValue ?? 0)}
+                </span>
+                <span className="text-[9px] text-text-muted font-bold mt-0.5">
+                  {stats.tokenStats?.paidCount ?? stats.bakery?.tokensPaid ?? 0} Completed Bills
+                </span>
+              </div>
+
+              <div className="bg-bg-secondary/80 border border-border/60 rounded-xl p-2.5 flex flex-col justify-between">
+                <span className="text-[9px] font-black uppercase text-text-muted tracking-wider">Pending / Open Value</span>
+                <span className="text-base sm:text-lg font-black text-amber-400 mt-1">
+                  {formatCurrency(stats.openTokenValue ?? stats.tokenStats?.openValue ?? 0)}
+                </span>
+                <span className="text-[9px] text-text-muted font-bold mt-0.5">
+                  {stats.tokenStats?.openCount ?? stats.bakery?.tokensPending ?? 0} Awaiting Payment
+                </span>
+              </div>
+
+              <div className="bg-bg-secondary/80 border border-border/60 rounded-xl p-2.5 flex flex-col justify-between">
+                <span className="text-[9px] font-black uppercase text-text-muted tracking-wider">Total Generated Value</span>
+                <span className="text-base sm:text-lg font-black text-text-primary mt-1">
+                  {formatCurrency(stats.totalTokenValue ?? stats.tokenStats?.totalValue ?? 0)}
+                </span>
+                <span className="text-[9px] text-text-muted font-bold mt-0.5">
+                  {stats.tokenStats?.totalCount ?? stats.bakery?.tokensToday ?? 0} Total Tokens
+                </span>
+              </div>
+
+              <div className="bg-bg-secondary/80 border border-border/60 rounded-xl p-2.5 flex flex-col justify-between">
+                <span className="text-[9px] font-black uppercase text-text-muted tracking-wider">Avg. Token Value</span>
+                <span className="text-base sm:text-lg font-black text-blue-400 mt-1">
+                  {formatCurrency(stats.tokenStats?.avgTokenValue || 0)}
+                </span>
+                <span className="text-[9px] text-text-muted font-bold mt-0.5">
+                  Per Completed Order
+                </span>
+              </div>
+            </div>
+
+            {/* Quick POS launch buttons */}
+            <div className="flex items-center gap-2 self-start lg:self-center shrink-0">
+              <Button 
+                size="sm"
+                className="bg-violet-600 hover:bg-violet-500 text-white font-black text-[10px] uppercase tracking-wider px-3.5 py-2 shadow-md shadow-violet-600/20"
+                onClick={() => navigate('/admin/mainpos')}
+              >
+                MainPOS
+              </Button>
+              <Button 
+                size="sm"
+                variant="secondary"
+                className="border-violet-500/30 text-violet-300 hover:bg-violet-500/10 font-black text-[10px] uppercase tracking-wider px-3.5 py-2"
+                onClick={() => navigate('/admin/subpos')}
+              >
+                SubPOS
+              </Button>
+            </div>
+          </div>
         </div>
 
         {/* Bakery Specific: Branch & Stock Row */}

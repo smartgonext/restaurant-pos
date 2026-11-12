@@ -2039,6 +2039,241 @@ export async function mainposRoutes(app) {
 
     app.post('/tables/:id/close', closeTableHandler);
     app.post('/restaurant/tables/:id/close', closeTableHandler);
+
+    // ── Cake Orders (Custom Booking from MainPOS -> Live Bakery ERP Sync) ──
+    app.post('/cake-orders', { preHandler: [mainposAuth] }, async (req, reply) => {
+        try {
+            const restaurantId = req.restaurantId;
+            const b = req.body || {};
+
+            const customerName = String(b.customerName || b.customer_name || 'Customer').trim();
+            const customerPhone = String(b.customerPhone || b.customer_phone || '').trim();
+            const deliveryDateStr = b.deliveryDate || b.delivery_date;
+            if (!deliveryDateStr) {
+                return reply.status(400).send({ success: false, error: 'deliveryDate is required' });
+            }
+
+            const deliveryDate = new Date(deliveryDateStr);
+            const deliveryTime = String(b.deliveryTime || b.delivery_time || '17:00').trim();
+            const flavor = String(b.flavor || 'Custom Flavor').trim();
+            const weightKg = Number(b.weightKg || b.weight || 1.0);
+            const shape = String(b.shape || 'Round').trim();
+            const isEggless = Boolean(b.isEggless || b.is_eggless || false);
+            const tierCount = Number(b.tierCount || b.tier_count || 1);
+            const messageOnCake = b.messageOnCake || b.message_on_cake || null;
+            const notes = b.notes || null;
+            const photoUrl = b.photoUrl || b.photo_url || null;
+
+            const totalPrice = Number(b.totalPrice || b.total_price || 0);
+            const advancePaid = Number(b.advancePaid || b.advance_paid || 0);
+            const balanceDue = Number(b.balanceDue !== undefined ? b.balanceDue : (totalPrice - advancePaid));
+            const advancePaymentMode = String(b.advancePaymentMode || b.advance_payment_mode || 'Cash').trim();
+
+            const dateCode = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            const randomCode = Math.floor(1000 + Math.random() * 9000);
+            const orderNumber = b.orderNumber || `CK-${dateCode}-${randomCode}`;
+
+            const cakeOrder = await prisma.cakeOrder.create({
+                data: {
+                    restaurantId,
+                    orderNumber,
+                    customerName,
+                    customerPhone,
+                    deliveryDate,
+                    deliveryTime,
+                    flavor,
+                    weightKg,
+                    shape,
+                    isEggless,
+                    tierCount,
+                    messageOnCake,
+                    notes,
+                    photoUrl,
+                    totalPrice,
+                    advancePaid,
+                    balanceDue,
+                    advancePaymentMode,
+                    status: 'ADVANCE_PAID',
+                    erpSyncStatus: 'PENDING'
+                }
+            });
+
+            // Asynchronously sync to Bakery ERP if configured
+            (async () => {
+                try {
+                    const erpConfig = await prisma.erpSyncConfig.findUnique({ where: { restaurantId } });
+                    if (erpConfig && erpConfig.baseUrl && erpConfig.apiKey) {
+                        let erpBase = erpConfig.baseUrl.replace(/\/+$/, '');
+                        if (!erpBase.includes('/api/v1')) erpBase += '/api/v1';
+                        const erpUrl = `${erpBase}/store/cake-orders`;
+
+                        const res = await fetch(erpUrl, {
+                            method: 'POST',
+                            headers: {
+                                'X-API-Key': erpConfig.apiKey,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                order_number: cakeOrder.orderNumber,
+                                restaurant_order_id: cakeOrder.id,
+                                customer_name: cakeOrder.customerName,
+                                customer_phone: cakeOrder.customerPhone,
+                                delivery_date: cakeOrder.deliveryDate.toISOString().slice(0, 10),
+                                delivery_time: cakeOrder.deliveryTime,
+                                flavor: cakeOrder.flavor,
+                                weight_kg: Number(cakeOrder.weightKg),
+                                shape: cakeOrder.shape,
+                                is_eggless: cakeOrder.isEggless,
+                                tier_count: cakeOrder.tierCount,
+                                message_on_cake: cakeOrder.messageOnCake,
+                                notes: cakeOrder.notes,
+                                photo_url: cakeOrder.photoUrl,
+                                total_price: Number(cakeOrder.totalPrice),
+                                advance_paid: Number(cakeOrder.advancePaid),
+                                balance_amount: Number(cakeOrder.balanceDue),
+                                advance_payment_mode: cakeOrder.advancePaymentMode
+                            })
+                        });
+
+                        if (res.ok) {
+                            const payload = await res.json();
+                            const erpData = payload?.data || {};
+                            await prisma.cakeOrder.update({
+                                where: { id: cakeOrder.id },
+                                data: {
+                                    erpSyncStatus: 'SYNCED',
+                                    erpOrderId: erpData.id || null
+                                }
+                            });
+                        }
+                    }
+                } catch (e) {
+                    app.log.error(`[CakeOrders] Sync to Bakery ERP failed: ${e.message}`);
+                }
+            })();
+
+            emitToRestaurant(restaurantId, 'cake-order:new', cakeOrder);
+            return { success: true, data: cakeOrder };
+        } catch (err) {
+            return reply.status(500).send({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    app.get('/cake-orders', { preHandler: [mainposAuth] }, async (req, reply) => {
+        try {
+            const restaurantId = req.restaurantId;
+            const { status, search, deliveryDate } = req.query || {};
+
+            const where = { restaurantId };
+            if (status) {
+                if (status === 'active') {
+                    where.status = { notIn: ['COMPLETED', 'CANCELLED'] };
+                } else {
+                    where.status = status;
+                }
+            }
+
+            if (deliveryDate) {
+                const d = new Date(deliveryDate);
+                const nextDay = new Date(d);
+                nextDay.setDate(nextDay.getDate() + 1);
+                where.deliveryDate = {
+                    gte: d,
+                    lt: nextDay
+                };
+            }
+
+            if (search) {
+                const s = String(search).trim();
+                where.OR = [
+                    { orderNumber: { contains: s } },
+                    { customerName: { contains: s } },
+                    { customerPhone: { contains: s } }
+                ];
+            }
+
+            const orders = await prisma.cakeOrder.findMany({
+                where,
+                orderBy: [{ deliveryDate: 'asc' }, { createdAt: 'desc' }]
+            });
+
+            return { success: true, data: orders };
+        } catch (err) {
+            return reply.status(500).send({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    app.get('/cake-orders/:id', { preHandler: [mainposAuth] }, async (req, reply) => {
+        try {
+            const restaurantId = req.restaurantId;
+            const id = Number(req.params.id);
+            const order = await prisma.cakeOrder.findFirst({
+                where: { id, restaurantId }
+            });
+            if (!order) {
+                return reply.status(404).send({ success: false, error: 'Cake order not found' });
+            }
+            return { success: true, data: order };
+        } catch (err) {
+            return reply.status(500).send({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    app.post('/cake-orders/:id/settle', { preHandler: [mainposAuth] }, async (req, reply) => {
+        try {
+            const restaurantId = req.restaurantId;
+            const id = Number(req.params.id);
+            const { balancePaymentMode, billNumber } = req.body || {};
+
+            const existing = await prisma.cakeOrder.findFirst({
+                where: { id, restaurantId }
+            });
+            if (!existing) {
+                return reply.status(404).send({ success: false, error: 'Cake order not found' });
+            }
+
+            const finalBillNum = billNumber || `BILL-${Date.now().toString().slice(-6)}`;
+            const updated = await prisma.cakeOrder.update({
+                where: { id },
+                data: {
+                    status: 'COMPLETED',
+                    balancePaymentMode: balancePaymentMode || 'Cash',
+                    billNumber: finalBillNum,
+                    balanceDue: 0
+                }
+            });
+
+            // Notify Bakery ERP of settlement
+            (async () => {
+                try {
+                    const erpConfig = await prisma.erpSyncConfig.findUnique({ where: { restaurantId } });
+                    if (erpConfig && erpConfig.baseUrl && erpConfig.apiKey) {
+                        let erpBase = erpConfig.baseUrl.replace(/\/+$/, '');
+                        if (!erpBase.includes('/api/v1')) erpBase += '/api/v1';
+                        const ref = updated.erpOrderId || updated.orderNumber;
+                        await fetch(`${erpBase}/store/cake-orders/${ref}/delivered`, {
+                            method: 'POST',
+                            headers: {
+                                'X-API-Key': erpConfig.apiKey,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                bill_number: finalBillNum,
+                                balance_payment_mode: balancePaymentMode || 'Cash'
+                            })
+                        });
+                    }
+                } catch (e) {
+                    app.log.error(`[CakeOrders] Deliver notification to ERP failed: ${e.message}`);
+                }
+            })();
+
+            emitToRestaurant(restaurantId, 'cake-order:completed', updated);
+            return { success: true, data: updated };
+        } catch (err) {
+            return reply.status(500).send({ success: false, error: err?.message || String(err) });
+        }
+    });
 }
 // ── Stock auto-deduction (internal, not exported as route) ──
 async function deductStockForToken(tokenId, restaurantId, prisma) {

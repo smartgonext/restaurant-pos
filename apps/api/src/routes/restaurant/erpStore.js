@@ -777,4 +777,162 @@ export async function erpStoreRoutes(app) {
       return reply.status(500).send({ success: false, error: err.message });
     }
   });
+
+  // GET /catalog-export - Export all restaurant items (own-barcode & KOT production items)
+  app.get('/catalog-export', async (request, reply) => {
+    const restaurantId = request.restaurantId;
+    try {
+      const menuItems = await prisma.menuItem.findMany({
+        where: { restaurantId, isDeleted: false },
+        include: {
+          category: true,
+          inventoryItem: true
+        }
+      });
+
+      const invItems = await prisma.inventoryItem.findMany({
+        where: { restaurantId },
+        include: {
+          category: true,
+          unit: true
+        }
+      });
+
+      const catalogMap = new Map();
+
+      // Process Menu Items (including KOT items like puffs, momos, etc.)
+      for (const m of menuItems) {
+        const key = m.inventoryItemId ? `inv-${m.inventoryItemId}` : `menu-${m.id}`;
+        catalogMap.set(key, {
+          restaurant_item_id: key,
+          name: m.name,
+          sku: m.inventoryItem?.sku || `MENU-${m.id}`,
+          barcode: m.inventoryItem?.barcode || m.productQR || null,
+          category_name: m.category?.name || 'General',
+          is_kot_item: !!m.category?.isKOTEnabled,
+          selling_price: Number(m.price || 0),
+          cost_price: Number(m.inventoryItem?.costPerUnit || 0),
+          current_stock: Number(m.inventoryItem?.currentStock || 0)
+        });
+      }
+
+      // Process raw or retail Inventory Items not mapped to menu items
+      for (const inv of invItems) {
+        const key = `inv-${inv.id}`;
+        if (!catalogMap.has(key)) {
+          catalogMap.set(key, {
+            restaurant_item_id: key,
+            name: inv.name,
+            sku: inv.sku || `INV-${inv.id}`,
+            barcode: inv.barcode || null,
+            category_name: inv.category?.name || 'Retail Inventory',
+            is_kot_item: false,
+            selling_price: Number(inv.costPerUnit || 0) * 1.25, // default markup if no menu item
+            cost_price: Number(inv.costPerUnit || 0),
+            current_stock: Number(inv.currentStock || 0)
+          });
+        }
+      }
+
+      const catalog = Array.from(catalogMap.values());
+      return { success: true, count: catalog.length, data: catalog };
+    } catch (err) {
+      app.log.error(`[CatalogExport] Error: ${err.message}`);
+      return reply.status(500).send({ success: false, error: err.message });
+    }
+  });
+
+  // POST /push-catalog-to-erp - Push full restaurant catalog to Bakery ERP
+  app.post('/push-catalog-to-erp', async (request, reply) => {
+    const restaurantId = request.restaurantId;
+    const config = await prisma.erpSyncConfig.findUnique({
+      where: { restaurantId }
+    });
+
+    if (!config || !config.baseUrl || !config.apiKey) {
+      return reply.status(400).send({ success: false, error: 'ERP configuration is missing' });
+    }
+
+    try {
+      // 1. Gather catalog
+      const menuItems = await prisma.menuItem.findMany({
+        where: { restaurantId, isDeleted: false },
+        include: {
+          category: true,
+          inventoryItem: true
+        }
+      });
+
+      const invItems = await prisma.inventoryItem.findMany({
+        where: { restaurantId },
+        include: {
+          category: true,
+          unit: true
+        }
+      });
+
+      const catalogMap = new Map();
+
+      for (const m of menuItems) {
+        const key = m.inventoryItemId ? `inv-${m.inventoryItemId}` : `menu-${m.id}`;
+        catalogMap.set(key, {
+          restaurant_item_id: key,
+          name: m.name,
+          sku: m.inventoryItem?.sku || `MENU-${m.id}`,
+          barcode: m.inventoryItem?.barcode || m.productQR || null,
+          category_name: m.category?.name || 'General',
+          is_kot_item: !!m.category?.isKOTEnabled,
+          selling_price: Number(m.price || 0),
+          cost_price: Number(m.inventoryItem?.costPerUnit || 0),
+          current_stock: Number(m.inventoryItem?.currentStock || 0)
+        });
+      }
+
+      for (const inv of invItems) {
+        const key = `inv-${inv.id}`;
+        if (!catalogMap.has(key)) {
+          catalogMap.set(key, {
+            restaurant_item_id: key,
+            name: inv.name,
+            sku: inv.sku || `INV-${inv.id}`,
+            barcode: inv.barcode || null,
+            category_name: inv.category?.name || 'Retail Inventory',
+            is_kot_item: false,
+            selling_price: Number(inv.costPerUnit || 0) * 1.25,
+            cost_price: Number(inv.costPerUnit || 0),
+            current_stock: Number(inv.currentStock || 0)
+          });
+        }
+      }
+
+      const catalog = Array.from(catalogMap.values());
+
+      // 2. Push to ERP
+      const url = getErpUrl(config.baseUrl, '/store/sync-restaurant-catalog');
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'X-API-Key': config.apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ items: catalog })
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        return reply.status(res.status).send({ success: false, error: `ERP responded HTTP ${res.status}: ${errorText}` });
+      }
+
+      const erpResult = await res.json();
+      return {
+        success: true,
+        message: 'Successfully synchronized catalog to Bakery ERP',
+        pushed_count: catalog.length,
+        erp_result: erpResult
+      };
+    } catch (err) {
+      app.log.error(`[PushCatalog] Error: ${err.message}`);
+      return reply.status(500).send({ success: false, error: err.message });
+    }
+  });
 }

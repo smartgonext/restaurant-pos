@@ -42,6 +42,8 @@ import { API_BASE_URL, SERVER_BASE_URL } from '@/lib/config';
 import { useTouchLongPress } from '@/hooks/useTouchLongPress';
 import { ItemOptionsModal } from '@/components/modals/ItemOptionsModal';
 import { ReorderableCategoryBar } from '@/components/pos/ReorderableCategoryBar';
+import { CakeOrderModal } from '@/components/modals/CakeOrderModal';
+import { CakePickupsModal } from '@/components/modals/CakePickupsModal';
 
 const SERVER_URL = SERVER_BASE_URL;
 
@@ -916,6 +918,10 @@ export default function MainPOSTerminal() {
     refetchInterval: 30000,
   });
   const isRegisterOpen = Boolean(registerSession && registerSession.status === 'open');
+
+  // Advance Cake Booking & Pickups
+  const [isCakeOrderModalOpen, setIsCakeOrderModalOpen] = useState(false);
+  const [isCakePickupsModalOpen, setIsCakePickupsModalOpen] = useState(false);
 
   // Listen for realtime orders, waiter requests, KOT updates
   useRealtimeOrders();
@@ -3340,6 +3346,34 @@ export default function MainPOSTerminal() {
             <span>🖥️ Customer Screen</span>
             <span className={cn("w-2 h-2 rounded-full", isCustomerDisplayActive ? "bg-emerald-400 animate-pulse" : "bg-gray-400")} />
           </button>
+
+          {/* Advance Cake Booking */}
+          <button
+            onClick={() => setIsCakeOrderModalOpen(true)}
+            className={cn(
+              "py-1.5 px-2.5 rounded-md text-[11px] font-bold uppercase transition flex items-center gap-1.5 border shadow-xs",
+              isLight
+                ? "bg-pink-100 hover:bg-pink-200 text-pink-800 border-pink-300"
+                : "bg-pink-950/60 hover:bg-pink-900/80 text-pink-300 border-pink-700/80"
+            )}
+            title="Book Advance Cake Order & Send Live Alert to Bakery Kitchen"
+          >
+            <span>🎂 Cake Order</span>
+          </button>
+
+          {/* Cake Pickups & Settlement */}
+          <button
+            onClick={() => setIsCakePickupsModalOpen(true)}
+            className={cn(
+              "py-1.5 px-2.5 rounded-md text-[11px] font-bold uppercase transition flex items-center gap-1.5 border shadow-xs",
+              isLight
+                ? "bg-purple-100 hover:bg-purple-200 text-purple-800 border-purple-300"
+                : "bg-purple-950/60 hover:bg-purple-900/80 text-purple-300 border-purple-700/80"
+            )}
+            title="View Cake Orders, Collect Balance & Take Bill"
+          >
+            <span>🎂 Pickups</span>
+          </button>
           <span className={cn(
             "px-2 py-1 text-[10px] font-bold uppercase rounded-md border tracking-wider",
             isLight ? "bg-slate-100 text-slate-700 border-slate-300" : "bg-gray-800 text-gray-300 border-gray-700"
@@ -5024,6 +5058,18 @@ export default function MainPOSTerminal() {
       <CashRegisterModal
         isOpen={isRegisterModalOpen}
         onClose={() => setIsRegisterModalOpen(false)}
+      />
+
+      <CakeOrderModal
+        isOpen={isCakeOrderModalOpen}
+        onClose={() => setIsCakeOrderModalOpen(false)}
+        isLight={isLight}
+      />
+
+      <CakePickupsModal
+        isOpen={isCakePickupsModalOpen}
+        onClose={() => setIsCakePickupsModalOpen(false)}
+        isLight={isLight}
       />
 
       {optionsModalTarget && (

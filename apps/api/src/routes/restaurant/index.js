@@ -1448,7 +1448,9 @@ export async function restaurantRoutes(app) {
             chartTokenDataResults,
             tokensInPeriod,
             tokensPaidInPeriod,
-            tokenItemsInPeriod
+            tokenItemsInPeriod,
+            periodTokenTotalAgg,
+            periodTokenOpenAgg
         ] = await Promise.all([
             prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
             prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: { not: 'cancelled' } } }),
@@ -1502,7 +1504,9 @@ export async function restaurantRoutes(app) {
             prisma.bakeryTokenItem.findMany({
                 where: { token: { restaurantId }, addedAt: { gte: startOfPeriod, lte: endOfPeriod }, isRemoved: false },
                 select: { menuItemName: true, quantity: true }
-            })
+            }),
+            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
+            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { in: ['open', 'pending'] } } })
         ]);
 
         const periodOrders = periodOrdersCount + periodTokensCount;
@@ -1511,6 +1515,12 @@ export async function restaurantRoutes(app) {
         const prevPeriodRevenue = Number(prevPeriodRevenueAgg._sum.total || 0) + Number(prevPeriodTokenRevenueAgg._sum.total || 0);
         const periodExpense = Number(periodExpenseAgg?._sum?.amount || 0);
         const periodProfit = periodRevenue - periodExpense;
+
+        const tokenTotalValue = Number(periodTokenTotalAgg?._sum?.total || 0);
+        const tokenPaidValue = Number(periodTokenRevenueAgg._sum.total || 0);
+        const tokenOpenValue = Number(periodTokenOpenAgg?._sum?.total || 0);
+        const prevTokenPaidValue = Number(prevPeriodTokenRevenueAgg._sum.total || 0);
+        const tokenValueChange = calculateChange(tokenPaidValue, prevTokenPaidValue);
 
         const monthRevenue = Number(monthRevenueAgg._sum.total || 0) + Number(monthTokenRevenueAgg._sum.total || 0);
         const previousMonthRevenue = Number(previousMonthRevenueAgg._sum.total || 0) + Number(previousMonthTokenRevenueAgg._sum.total || 0);
@@ -1606,10 +1616,27 @@ export async function restaurantRoutes(app) {
                 })),
                 paymentMethods,
                 chartData,
+                tokenValue: tokenPaidValue,
+                totalTokenValue: tokenTotalValue,
+                openTokenValue: tokenOpenValue,
+                tokenStats: {
+                    totalValue: tokenTotalValue,
+                    paidValue: tokenPaidValue,
+                    openValue: tokenOpenValue,
+                    tokenValueChange,
+                    totalCount: tokensInPeriod,
+                    paidCount: tokensPaidInPeriod,
+                    openCount: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
+                    monthValue: Number(monthTokenRevenueAgg._sum.total || 0),
+                    avgTokenValue: tokensPaidInPeriod > 0 ? (tokenPaidValue / tokensPaidInPeriod) : 0,
+                },
                 bakery: {
                     tokensToday: tokensInPeriod,
                     tokensPaid: tokensPaidInPeriod,
                     tokensPending: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
+                    tokenValue: tokenPaidValue,
+                    totalTokenValue: tokenTotalValue,
+                    openTokenValue: tokenOpenValue,
                     topItems,
                 },
                 totalStockValue,
