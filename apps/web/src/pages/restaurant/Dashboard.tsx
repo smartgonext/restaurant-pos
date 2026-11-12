@@ -372,7 +372,7 @@ export default function RestaurantDashboard() {
             </div>
 
             {/* Quick POS launch buttons */}
-            <div className="flex items-center gap-2 self-start lg:self-center shrink-0">
+            {/* <div className="flex items-center gap-2 self-start lg:self-center shrink-0">
               <Button 
                 size="sm"
                 className="bg-violet-600 hover:bg-violet-500 text-white font-black text-[10px] uppercase tracking-wider px-3.5 py-2 shadow-md shadow-violet-600/20"
@@ -388,7 +388,7 @@ export default function RestaurantDashboard() {
               >
                 SubPOS
               </Button>
-            </div>
+            </div> */}
           </div>
         </div>
 
