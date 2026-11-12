@@ -1374,275 +1374,283 @@ export async function restaurantRoutes(app) {
         }
     });
     // ── Dashboard ──
-    app.get('/dashboard', async (request) => {
-        const restaurantId = request.restaurantId;
-        const now = new Date();
-        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000);
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const startOfPreviousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    app.get('/dashboard', async (request, reply) => {
+        try {
+            const restaurantId = request.restaurantId;
+            const now = new Date();
+            const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000);
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+            const startOfPreviousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
-        // Date filter handling: supports dateFrom & dateTo (e.g. today, yesterday, custom range)
-        let startOfPeriod = startOfToday;
-        let endOfPeriod = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000 - 1);
-        let isCustomRange = false;
+            const calculateChange = (current, previous) => {
+                if (!previous || previous === 0)
+                    return current > 0 ? 100 : 0;
+                return ((current - previous) / previous) * 100;
+            };
 
-        if (request.query?.dateFrom && request.query?.dateTo) {
-            const parsedStart = new Date(request.query.dateFrom);
-            const parsedEnd = new Date(request.query.dateTo);
-            if (!isNaN(parsedStart.getTime()) && !isNaN(parsedEnd.getTime())) {
-                startOfPeriod = parsedStart;
-                endOfPeriod = parsedEnd;
-                isCustomRange = true;
+            // Date filter handling: supports dateFrom & dateTo (e.g. today, yesterday, custom range)
+            let startOfPeriod = startOfToday;
+            let endOfPeriod = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000 - 1);
+            let isCustomRange = false;
+
+            if (request.query?.dateFrom && request.query?.dateTo) {
+                const parsedStart = new Date(request.query.dateFrom);
+                const parsedEnd = new Date(request.query.dateTo);
+                if (!isNaN(parsedStart.getTime()) && !isNaN(parsedEnd.getTime())) {
+                    startOfPeriod = parsedStart;
+                    endOfPeriod = parsedEnd;
+                    isCustomRange = true;
+                }
             }
-        }
 
-        const durationMs = Math.max(endOfPeriod.getTime() - startOfPeriod.getTime(), 24 * 60 * 60 * 1000);
-        const startOfPrevPeriod = new Date(startOfPeriod.getTime() - durationMs);
-        const endOfPrevPeriod = new Date(startOfPeriod.getTime() - 1);
+            const durationMs = Math.max(endOfPeriod.getTime() - startOfPeriod.getTime(), 24 * 60 * 60 * 1000);
+            const startOfPrevPeriod = new Date(startOfPeriod.getTime() - durationMs);
+            const endOfPrevPeriod = new Date(startOfPeriod.getTime() - 1);
 
-        // Chart range (days) can be requested via ?days=7|14|30 (default: 7)
-        const days = Math.min(Math.max(Number(request.query?.days) || 7, 7), 30);
-        const labels = [];
-        const chartOrderQueries = [];
-        const chartTokenQueries = [];
-        for (let i = days - 1; i >= 0; i--) {
-            const date = new Date(startOfToday.getTime() - i * 24 * 60 * 60 * 1000);
-            const nextDate = new Date(date.getTime() + 24 * 60 * 60 * 1000);
-            labels.push(date.toLocaleDateString('en-US', { day: '2-digit', month: 'short' }));
-            chartOrderQueries.push(prisma.order.aggregate({
-                _sum: { total: true },
-                where: { restaurantId, type: { not: 'token' }, createdAt: { gte: date, lt: nextDate }, status: 'paid' }
-            }));
-            chartTokenQueries.push(prisma.bakeryToken.aggregate({
-                _sum: { total: true },
-                where: { restaurantId, createdAt: { gte: date, lt: nextDate }, status: 'paid' }
-            }));
-        }
+            // Chart range (days) can be requested via ?days=7|14|30 (default: 7)
+            const days = Math.min(Math.max(Number(request.query?.days) || 7, 7), 30);
+            const labels = [];
+            const chartOrderQueries = [];
+            const chartTokenQueries = [];
+            for (let i = days - 1; i >= 0; i--) {
+                const date = new Date(startOfToday.getTime() - i * 24 * 60 * 60 * 1000);
+                const nextDate = new Date(date.getTime() + 24 * 60 * 60 * 1000);
+                labels.push(date.toLocaleDateString('en-US', { day: '2-digit', month: 'short' }));
+                chartOrderQueries.push(prisma.order.aggregate({
+                    _sum: { total: true },
+                    where: { restaurantId, type: { not: 'token' }, createdAt: { gte: date, lt: nextDate }, status: 'paid' }
+                }));
+                chartTokenQueries.push(prisma.bakeryToken.aggregate({
+                    _sum: { total: true },
+                    where: { restaurantId, createdAt: { gte: date, lt: nextDate }, status: 'paid' }
+                }));
+            }
 
-        const [
-            periodOrdersCount,
-            prevPeriodOrdersCount,
-            monthOrdersCount,
-            previousMonthOrdersCount,
-            periodTokensCount,
-            prevPeriodTokensCount,
-            monthTokensCount,
-            previousMonthTokensCount,
-            periodRevenueAgg,
-            prevPeriodRevenueAgg,
-            monthRevenueAgg,
-            previousMonthRevenueAgg,
-            periodTokenRevenueAgg,
-            prevPeriodTokenRevenueAgg,
-            monthTokenRevenueAgg,
-            previousMonthTokenRevenueAgg,
-            totalCustomers,
-            recentOrders,
-            orderPayments,
-            tokenPayments,
-            periodExpenseAgg,
-            monthExpenseAgg,
-            inventoryItems,
-            chartOrderDataResults,
-            chartTokenDataResults,
-            tokensInPeriod,
-            tokensPaidInPeriod,
-            tokenItemsInPeriod,
-            periodTokenTotalAgg,
-            periodTokenOpenAgg
-        ] = await Promise.all([
-            prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
-            prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: { not: 'cancelled' } } }),
-            prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfMonth }, status: { not: 'cancelled' } } }),
-            prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: { not: 'cancelled' } } }),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: { not: 'cancelled' } } }),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfMonth }, status: { not: 'cancelled' } } }),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: { not: 'cancelled' } } }),
-            prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: 'paid' } }),
-            prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: 'paid' } }),
-            prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfMonth }, status: 'paid' } }),
-            prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: 'paid' } }),
-            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: 'paid' } }),
-            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: 'paid' } }),
-            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfMonth }, status: 'paid' } }),
-            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: 'paid' } }),
-            prisma.customer.count({ where: { restaurantId } }),
-            prisma.order.findMany({
-                where: { restaurantId, type: { not: 'token' }, ...(isCustomRange ? { createdAt: { gte: startOfPeriod, lte: endOfPeriod } } : {}) },
-                include: {
-                    table: true,
-                    customer: true,
-                    staff: true,
-                    kots: {
-                        include: {
-                            items: {
-                                include: { menuItem: { select: { image: true } } }
+            const [
+                periodOrdersCount,
+                prevPeriodOrdersCount,
+                monthOrdersCount,
+                previousMonthOrdersCount,
+                periodTokensCount,
+                prevPeriodTokensCount,
+                monthTokensCount,
+                previousMonthTokensCount,
+                periodRevenueAgg,
+                prevPeriodRevenueAgg,
+                monthRevenueAgg,
+                previousMonthRevenueAgg,
+                periodTokenRevenueAgg,
+                prevPeriodTokenRevenueAgg,
+                monthTokenRevenueAgg,
+                previousMonthTokenRevenueAgg,
+                totalCustomers,
+                recentOrders,
+                orderPayments,
+                tokenPayments,
+                periodExpenseAgg,
+                monthExpenseAgg,
+                inventoryItems,
+                chartOrderDataResults,
+                chartTokenDataResults,
+                tokensInPeriod,
+                tokensPaidInPeriod,
+                tokenItemsInPeriod,
+                periodTokenTotalAgg,
+                periodTokenOpenAgg
+            ] = await Promise.all([
+                prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
+                prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: { not: 'cancelled' } } }),
+                prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfMonth }, status: { not: 'cancelled' } } }),
+                prisma.order.count({ where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: { not: 'cancelled' } } }),
+                prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
+                prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: { not: 'cancelled' } } }),
+                prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfMonth }, status: { not: 'cancelled' } } }),
+                prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: { not: 'cancelled' } } }),
+                prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: 'paid' } }),
+                prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: 'paid' } }),
+                prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfMonth }, status: 'paid' } }),
+                prisma.order.aggregate({ _sum: { total: true }, where: { restaurantId, type: { not: 'token' }, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: 'paid' } }),
+                prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: 'paid' } }),
+                prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPrevPeriod, lte: endOfPrevPeriod }, status: 'paid' } }),
+                prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfMonth }, status: 'paid' } }),
+                prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPreviousMonth, lt: startOfMonth }, status: 'paid' } }),
+                prisma.customer.count({ where: { restaurantId } }),
+                prisma.order.findMany({
+                    where: { restaurantId, type: { not: 'token' }, ...(isCustomRange ? { createdAt: { gte: startOfPeriod, lte: endOfPeriod } } : {}) },
+                    include: {
+                        table: true,
+                        customer: true,
+                        staff: true,
+                        kots: {
+                            include: {
+                                items: {
+                                    include: { menuItem: { select: { image: true } } }
+                                }
                             }
                         }
-                    }
-                },
-                orderBy: { createdAt: 'desc' },
-                take: 10,
-            }),
-            prisma.orderPayment.findMany({
-                where: { order: { restaurantId, type: { not: 'token' } }, paidAt: { gte: startOfPeriod, lte: endOfPeriod } },
-                select: { amount: true, method: true }
-            }),
-            prisma.bakeryTokenPayment.findMany({
-                where: { token: { restaurantId }, paidAt: { gte: startOfPeriod, lte: endOfPeriod } },
-                select: { amount: true, method: true }
-            }),
-            prisma.expense.aggregate({ _sum: { amount: true }, where: { restaurantId, expenseDate: { gte: startOfPeriod, lte: endOfPeriod } } }),
-            prisma.expense.aggregate({ _sum: { amount: true }, where: { restaurantId, expenseDate: { gte: startOfMonth } } }),
-            prisma.inventoryItem.findMany({ where: { restaurantId }, select: { id: true, name: true, currentStock: true, costPerUnit: true, thresholdQty: true, unit: { select: { symbol: true } } } }),
-            Promise.all(chartOrderQueries),
-            Promise.all(chartTokenQueries),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod } } }),
-            prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: 'paid' } }),
-            prisma.bakeryTokenItem.findMany({
-                where: { token: { restaurantId }, addedAt: { gte: startOfPeriod, lte: endOfPeriod }, isRemoved: false },
-                select: { menuItemName: true, quantity: true }
-            }),
-            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
-            prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { in: ['open', 'pending'] } } })
-        ]);
+                    },
+                    orderBy: { createdAt: 'desc' },
+                    take: 10,
+                }),
+                prisma.orderPayment.findMany({
+                    where: { order: { restaurantId, type: { not: 'token' } }, paidAt: { gte: startOfPeriod, lte: endOfPeriod } },
+                    select: { amount: true, method: true }
+                }),
+                prisma.bakeryTokenPayment.findMany({
+                    where: { token: { restaurantId }, paidAt: { gte: startOfPeriod, lte: endOfPeriod } },
+                    select: { amount: true, method: true }
+                }),
+                prisma.expense.aggregate({ _sum: { amount: true }, where: { restaurantId, expenseDate: { gte: startOfPeriod, lte: endOfPeriod } } }),
+                prisma.expense.aggregate({ _sum: { amount: true }, where: { restaurantId, expenseDate: { gte: startOfMonth } } }),
+                prisma.inventoryItem.findMany({ where: { restaurantId }, select: { id: true, name: true, currentStock: true, costPerUnit: true, thresholdQty: true, unit: { select: { symbol: true } } } }),
+                Promise.all(chartOrderQueries),
+                Promise.all(chartTokenQueries),
+                prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod } } }),
+                prisma.bakeryToken.count({ where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: 'paid' } }),
+                prisma.bakeryTokenItem.findMany({
+                    where: { token: { restaurantId }, addedAt: { gte: startOfPeriod, lte: endOfPeriod }, isRemoved: false },
+                    select: { menuItemName: true, quantity: true }
+                }),
+                prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { not: 'cancelled' } } }),
+                prisma.bakeryToken.aggregate({ _sum: { total: true }, where: { restaurantId, createdAt: { gte: startOfPeriod, lte: endOfPeriod }, status: { in: ['open', 'pending'] } } })
+            ]);
 
-        const periodOrders = periodOrdersCount + periodTokensCount;
-        const prevPeriodOrders = prevPeriodOrdersCount + prevPeriodTokensCount;
-        const periodRevenue = Number(periodRevenueAgg._sum.total || 0) + Number(periodTokenRevenueAgg._sum.total || 0);
-        const prevPeriodRevenue = Number(prevPeriodRevenueAgg._sum.total || 0) + Number(prevPeriodTokenRevenueAgg._sum.total || 0);
-        const periodExpense = Number(periodExpenseAgg?._sum?.amount || 0);
-        const periodProfit = periodRevenue - periodExpense;
+            const periodOrders = periodOrdersCount + periodTokensCount;
+            const prevPeriodOrders = prevPeriodOrdersCount + prevPeriodTokensCount;
+            const periodRevenue = Number(periodRevenueAgg?._sum?.total || 0) + Number(periodTokenRevenueAgg?._sum?.total || 0);
+            const prevPeriodRevenue = Number(prevPeriodRevenueAgg?._sum?.total || 0) + Number(prevPeriodTokenRevenueAgg?._sum?.total || 0);
+            const periodExpense = Number(periodExpenseAgg?._sum?.amount || 0);
+            const periodProfit = periodRevenue - periodExpense;
 
-        const tokenTotalValue = Number(periodTokenTotalAgg?._sum?.total || 0);
-        const tokenPaidValue = Number(periodTokenRevenueAgg._sum.total || 0);
-        const tokenOpenValue = Number(periodTokenOpenAgg?._sum?.total || 0);
-        const prevTokenPaidValue = Number(prevPeriodTokenRevenueAgg._sum.total || 0);
-        const tokenValueChange = calculateChange(tokenPaidValue, prevTokenPaidValue);
+            const tokenTotalValue = Number(periodTokenTotalAgg?._sum?.total || 0);
+            const tokenPaidValue = Number(periodTokenRevenueAgg?._sum?.total || 0);
+            const tokenOpenValue = Number(periodTokenOpenAgg?._sum?.total || 0);
+            const prevTokenPaidValue = Number(prevPeriodTokenRevenueAgg?._sum?.total || 0);
+            const tokenValueChange = calculateChange(tokenPaidValue, prevTokenPaidValue);
 
-        const monthRevenue = Number(monthRevenueAgg._sum.total || 0) + Number(monthTokenRevenueAgg._sum.total || 0);
-        const previousMonthRevenue = Number(previousMonthRevenueAgg._sum.total || 0) + Number(previousMonthTokenRevenueAgg._sum.total || 0);
-        const monthOrders = monthOrdersCount + monthTokensCount;
-        const previousMonthOrders = previousMonthOrdersCount + previousMonthTokensCount;
-        const monthExpense = Number(monthExpenseAgg?._sum?.amount || 0);
+            const monthRevenue = Number(monthRevenueAgg?._sum?.total || 0) + Number(monthTokenRevenueAgg?._sum?.total || 0);
+            const previousMonthRevenue = Number(previousMonthRevenueAgg?._sum?.total || 0) + Number(previousMonthTokenRevenueAgg?._sum?.total || 0);
+            const monthOrders = monthOrdersCount + monthTokensCount;
+            const previousMonthOrders = previousMonthOrdersCount + previousMonthTokensCount;
+            const monthExpense = Number(monthExpenseAgg?._sum?.amount || 0);
 
-        // compute total stock value and low-stock alerts from inventory items
-        const totalStockValue = (inventoryItems || []).reduce((acc, it) => {
-            const qty = Number(it.currentStock || 0);
-            const cost = Number(it.costPerUnit || 0);
-            return acc + qty * cost;
-        }, 0);
-        const lowStockAlerts = (inventoryItems || []).filter((it) => Number(it.currentStock || 0) <= Number(it.thresholdQty || 0)).map((it) => ({
-            id: it.id,
-            name: it.name,
-            currentStock: Number(it.currentStock || 0),
-            thresholdQty: Number(it.thresholdQty || 0),
-            unit: it.unit?.symbol || '',
-            costPerUnit: Number(it.costPerUnit || 0),
-            totalValue: Number(it.currentStock || 0) * Number(it.costPerUnit || 0)
-        }));
+            // compute total stock value and low-stock alerts from inventory items
+            const totalStockValue = (inventoryItems || []).reduce((acc, it) => {
+                const qty = Number(it.currentStock || 0);
+                const cost = Number(it.costPerUnit || 0);
+                return acc + qty * cost;
+            }, 0);
+            const lowStockAlerts = (inventoryItems || []).filter((it) => Number(it.currentStock || 0) <= Number(it.thresholdQty || 0)).map((it) => ({
+                id: it.id,
+                name: it.name,
+                currentStock: Number(it.currentStock || 0),
+                thresholdQty: Number(it.thresholdQty || 0),
+                unit: it.unit?.symbol || '',
+                costPerUnit: Number(it.costPerUnit || 0),
+                totalValue: Number(it.currentStock || 0) * Number(it.costPerUnit || 0)
+            }));
 
-        const profitLossOverview = {
-            today: { revenue: periodRevenue, expenses: periodExpense, profit: periodProfit },
-            period: { revenue: periodRevenue, expenses: periodExpense, profit: periodProfit },
-            month: { revenue: monthRevenue, expenses: monthExpense, profit: monthRevenue - monthExpense }
-        };
+            const profitLossOverview = {
+                today: { revenue: periodRevenue, expenses: periodExpense, profit: periodProfit },
+                period: { revenue: periodRevenue, expenses: periodExpense, profit: periodProfit },
+                month: { revenue: monthRevenue, expenses: monthExpense, profit: monthRevenue - monthExpense }
+            };
 
-        const calculateChange = (current, previous) => {
-            if (previous === 0)
-                return current > 0 ? 100 : 0;
-            return ((current - previous) / previous) * 100;
-        };
+            const paymentMethodsMap = {};
+            for (const p of [...orderPayments, ...tokenPayments]) {
+                if (!paymentMethodsMap[p.method])
+                    paymentMethodsMap[p.method] = 0;
+                paymentMethodsMap[p.method] += Number(p.amount);
+            }
+            const paymentMethods = Object.keys(paymentMethodsMap).map(method => ({
+                name: method.charAt(0).toUpperCase() + method.slice(1),
+                value: paymentMethodsMap[method]
+            }));
 
-        const paymentMethodsMap = {};
-        for (const p of [...orderPayments, ...tokenPayments]) {
-            if (!paymentMethodsMap[p.method])
-                paymentMethodsMap[p.method] = 0;
-            paymentMethodsMap[p.method] += Number(p.amount);
-        }
-        const paymentMethods = Object.keys(paymentMethodsMap).map(method => ({
-            name: method.charAt(0).toUpperCase() + method.slice(1),
-            value: paymentMethodsMap[method]
-        }));
+            // Compute top items for the period
+            const itemCounts = {};
+            for (const item of (tokenItemsInPeriod || [])) {
+                const name = item.menuItemName || 'Item';
+                itemCounts[name] = (itemCounts[name] || 0) + Number(item.quantity || 1);
+            }
+            const topItems = Object.entries(itemCounts)
+                .map(([name, count]) => ({ name, count: Math.round(count) }))
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 5);
 
-        // Compute top items for the period
-        const itemCounts = {};
-        for (const item of (tokenItemsInPeriod || [])) {
-            const name = item.menuItemName || 'Item';
-            itemCounts[name] = (itemCounts[name] || 0) + Number(item.quantity || 1);
-        }
-        const topItems = Object.entries(itemCounts)
-            .map(([name, count]) => ({ name, count: Math.round(count) }))
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 5);
+            const chartData = chartOrderDataResults.map((res, i) => ({
+                label: labels[i],
+                value: Number(res?._sum?.total || 0) + Number(chartTokenDataResults[i]?._sum?.total || 0)
+            }));
 
-        const chartData = chartOrderDataResults.map((res, i) => ({
-            label: labels[i],
-            value: Number(res._sum.total || 0) + Number(chartTokenDataResults[i]?._sum?.total || 0)
-        }));
-
-        return {
-            success: true,
-            data: {
-                todayOrders: periodOrders,
-                periodOrders,
-                ordersChange: calculateChange(periodOrders, prevPeriodOrders),
-                todayRevenue: periodRevenue,
-                periodRevenue,
-                revenueChange: calculateChange(periodRevenue, prevPeriodRevenue),
-                expenses: { today: periodExpense, period: periodExpense, month: monthExpense },
-                profitLossOverview,
-                monthRevenue,
-                monthRevenueChange: calculateChange(monthRevenue, previousMonthRevenue),
-                salesThisMonth: monthRevenue,
-                monthOrders,
-                previousMonthOrders,
-                totalCustomers,
-                customersChange: 0,
-                recentOrders: recentOrders.map((o) => ({
-                    id: o.id,
-                    orderNumber: o.orderNumber,
-                    type: o.type.replace('_', ' '),
-                    table: o.table,
-                    items: o.kots?.reduce((total, kot) => total + (kot.items?.length || 0), 0) || 0,
-                    itemImages: o.kots?.flatMap((kot) => kot.items?.map((i) => i.menuItem?.image).filter(Boolean)).slice(0, 3) || [],
-                    waiter: o.staff?.name || 'Walk-in',
-                    status: o.status,
-                    total: Number(o.total),
-                    createdAt: o.createdAt,
-                    customer: o.customer?.name
-                })),
-                paymentMethods,
-                chartData,
-                tokenValue: tokenPaidValue,
-                totalTokenValue: tokenTotalValue,
-                openTokenValue: tokenOpenValue,
-                tokenStats: {
-                    totalValue: tokenTotalValue,
-                    paidValue: tokenPaidValue,
-                    openValue: tokenOpenValue,
-                    tokenValueChange,
-                    totalCount: tokensInPeriod,
-                    paidCount: tokensPaidInPeriod,
-                    openCount: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
-                    monthValue: Number(monthTokenRevenueAgg._sum.total || 0),
-                    avgTokenValue: tokensPaidInPeriod > 0 ? (tokenPaidValue / tokensPaidInPeriod) : 0,
-                },
-                bakery: {
-                    tokensToday: tokensInPeriod,
-                    tokensPaid: tokensPaidInPeriod,
-                    tokensPending: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
+            return {
+                success: true,
+                data: {
+                    todayOrders: periodOrders,
+                    periodOrders,
+                    ordersChange: calculateChange(periodOrders, prevPeriodOrders),
+                    todayRevenue: periodRevenue,
+                    periodRevenue,
+                    revenueChange: calculateChange(periodRevenue, prevPeriodRevenue),
+                    expenses: { today: periodExpense, period: periodExpense, month: monthExpense },
+                    profitLossOverview,
+                    monthRevenue,
+                    monthRevenueChange: calculateChange(monthRevenue, previousMonthRevenue),
+                    salesThisMonth: monthRevenue,
+                    monthOrders,
+                    previousMonthOrders,
+                    totalCustomers,
+                    customersChange: 0,
+                    recentOrders: recentOrders.map((o) => ({
+                        id: o.id,
+                        orderNumber: o.orderNumber,
+                        type: (o.type || 'dine_in').replace('_', ' '),
+                        table: o.table,
+                        items: o.kots?.reduce((total, kot) => total + (kot.items?.length || 0), 0) || 0,
+                        itemImages: o.kots?.flatMap((kot) => kot.items?.map((i) => i.menuItem?.image).filter(Boolean)).slice(0, 3) || [],
+                        waiter: o.staff?.name || 'Walk-in',
+                        status: o.status,
+                        total: Number(o.total),
+                        createdAt: o.createdAt,
+                        customer: o.customer?.name
+                    })),
+                    paymentMethods,
+                    chartData,
                     tokenValue: tokenPaidValue,
                     totalTokenValue: tokenTotalValue,
                     openTokenValue: tokenOpenValue,
-                    topItems,
+                    tokenStats: {
+                        totalValue: tokenTotalValue,
+                        paidValue: tokenPaidValue,
+                        openValue: tokenOpenValue,
+                        tokenValueChange,
+                        totalCount: tokensInPeriod,
+                        paidCount: tokensPaidInPeriod,
+                        openCount: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
+                        monthValue: Number(monthTokenRevenueAgg?._sum?.total || 0),
+                        avgTokenValue: tokensPaidInPeriod > 0 ? (tokenPaidValue / tokensPaidInPeriod) : 0,
+                    },
+                    bakery: {
+                        tokensToday: tokensInPeriod,
+                        tokensPaid: tokensPaidInPeriod,
+                        tokensPending: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
+                        tokenValue: tokenPaidValue,
+                        totalTokenValue: tokenTotalValue,
+                        openTokenValue: tokenOpenValue,
+                        topItems,
+                    },
+                    totalStockValue,
+                    lowStockAlerts,
                 },
-                totalStockValue,
-                lowStockAlerts,
-            },
-        };
+            };
+        } catch (err) {
+            request.log.error(err, 'Failed to generate restaurant dashboard data');
+            return reply.status(500).send({
+                success: false,
+                error: err.message || 'Internal Server Error'
+            });
+        }
     });
     // ── Menu Management ──
     app.get('/menus', async (request) => {
