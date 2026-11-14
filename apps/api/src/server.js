@@ -4,6 +4,7 @@ import { setupSocketIO } from './plugins/socket.js';
 import fs from 'fs';
 import path from 'path';
 import { startCloudSyncWorker } from './utils/cloudSync.js';
+import { startErpAutoSyncWorker } from './utils/erpAutoSync.js';
 import { LanPeerDiscovery } from './utils/lanPeerDiscovery.js';
 import { prewarmPosCache } from './utils/posItemsCache.js';
 
@@ -155,6 +156,7 @@ async function start() {
 
   // Start background cloud database sync engine
   startCloudSyncWorker(app);
+  startErpAutoSyncWorker(app);
 
   // ── Start LAN Peer Discovery & Floating Master ──────────────────────────
   try {

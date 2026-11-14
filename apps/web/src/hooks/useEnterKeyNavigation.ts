@@ -42,9 +42,10 @@ export function useEnterKeyNavigation() {
         'cancel', 'close', 'dismiss', 'back', 'no', 'exit',
         'dark', 'light', 'theme', 'register', 'open register',
         'mode', 'refresh', 'sync', 'fullscreen', 'display',
-        'auto', 'auto generate', 'ai photo', 'lib', 'discard'
+        'auto', 'auto generate', 'ai photo', 'lib', 'discard',
+        'reprint', 'reprint last token', 'reprint token', 'reprint bill', 'return'
       ];
-      const matchesText = skipWords.some((word) => text === word || ariaLabel.includes(word) || title.includes(word));
+      const matchesText = skipWords.some((word) => text === word || ariaLabel.includes(word) || title.includes(word) || text.startsWith('reprint'));
       const hasCloseIcon = Boolean(el.querySelector('svg.lucide-x') || el.querySelector('svg[data-icon="x"]'));
       const matchesClass = className.includes('cancel') || className.includes('close-btn');
 
@@ -165,7 +166,7 @@ export function useEnterKeyNavigation() {
         el.tagName === 'BUTTON' && !isSecondaryOrCancel(el) && !el.hasAttribute('disabled')
       );
 
-      // Locate primary submit button (Save / Create / Submit / OK / Print / Update / Craft / Primary style)
+      // Locate primary submit button (Generate / Save / Create / Submit / OK / Print / Update / Craft / Primary style)
       const primaryButton =
         container.querySelector<HTMLButtonElement>('[data-submit-btn="true"], button[type="submit"]:not([disabled])') ||
         actionButtons.find((btn) => {
@@ -176,13 +177,16 @@ export function useEnterKeyNavigation() {
             type === 'submit' ||
             btn.hasAttribute('data-submit-btn') ||
             btn.getAttribute('data-submit-btn') === 'true' ||
-            /^(save|submit|create|add|ok|print|settle|update|confirm|pay|proceed|done|craft)/i.test(txt) ||
+            /^(generate|save|submit|create|add|ok|print|settle|update|confirm|pay|proceed|done|craft)/i.test(txt) ||
             cls.includes('bg-[#a87fff]') ||
+            cls.includes('bg-[#7c5cfc]') ||
             cls.includes('btn-primary') ||
             cls.includes('bg-primary') ||
             cls.includes('bg-blue-600')
           );
-        }) || actionButtons[actionButtons.length - 1];
+        }) ||
+        actionButtons.find((btn) => !isSecondaryOrCancel(btn) && !btn.textContent?.toLowerCase().includes('reprint')) ||
+        actionButtons[actionButtons.length - 1];
 
       // Handle Shift + Enter (Reverse navigation)
       if (e.shiftKey) {

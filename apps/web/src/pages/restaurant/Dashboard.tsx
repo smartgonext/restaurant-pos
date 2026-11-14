@@ -3,14 +3,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useMemo } from 'react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { 
-  ShoppingCart, 
-  Users, 
-  TrendingUp, 
-  DollarSign, 
-  Clock, 
-  CheckCircle2, 
-  MoreHorizontal, 
+import {
+  ShoppingCart,
+  Users,
+  TrendingUp,
+  DollarSign,
+  Clock,
+  CheckCircle2,
+  MoreHorizontal,
   Package,
   ChevronRight,
   Flame,
@@ -64,12 +64,17 @@ export default function RestaurantDashboard() {
   const { data: stats, isLoading, refetch } = useQuery({
     queryKey: ['restaurant-dashboard', dateFrom, dateTo, chartRange],
     queryFn: () => api.get('/restaurant/dashboard', { params: { dateFrom, dateTo, days: chartRange } }).then((r) => r.data.data ?? {}),
+    staleTime: 30000,
+    gcTime: 5 * 60 * 1000,
+    placeholderData: (prev) => prev,
     refetchInterval: 30000,
   });
 
   const { data: recentInstantItems = [] } = useQuery<any[]>({
     queryKey: ['recent-instant-items'],
     queryFn: () => api.get('/restaurant/menu-items/recent-instant').then((r) => r.data?.data || []),
+    staleTime: 15000,
+    placeholderData: (prev) => prev,
     refetchInterval: 15000,
   });
 
@@ -108,7 +113,7 @@ export default function RestaurantDashboard() {
     };
 
     const handleUpdateOrder = () => {
-        queryClient.invalidateQueries({ queryKey: ['restaurant-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['restaurant-dashboard'] });
     };
 
     socket.on('new_order', handleNewOrder);
@@ -118,8 +123,8 @@ export default function RestaurantDashboard() {
     socket.on('purchaseOrder.received', () => queryClient.invalidateQueries({ queryKey: ['inventory-summary'] }));
 
     return () => {
-        socket.off('new_order', handleNewOrder);
-        socket.off('order_updated', handleUpdateOrder);
+      socket.off('new_order', handleNewOrder);
+      socket.off('order_updated', handleUpdateOrder);
       socket.off('inventory.item.updated', () => queryClient.invalidateQueries({ queryKey: ['inventory-summary'] }));
       socket.off('purchaseOrder.received', () => queryClient.invalidateQueries({ queryKey: ['inventory-summary'] }));
     };
@@ -132,14 +137,14 @@ export default function RestaurantDashboard() {
 
   if (isLoading) return (
     <div className="animate-pulse space-y-6 p-8">
-        <div className="h-4 bg-bg-secondary w-32 rounded mb-4"></div>
-        <div className="grid grid-cols-4 gap-4">
-            {[1,2,3,4].map(i => <div key={i} className="h-24 bg-bg-secondary rounded-xl"></div>)}
-        </div>
-        <div className="h-64 bg-bg-secondary rounded-xl"></div>
+      <div className="h-4 bg-bg-secondary w-32 rounded mb-4"></div>
+      <div className="grid grid-cols-4 gap-4">
+        {[1, 2, 3, 4].map(i => <div key={i} className="h-24 bg-bg-secondary rounded-xl"></div>)}
+      </div>
+      <div className="h-64 bg-bg-secondary rounded-xl"></div>
     </div>
   );
-  
+
   if (!stats) return null;
 
   return (
@@ -147,7 +152,7 @@ export default function RestaurantDashboard() {
 
       {/* Main Content Space - Statistics & Chart (Full width) */}
       <div className="w-full flex flex-col gap-4 pb-6">
-        
+
         {/* Top Section: Title, Date Filter & Quick Action */}
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
           <div>
@@ -199,7 +204,7 @@ export default function RestaurantDashboard() {
               </div>
             )}
 
-            <Button 
+            <Button
               size="sm"
               className="bg-blue-600 hover:bg-blue-500 text-white font-black uppercase text-[10px] shadow-lg shadow-blue-500/20 px-5 py-2.5"
               icon={<Plus className="w-4 h-4" />}
@@ -225,52 +230,52 @@ export default function RestaurantDashboard() {
         {/* Professional Stats Row */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 sm:gap-4">
           {[
-            { 
-              label: dateRange === 'Today' ? "Today's Orders" : dateRange === 'Yesterday' ? "Yesterday's Orders" : `Orders (${periodLabel})`, 
-              val: stats.periodOrders ?? stats.todayOrders, 
-              change: stats.ordersChange, 
-              icon: ShoppingCart, 
-              color: 'blue' 
+            {
+              label: dateRange === 'Today' ? "Today's Orders" : dateRange === 'Yesterday' ? "Yesterday's Orders" : `Orders (${periodLabel})`,
+              val: stats.periodOrders ?? stats.todayOrders,
+              change: stats.ordersChange,
+              icon: ShoppingCart,
+              color: 'blue'
             },
-            { 
-              label: dateRange === 'Today' ? "Today's Sales" : dateRange === 'Yesterday' ? "Yesterday's Sales" : `Sales (${periodLabel})`, 
-              val: formatCurrency(stats.periodRevenue ?? stats.todayRevenue), 
-              change: stats.revenueChange, 
-              icon: DollarSign, 
-              color: 'emerald' 
+            {
+              label: dateRange === 'Today' ? "Today's Sales" : dateRange === 'Yesterday' ? "Yesterday's Sales" : `Sales (${periodLabel})`,
+              val: formatCurrency(stats.periodRevenue ?? stats.todayRevenue),
+              change: stats.revenueChange,
+              icon: DollarSign,
+              color: 'emerald'
             },
-            { 
-              label: dateRange === 'Today' ? "Token Sales" : `Token Sales (${periodLabel})`, 
-              val: formatCurrency(stats.tokenValue ?? stats.tokenStats?.paidValue ?? stats.bakery?.tokenValue ?? 0), 
-              change: stats.tokenStats?.tokenValueChange, 
+            {
+              label: dateRange === 'Today' ? "Token Sales" : `Token Sales (${periodLabel})`,
+              val: formatCurrency(stats.tokenValue ?? stats.tokenStats?.paidValue ?? stats.bakery?.tokenValue ?? 0),
+              change: stats.tokenStats?.tokenValueChange,
               subtext: `${stats.tokenStats?.paidCount ?? stats.bakery?.tokensPaid ?? 0} Paid • ${stats.tokenStats?.openCount ?? stats.bakery?.tokensPending ?? 0} Open`,
-              icon: Receipt, 
-              color: 'violet' 
+              icon: Receipt,
+              color: 'violet'
             },
-            { 
-              label: "Total Stock Value", 
-              val: formatCurrency(stats.totalStockValue || 0), 
-              icon: Package, 
-              color: 'teal' 
+            {
+              label: "Total Stock Value",
+              val: formatCurrency(stats.totalStockValue || 0),
+              icon: Package,
+              color: 'teal'
             },
-            { 
-              label: dateRange === 'Today' ? "Expenses (Today)" : dateRange === 'Yesterday' ? "Expenses (Yesterday)" : `Expenses (${periodLabel})`, 
-              val: formatCurrency(stats.expenses?.period ?? stats.expenses?.today ?? 0), 
-              icon: Flame, 
-              color: 'rose' 
+            {
+              label: dateRange === 'Today' ? "Expenses (Today)" : dateRange === 'Yesterday' ? "Expenses (Yesterday)" : `Expenses (${periodLabel})`,
+              val: formatCurrency(stats.expenses?.period ?? stats.expenses?.today ?? 0),
+              icon: Flame,
+              color: 'rose'
             },
-            { 
-              label: dateRange === 'Today' ? "Profit (Today)" : dateRange === 'Yesterday' ? "Profit (Yesterday)" : `Profit (${periodLabel})`, 
-              val: formatCurrency(stats.profitLossOverview?.period?.profit ?? stats.profitLossOverview?.today?.profit ?? 0), 
-              change: ((stats.profitLossOverview?.period?.profit ?? stats.profitLossOverview?.today?.profit ?? 0) >= 0) ? 1 : -1, 
-              icon: TrendingUp, 
-              color: 'emerald' 
+            {
+              label: dateRange === 'Today' ? "Profit (Today)" : dateRange === 'Yesterday' ? "Profit (Yesterday)" : `Profit (${periodLabel})`,
+              val: formatCurrency(stats.profitLossOverview?.period?.profit ?? stats.profitLossOverview?.today?.profit ?? 0),
+              change: ((stats.profitLossOverview?.period?.profit ?? stats.profitLossOverview?.today?.profit ?? 0) >= 0) ? 1 : -1,
+              icon: TrendingUp,
+              color: 'emerald'
             },
-            { 
-              label: "Low Stock Alerts", 
-              val: `${(stats.lowStockAlerts || []).length}`, 
-              icon: Package, 
-              color: 'red' 
+            {
+              label: "Low Stock Alerts",
+              val: `${(stats.lowStockAlerts || []).length}`,
+              icon: Package,
+              color: 'red'
             }
           ].map((s, i) => {
             const slug = s.label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -388,7 +393,7 @@ export default function RestaurantDashboard() {
               >
                 SubPOS
               </Button>
-            </div> */}
+            </div> */}ge
           </div>
         </div>
 
@@ -407,7 +412,7 @@ export default function RestaurantDashboard() {
             {(invSummary?.lowStock || []).length > 0 ? (
               <div data-testid="low-stock-grid" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {(invSummary?.lowStock || []).map((item: any, idx: number) => {
-                  const stockPercentage = item.thresholdQty > 0 
+                  const stockPercentage = item.thresholdQty > 0
                     ? Math.round((item.currentStock / item.thresholdQty) * 100)
                     : 0;
                   const isVeryLow = item.currentStock <= (item.thresholdQty * 0.25);
@@ -420,8 +425,8 @@ export default function RestaurantDashboard() {
                       className={cn(
                         'border-2 rounded-lg p-3 transition-all',
                         isCritical ? 'bg-red-950/40 border-red-500 shadow-lg shadow-red-500/20' :
-                        isVeryLow ? 'bg-orange-950/40 border-orange-500 shadow-lg shadow-orange-500/20' :
-                        'bg-yellow-950/40 border-yellow-500/50'
+                          isVeryLow ? 'bg-orange-950/40 border-orange-500 shadow-lg shadow-orange-500/20' :
+                            'bg-yellow-950/40 border-yellow-500/50'
                       )}
                     >
                       <div className="flex items-start justify-between mb-2">
@@ -429,8 +434,8 @@ export default function RestaurantDashboard() {
                           <h4 className={cn(
                             'font-bold text-[10px] uppercase tracking-tight truncate',
                             isCritical ? 'text-red-300' :
-                            isVeryLow ? 'text-orange-300' :
-                            'text-yellow-300'
+                              isVeryLow ? 'text-orange-300' :
+                                'text-yellow-300'
                           )}>
                             {item.name}
                           </h4>
@@ -441,8 +446,8 @@ export default function RestaurantDashboard() {
                         <div className={cn(
                           'px-2 py-1 rounded-md font-black text-[9px] flex-shrink-0 ml-2',
                           isCritical ? 'bg-red-600 text-white' :
-                          isVeryLow ? 'bg-orange-600 text-white' :
-                          'bg-yellow-600/60 text-white'
+                            isVeryLow ? 'bg-orange-600 text-white' :
+                              'bg-yellow-600/60 text-white'
                         )}>
                           {isCritical ? '⚠️ OUT' : isVeryLow ? '🔴 CRITICAL' : '🟡 LOW'}
                         </div>
@@ -468,8 +473,8 @@ export default function RestaurantDashboard() {
                             className={cn(
                               'h-full transition-all',
                               isCritical ? 'bg-red-600' :
-                              isVeryLow ? 'bg-orange-500' :
-                              'bg-yellow-500'
+                                isVeryLow ? 'bg-orange-500' :
+                                  'bg-yellow-500'
                             )}
                             style={{ width: `${Math.min(stockPercentage, 100)}%` }}
                           />
@@ -483,8 +488,8 @@ export default function RestaurantDashboard() {
                           <div className={cn(
                             'mt-2 px-2 py-1 rounded-lg text-[9px] font-bold text-center',
                             isCritical ? 'bg-red-600/30 text-red-200' :
-                            isVeryLow ? 'bg-orange-600/30 text-orange-200' :
-                            'bg-yellow-600/30 text-yellow-200'
+                              isVeryLow ? 'bg-orange-600/30 text-orange-200' :
+                                'bg-yellow-600/30 text-yellow-200'
                           )}>
                             Need {Math.ceil(item.thresholdQty - item.currentStock)} more units
                           </div>
@@ -561,10 +566,10 @@ export default function RestaurantDashboard() {
           {/* Top Selling Dishes - Professional Small Font Look */}
           <div className="bg-bg-secondary border border-border rounded-xl p-5 shadow-sm">
             <div className="flex items-center justify-between mb-5">
-                <h3 className="text-[10px] font-black text-text-primary uppercase tracking-[0.2em] flex items-center gap-2">
-                    <Flame className="w-3 h-3 text-orange-400" />
-                    Top Selling Dishes ({periodLabel})
-                </h3>
+              <h3 className="text-[10px] font-black text-text-primary uppercase tracking-[0.2em] flex items-center gap-2">
+                <Flame className="w-3 h-3 text-orange-400" />
+                Top Selling Dishes ({periodLabel})
+              </h3>
             </div>
             <div className="space-y-3">
               {(stats.bakery?.topItems || []).slice(0, 4).map((item: any, idx: number) => (

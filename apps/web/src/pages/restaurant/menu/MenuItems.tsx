@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
+import { useDebounce } from '@/hooks/useDebounce';
 import * as XLSX from 'xlsx';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -134,19 +135,21 @@ export default function MenuItems() {
     }
   }, [searchParams, location.state]);
 
+  const debouncedSearch = useDebounce(search, 300);
+
   const { data: items = [], isLoading, refetch } = useQuery<any[]>({
-    queryKey: ['menu-items', search, kotFilter, selectedCategory],
+    queryKey: ['menu-items', debouncedSearch, kotFilter, selectedCategory],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (search) params.set('search', search);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       if (kotFilter === 'kot') params.set('isKOT', 'true');
       else if (kotFilter === 'non') params.set('isKOT', 'false');
       if (selectedCategory && selectedCategory !== 'all') params.set('categoryId', selectedCategory);
       const qs = params.toString();
       return api.get(`/restaurant/menu-items${qs ? `?${qs}` : ''}`).then((r) => r.data.data);
     },
-    staleTime: 3 * 60 * 1000,
-    gcTime: 15 * 60 * 1000,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
     placeholderData: (prev) => prev,
   });
 
@@ -171,9 +174,32 @@ export default function MenuItems() {
   const { data: invItems = [], refetch: refetchInv } = useQuery({ 
     queryKey: ['inventory-items'], 
     queryFn: () => api.get('/restaurant/inventory/items').then(r => r.data.data),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
     placeholderData: (prev) => prev,
   });
+
+  // Fast O(1) inventory lookup maps for butter-smooth rendering
+  const invItemsById = useMemo(() => {
+    const map = new Map<number, any>();
+    if (Array.isArray(invItems)) {
+      for (let i = 0; i < invItems.length; i++) {
+        const item = invItems[i];
+        if (item.id) map.set(item.id, item);
+      }
+    }
+    return map;
+  }, [invItems]);
+
+  const invItemsByName = useMemo(() => {
+    const map = new Map<string, any>();
+    if (Array.isArray(invItems)) {
+      for (let i = 0; i < invItems.length; i++) {
+        const item = invItems[i];
+        if (item.name) map.set(item.name.trim().toLowerCase(), item);
+      }
+    }
+    return map;
+  }, [invItems]);
   const [invUnitId, setInvUnitId] = useState<number | null>(null);
   const [mrp, setMrp] = useState<string>('');
   const [purchaseRate, setPurchaseRate] = useState<string>('');
@@ -433,6 +459,58 @@ export default function MenuItems() {
     }
     setShowModal(true);
   };
+
+  // Global Barcode Scanner Listener: Scan barcode anywhere on Menu Items page to auto-open edit modal!
+  useEffect(() => {
+    let scanBuffer = '';
+    let lastKeyTime = 0;
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // If modal is open, don't intercept typing in inputs
+      if (showModal || showBulkModal || showBulkAIModal || showLibModal) return;
+
+      const now = Date.now();
+      if (now - lastKeyTime > 120) {
+        scanBuffer = '';
+      }
+      lastKeyTime = now;
+
+      if (e.key === 'Enter') {
+        const scannedCode = scanBuffer.trim();
+        scanBuffer = '';
+        if (scannedCode.length >= 2) {
+          e.preventDefault();
+          const targetCode = scannedCode.toLowerCase();
+          const matched = (items || []).find((it: any) => {
+            const pqr = String(it.productQR || '').trim().toLowerCase();
+            const bcode = String(it.barcode || '').trim().toLowerCase();
+            const invBcode = String(it.inventoryItem?.barcode || '').trim().toLowerCase();
+            const sku = String(it.inventoryItem?.sku || '').trim().toLowerCase();
+            if (pqr === targetCode || bcode === targetCode || invBcode === targetCode || sku === targetCode) {
+              return true;
+            }
+            if (Array.isArray(it.packOptions)) {
+              return it.packOptions.some((p: any) => String(p.productQR || '').trim().toLowerCase() === targetCode);
+            }
+            return false;
+          });
+
+          if (matched) {
+            handleOpenModal(matched);
+            toast.success(`⚡ Scanned "${matched.name}" — editing opened!`);
+          } else {
+            toast.error(`Barcode "${scannedCode}" not found in menu items.`);
+          }
+        }
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        scanBuffer += e.key;
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown, true);
+  }, [items, showModal, showBulkModal, showBulkAIModal, showLibModal, categories, invItems]);
+
   // Link modifier group to item
   const handleLinkModifier = async () => {
     if (!editingItem || !selectedModifier) return;
@@ -1342,7 +1420,7 @@ export default function MenuItems() {
                             </div>
                           );
                         } else {
-                          const linkedInv = item.inventoryItem || (Array.isArray(invItems) ? invItems.find((it: any) => it.id === item.inventoryItemId || (it.name && item.name && it.name.trim().toLowerCase() === item.name.trim().toLowerCase())) : null);
+                          const linkedInv = item.inventoryItem || (item.inventoryItemId ? invItemsById.get(Number(item.inventoryItemId)) : (item.name ? invItemsByName.get(String(item.name).trim().toLowerCase()) : null));
                           const rawStock = linkedInv?.currentStock;
                           const stockNum = rawStock != null && rawStock !== '' && !isNaN(Number(rawStock)) ? Number(rawStock) : null;
                           const threshold = Number(linkedInv?.thresholdQty ?? 5);

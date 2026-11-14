@@ -1373,10 +1373,18 @@ export async function restaurantRoutes(app) {
             return reply.status(400).send({ success: false, error: err?.message });
         }
     });
+    // ── In-memory Dashboard Stats Cache (15s TTL for lightning-fast loads) ──
+    const dashboardStatsCache = new Map();
+
     // ── Dashboard ──
     app.get('/dashboard', async (request, reply) => {
         try {
             const restaurantId = request.restaurantId;
+            const cacheKey = `${restaurantId}:${request.query?.days || '7'}:${request.query?.dateFrom || ''}:${request.query?.dateTo || ''}`;
+            const cached = dashboardStatsCache.get(cacheKey);
+            if (cached && (Date.now() - cached.timestamp < 15000)) {
+                return { success: true, data: cached.data };
+            }
             const now = new Date();
             const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000);
@@ -1584,65 +1592,74 @@ export async function restaurantRoutes(app) {
                 value: Number(res?._sum?.total || 0) + Number(chartTokenDataResults[i]?._sum?.total || 0)
             }));
 
-            return {
-                success: true,
-                data: {
-                    todayOrders: periodOrders,
-                    periodOrders,
-                    ordersChange: calculateChange(periodOrders, prevPeriodOrders),
-                    todayRevenue: periodRevenue,
-                    periodRevenue,
-                    revenueChange: calculateChange(periodRevenue, prevPeriodRevenue),
-                    expenses: { today: periodExpense, period: periodExpense, month: monthExpense },
-                    profitLossOverview,
-                    monthRevenue,
-                    monthRevenueChange: calculateChange(monthRevenue, previousMonthRevenue),
-                    salesThisMonth: monthRevenue,
-                    monthOrders,
-                    previousMonthOrders,
-                    totalCustomers,
-                    customersChange: 0,
-                    recentOrders: recentOrders.map((o) => ({
-                        id: o.id,
-                        orderNumber: o.orderNumber,
-                        type: (o.type || 'dine_in').replace('_', ' '),
-                        table: o.table,
-                        items: o.kots?.reduce((total, kot) => total + (kot.items?.length || 0), 0) || 0,
-                        itemImages: o.kots?.flatMap((kot) => kot.items?.map((i) => i.menuItem?.image).filter(Boolean)).slice(0, 3) || [],
-                        waiter: o.staff?.name || 'Walk-in',
-                        status: o.status,
-                        total: Number(o.total),
-                        createdAt: o.createdAt,
-                        customer: o.customer?.name
-                    })),
-                    paymentMethods,
-                    chartData,
+            const responsePayload = {
+                todayOrders: periodOrders,
+                periodOrders,
+                ordersChange: calculateChange(periodOrders, prevPeriodOrders),
+                todayRevenue: periodRevenue,
+                periodRevenue,
+                revenueChange: calculateChange(periodRevenue, prevPeriodRevenue),
+                expenses: { today: periodExpense, period: periodExpense, month: monthExpense },
+                profitLossOverview,
+                monthRevenue,
+                monthRevenueChange: calculateChange(monthRevenue, previousMonthRevenue),
+                salesThisMonth: monthRevenue,
+                monthOrders,
+                previousMonthOrders,
+                totalCustomers,
+                customersChange: 0,
+                recentOrders: recentOrders.map((o) => ({
+                    id: o.id,
+                    orderNumber: o.orderNumber,
+                    type: (o.type || 'dine_in').replace('_', ' '),
+                    table: o.table,
+                    items: o.kots?.reduce((total, kot) => total + (kot.items?.length || 0), 0) || 0,
+                    itemImages: o.kots?.flatMap((kot) => kot.items?.map((i) => i.menuItem?.image).filter(Boolean)).slice(0, 3) || [],
+                    waiter: o.staff?.name || 'Walk-in',
+                    status: o.status,
+                    total: Number(o.total),
+                    createdAt: o.createdAt,
+                    customer: o.customer?.name
+                })),
+                paymentMethods,
+                chartData,
+                tokenValue: tokenPaidValue,
+                totalTokenValue: tokenTotalValue,
+                openTokenValue: tokenOpenValue,
+                tokenStats: {
+                    totalValue: tokenTotalValue,
+                    paidValue: tokenPaidValue,
+                    openValue: tokenOpenValue,
+                    tokenValueChange,
+                    totalCount: tokensInPeriod,
+                    paidCount: tokensPaidInPeriod,
+                    openCount: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
+                    monthValue: Number(monthTokenRevenueAgg?._sum?.total || 0),
+                    avgTokenValue: tokensPaidInPeriod > 0 ? (tokenPaidValue / tokensPaidInPeriod) : 0,
+                },
+                bakery: {
+                    tokensToday: tokensInPeriod,
+                    tokensPaid: tokensPaidInPeriod,
+                    tokensPending: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
                     tokenValue: tokenPaidValue,
                     totalTokenValue: tokenTotalValue,
                     openTokenValue: tokenOpenValue,
-                    tokenStats: {
-                        totalValue: tokenTotalValue,
-                        paidValue: tokenPaidValue,
-                        openValue: tokenOpenValue,
-                        tokenValueChange,
-                        totalCount: tokensInPeriod,
-                        paidCount: tokensPaidInPeriod,
-                        openCount: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
-                        monthValue: Number(monthTokenRevenueAgg?._sum?.total || 0),
-                        avgTokenValue: tokensPaidInPeriod > 0 ? (tokenPaidValue / tokensPaidInPeriod) : 0,
-                    },
-                    bakery: {
-                        tokensToday: tokensInPeriod,
-                        tokensPaid: tokensPaidInPeriod,
-                        tokensPending: Math.max(0, tokensInPeriod - tokensPaidInPeriod),
-                        tokenValue: tokenPaidValue,
-                        totalTokenValue: tokenTotalValue,
-                        openTokenValue: tokenOpenValue,
-                        topItems,
-                    },
-                    totalStockValue,
-                    lowStockAlerts,
+                    topItems,
                 },
+                totalStockValue,
+                lowStockAlerts,
+            };
+
+            // Cache 15s in memory for instant tab-switching / navigation
+            dashboardStatsCache.set(cacheKey, { timestamp: Date.now(), data: responsePayload });
+            if (dashboardStatsCache.size > 100) {
+                const oldest = dashboardStatsCache.keys().next().value;
+                dashboardStatsCache.delete(oldest);
+            }
+
+            return {
+                success: true,
+                data: responsePayload,
             };
         } catch (err) {
             request.log.error(err, 'Failed to generate restaurant dashboard data');

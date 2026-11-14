@@ -461,12 +461,7 @@ function printTokenSlip(
       qrSvgHtml = `<img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(token.qrCode)}" alt="QR"/>`;
     }
 
-    const tokenItemsList = (items && items.length > 0) ? items : ((token as any)?.items || []);
-    const totalItems = token.itemCount ?? tokenItemsList.length;
-    const totalAmt = formatCurrency(Number(token.token?.total ?? (token as any)?.total ?? 0));
-    const tokenNum = token.tokenNumber || token.id;
-    const resolvedCustName = token.customerName || '';
-    const resolvedCustPhone = token.customerPhone || '';
+    const tokenItemsList = (items && items.length > 0) ? items : ((token as any)?.items || (token as any)?.token?.items || []);
     const isAppend = Boolean(options?.isAppend);
     const isReprint = Boolean(options?.isReprint);
     const previousItemsList = Array.isArray(options?.previousItems) ? options.previousItems : [];
@@ -479,6 +474,17 @@ function printTokenSlip(
       const q = Number(it.quantity || 1);
       return sum + Number(it.total || (p * q));
     }, 0);
+
+    const tokenTotalRaw = Number(token?.token?.total ?? token?.total ?? 0);
+    // LIVE ACCURACY GUARANTEE: Printed total must always strictly match the printed items
+    const resolvedTotalNum = (!isAppend && tokenTotalRaw > 0 && Math.abs(tokenTotalRaw - slipItemsSubtotal) < 0.05)
+      ? tokenTotalRaw
+      : (!isAppend ? slipItemsSubtotal : (tokenTotalRaw > 0 ? tokenTotalRaw : (previousTotalAmt + slipItemsSubtotal)));
+    const totalAmt = formatCurrency(resolvedTotalNum);
+    const totalItems = isAppend ? (token?.itemCount ?? (previousItemsList.length + tokenItemsList.length)) : tokenItemsList.length;
+    const tokenNum = token.tokenNumber || token.id;
+    const resolvedCustName = token.customerName || '';
+    const resolvedCustPhone = token.customerPhone || '';
 
     const html = `
       <!doctype html><html><head><meta charset="utf-8"><title>Token ${tokenNum}</title>
@@ -2453,6 +2459,10 @@ export default function MainPOSTerminal() {
     } = options;
 
     let returnedId = id;
+
+    // Immediately exit past bill browsing and return to live order
+    setBrowsingOrderIndex(null);
+    setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, browsingOrderIndex: null } : t));
 
     setLocalCart(prev => {
       const resolvedName = displayName || item.name;

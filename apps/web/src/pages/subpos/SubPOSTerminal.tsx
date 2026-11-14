@@ -128,9 +128,17 @@ interface LocalCartItem {
 }
 
 interface TokenResult {
-  tokenId: number; tokenNumber: number; qrCode: string; qrUrl: string;
+  tokenId: number;
+  tokenNumber: number;
+  qrCode: string;
+  qrUrl: string;
   itemCount?: number;
-  token: { subtotal: number; sgst: number; cgst: number; igst: number; total: number };
+  customerName?: string;
+  customerPhone?: string;
+  items?: LocalCartItem[] | any[];
+  total?: number;
+  id?: number | string;
+  token: { subtotal: number; sgst: number; cgst: number; igst: number; total: number; items?: any[] };
 }
 
 // ── Core pricing helpers ──────────────────────────────────────────────────────
@@ -206,7 +214,7 @@ function printTokenSlip(
   items?: LocalCartItem[] | any[],
   customerName?: string,
   customerPhone?: string,
-  bakeryName = 'SMARTGONEXT Bakery',
+  bakeryName = 'Amora Bakes & Cafe',
   settings?: BillSettings,
   options?: { isAppend?: boolean; isReprint?: boolean; previousItems?: any[]; previousTotal?: number }
 ) {
@@ -229,12 +237,7 @@ function printTokenSlip(
     } catch (_) {
       qrSvgHtml = `<img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(qrData)}" alt="QR"/>`;
     }
-    const tokenItemsList = (items && items.length > 0) ? items : ((token as any)?.items || []);
-    const totalItems = token.itemCount ?? tokenItemsList.length;
-    const totalAmt = formatCurrency(Number(token.token?.total ?? (token as any)?.total ?? 0));
-    const tokenNum = token.tokenNumber || token.id;
-    const resolvedCustName = customerName || token.customerName || '';
-    const resolvedCustPhone = customerPhone || token.customerPhone || '';
+    const tokenItemsList = (items && items.length > 0) ? items : ((token as any)?.items || (token as any)?.token?.items || []);
     const isAppend = Boolean(options?.isAppend);
     const isReprint = Boolean(options?.isReprint);
     const previousItemsList = Array.isArray(options?.previousItems) ? options.previousItems : [];
@@ -248,6 +251,18 @@ function printTokenSlip(
       const q = Number(it.quantity || 1);
       return sum + Number(it.total || (p * q));
     }, 0);
+
+    const tokenTotalRaw = Number(token?.token?.total ?? token?.total ?? 0);
+    // LIVE ACCURACY GUARANTEE: The printed total must always strictly match the printed items!
+    // Never allow an old token total or mismatched amount to print.
+    const resolvedTotalNum = (!isAppend && tokenTotalRaw > 0 && Math.abs(tokenTotalRaw - slipItemsSubtotal) < 0.05)
+      ? tokenTotalRaw
+      : (!isAppend ? slipItemsSubtotal : (tokenTotalRaw > 0 ? tokenTotalRaw : (previousTotalAmt + slipItemsSubtotal)));
+    const totalAmt = formatCurrency(resolvedTotalNum);
+    const totalItems = isAppend ? (token?.itemCount ?? (previousItemsList.length + tokenItemsList.length)) : tokenItemsList.length;
+    const tokenNum = token.tokenNumber || token.id;
+    const resolvedCustName = customerName || token.customerName || '';
+    const resolvedCustPhone = customerPhone || token.customerPhone || '';
 
     const html = `
       <!doctype html><html><head><meta charset="utf-8"><title>Token ${tokenNum}</title>
@@ -708,6 +723,7 @@ export default function SubPOSTerminal() {
   }, []);
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [lastToken, setLastToken] = useState<TokenResult | null>(null);
+  const [liveNextTokenNumber, setLiveNextTokenNumber] = useState<number | null>(null);
   const [todayCount, setTodayCount] = useState(0);
   const [lookupInput, setLookupInput] = useState('');
   const [loadedToken, setLoadedToken] = useState<any | null>(null);
@@ -1445,6 +1461,14 @@ export default function SubPOSTerminal() {
     const { item, price, mrpId, purchaseRate, profitPercent, displayName, salesUnit, quantity = 1, inventoryItemName, inventoryMRPs } = options;
     let returnedId = id;
 
+    // Immediately exit past bill browsing and return to live order
+    setBrowsingOrderIndex(null);
+    // Clear any stale loaded token if it's already paid or closed so it won't contaminate new order
+    if (loadedToken && (loadedToken.status === 'paid' || loadedToken.status === 'cancelled')) {
+      setLoadedToken(null);
+      setExistingTokenItems([]);
+    }
+
     setLocalCart(prev => {
       const resolvedName = displayName || item.name;
       const match = prev.find(p =>
@@ -1898,7 +1922,13 @@ export default function SubPOSTerminal() {
         menuItemName: i.displayName || i.name,
       }));
 
-      if (!loadedToken) {
+      const canAppendToLoadedToken = Boolean(
+        loadedToken &&
+        loadedToken.status !== 'paid' &&
+        loadedToken.status !== 'cancelled'
+      );
+
+      if (!canAppendToLoadedToken) {
         isAppendingRef.current = false;
         previousTokenSnapshotRef.current = null;
         const { data } = await subposApi.post('/token/create', {
@@ -1938,7 +1968,6 @@ export default function SubPOSTerminal() {
     },
     onSuccess: async (result) => {
       playTokenSound();
-      setLastToken(result);
       
       const resolvedCustName = customerName?.trim() || 'Walk-in Customer';
       const pSettings = getPrinterSettings(billSettings as any);
@@ -1982,13 +2011,35 @@ export default function SubPOSTerminal() {
         customerName: resolvedCustName,
         customerPhone,
         items: savedSnapshot,
+        total: result.token?.total ?? (result as any).total ?? calculatedTotal,
+        itemCount: savedSnapshot.length,
       };
 
+      // Always save the full token snapshot with its own items so "Reprint Last Token" never uses another order's items
+      setLastToken(tokenObj);
+
+      // 1. INSTANT 0ms UI RESET:
+      // Instantly advance top header bill number to next live token
+      setLiveNextTokenNumber(Number(result.tokenNumber) + 1);
+      if (!isAppendingRef.current) setTodayCount((c) => c + 1);
+
+      // Instantly update todayTokens query cache so previous bill navigation works immediately
+      qc.setQueryData(['subpos-today-tokens-list', authToken], (old: any) => {
+        const list = Array.isArray(old) ? old : [];
+        return [tokenObj, ...list.filter((t: any) => t.id !== tokenObj.id && t.tokenNumber !== tokenObj.tokenNumber)];
+      });
+      qc.invalidateQueries({ queryKey: ['subpos-today-tokens-list'] });
+
+      // Instantly close bill & clear cart so cashier can immediately start next order without 3s freeze
+      finalizeSubposOrder();
+      toast.success(`Token #${result.tokenNumber} generated!`, { duration: 1500 });
+
+      // 2. PRINTER RUNS IN BACKGROUND (Non-blocking):
       if (pSettings.autoPrintBill) {
         const prevSnap = previousTokenSnapshotRef.current;
-        await printTokenSlip(
-          result,
-          localCart,
+        printTokenSlip(
+          tokenObj,
+          savedSnapshot,
           resolvedCustName,
           customerPhone,
           terminal?.name || 'SMARTGONEXT Bakery',
@@ -1998,13 +2049,10 @@ export default function SubPOSTerminal() {
             previousItems: prevSnap?.items,
             previousTotal: prevSnap?.total,
           }
-        );
+        ).catch(err => {
+          console.error('[PRINT] SubPOS print token error:', err);
+        });
       }
-
-      toast.success(`Token #${result.tokenNumber} generated!`, { duration: 1500 });
-
-      // Once bill is printed, automatically close bill and reset for next customer
-      finalizeSubposOrder();
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to create token');
@@ -2564,7 +2612,9 @@ export default function SubPOSTerminal() {
                       Bill #{todayTokens[browsingOrderIndex].tokenNumber || todayTokens[browsingOrderIndex].orderNumber || todayTokens[browsingOrderIndex].id}
                     </span>
                   ) : (
-                    <span>Bill #${(todayTokens?.length || 0) + 1}</span>
+                    <span>
+                      Bill #{liveNextTokenNumber ?? (todayTokens.length > 0 && todayTokens[0]?.tokenNumber ? Number(todayTokens[0].tokenNumber) + 1 : (todayTokens?.length || 0) + 1)}
+                    </span>
                   )}
                 </div>
 
@@ -3092,8 +3142,10 @@ export default function SubPOSTerminal() {
                   <button
                     ref={createTokenBtnRef}
                     id="btn-create-token"
+                    type="submit"
+                    data-submit-btn="true"
                     onClick={() => {
-                      isAppendingRef.current = Boolean(loadedToken);
+                      isAppendingRef.current = Boolean(loadedToken && loadedToken.status !== 'paid' && loadedToken.status !== 'cancelled');
                       createToken.mutate();
                     }}
                     disabled={localCart.length === 0 || createToken.isPending}
@@ -3110,7 +3162,23 @@ export default function SubPOSTerminal() {
                   {lastToken && (
                     <div className="pt-2">
                       <button
-                        onClick={() => { if (lastToken) printTokenSlip(lastToken, localCart, customerName, customerPhone, terminal?.name || 'SMARTGONEXT Bakery', billSettings); }}
+                        type="button"
+                        data-enter-ignore="true"
+                        tabIndex={-1}
+                        onClick={() => {
+                          if (lastToken) {
+                            printTokenSlip(
+                              lastToken,
+                              lastToken.items || lastToken.token?.items || [],
+                              lastToken.customerName,
+                              lastToken.customerPhone,
+                              terminal?.name || 'SMARTGONEXT Bakery',
+                              billSettings,
+                              { isReprint: true }
+                            );
+                            toast.success(`Reprinting Token #${lastToken.tokenNumber}`);
+                          }
+                        }}
                         className="w-full py-2.5 border border-gray-800 text-gray-400 hover:text-white hover:border-gray-600 hover:bg-gray-800/50 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
                       >
                         <RefreshCw className="w-3.5 h-3.5" /> Reprint Last Token (#{lastToken.tokenNumber})

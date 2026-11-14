@@ -152,6 +152,15 @@ interface LabelPreset {
 
 const LABEL_PRESETS: LabelPreset[] = [
   { 
+    id: 'compact_38x25', 
+    name: '38 x 25 mm (Compact 1.5"x1" - Default)', 
+    widthMm: 38, 
+    heightMm: 25, 
+    widthPx: 210, 
+    heightPx: 140, 
+    description: '38 x 25 mm — popular 2-Up twin roll size (80mm web width).' 
+  },
+  { 
     id: 'retail_standard', 
     name: '50 x 25 mm (Standard 2"x1")', 
     widthMm: 50, 
@@ -159,15 +168,6 @@ const LABEL_PRESETS: LabelPreset[] = [
     widthPx: 250, 
     heightPx: 140, 
     description: '50 x 25 mm — most common retail pricing label (supports 1-Up & 2-Up).' 
-  },
-  { 
-    id: 'compact_38x25', 
-    name: '38 x 25 mm (Compact 1.5"x1")', 
-    widthMm: 38, 
-    heightMm: 25, 
-    widthPx: 210, 
-    heightPx: 140, 
-    description: '38 x 25 mm — popular 2-Up twin roll size (80mm web width).' 
   },
   { 
     id: 'compact_35x25', 
@@ -408,13 +408,17 @@ export default function BarcodeSettings() {
   });
   const [presetId, setPresetId] = useState<string>(() => {
     try {
-      const saved = localStorage.getItem('barcode_preset_id');
+      const saved = localStorage.getItem('barcode_preset_id_v2');
       if (saved && LABEL_PRESETS.some(p => p.id === saved)) return saved;
     } catch {}
-    return 'retail_standard';
+    return 'compact_38x25';
   });
   const [is2Up, setIs2Up] = useState<boolean>(() => {
-    try { return localStorage.getItem('barcode_is_2up') === 'true'; } catch { return false; }
+    try {
+      const saved = localStorage.getItem('barcode_is_2up_v2');
+      if (saved !== null) return saved === 'true';
+    } catch {}
+    return true; // Default 2-Up (Twin Roll)
   });
   const [gapMm, setGapMm] = useState<number>(() => {
     try { return Number(localStorage.getItem('barcode_2up_gap') || 2); } catch { return 2; }
@@ -518,7 +522,9 @@ export default function BarcodeSettings() {
       localStorage.setItem('barcode_active_settings_tab', activeSettingsTab);
       localStorage.setItem('barcode_type', barcodeType);
       localStorage.setItem('barcode_preset_id', presetId);
+      localStorage.setItem('barcode_preset_id_v2', presetId);
       localStorage.setItem('barcode_is_2up', String(is2Up));
+      localStorage.setItem('barcode_is_2up_v2', String(is2Up));
       localStorage.setItem('barcode_2up_gap', String(gapMm));
       if (storeHeader) localStorage.setItem('barcode_store_header', storeHeader);
       localStorage.setItem('barcode_show_store_header', String(showStoreHeader));
@@ -573,6 +579,18 @@ export default function BarcodeSettings() {
   const [modalBestBeforeDays, setModalBestBeforeDays] = useState<string>('');
   const [modalExpDate, setModalExpDate] = useState<string>('');
   const [editingLedgerId, setEditingLedgerId] = useState<string | null>(null);
+  const modalQtyInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isItemModalOpen) {
+      setTimeout(() => {
+        if (modalQtyInputRef.current) {
+          modalQtyInputRef.current.focus();
+          modalQtyInputRef.current.select();
+        }
+      }, 50);
+    }
+  }, [isItemModalOpen]);
 
   // Compute Expiry Date dynamically from Mfg Date + Best Before Days
   const computeExpiryFromDays = (mfgStr: string, daysVal: number | string) => {
@@ -757,7 +775,7 @@ export default function BarcodeSettings() {
     gcTime: 30 * 60 * 1000,
   });
 
-  const activePreset = LABEL_PRESETS.find((p) => p.id === presetId) || LABEL_PRESETS[1];
+  const activePreset = LABEL_PRESETS.find((p) => p.id === presetId) || LABEL_PRESETS[0];
 
   // Save weighing scale prefix setting to localStorage
   const handleSavePrefix = (prefix: string) => {
@@ -916,6 +934,84 @@ export default function BarcodeSettings() {
     }
     return results;
   }, [selectableItems, searchTerm]);
+
+  // Scan or Search Barcode / Product name with immediate popup for Qty entry
+  const handleBarcodeScanOrSearch = useCallback((rawQuery: string) => {
+    const raw = (rawQuery || '').trim();
+    if (!raw) return;
+
+    // 1. Exact barcode match in selectable items
+    const exactBarcode = selectableItems.find((it) => 
+      String(it.barcode || '').trim().toLowerCase() === raw.toLowerCase()
+    );
+    if (exactBarcode) {
+      handleOpenAddItemModal(exactBarcode);
+      toast.success(`Found "${exactBarcode.name}"! Enter quantity to print.`);
+      return;
+    }
+
+    // 2. Exact name match
+    const exactName = selectableItems.find((it) => 
+      String(it.name || '').trim().toLowerCase() === raw.toLowerCase()
+    );
+    if (exactName) {
+      handleOpenAddItemModal(exactName);
+      toast.success(`Found "${exactName.name}"! Enter quantity to print.`);
+      return;
+    }
+
+    // 3. First dropdown match if user typed in search
+    if (filteredDropdownItems.length > 0) {
+      handleOpenAddItemModal(filteredDropdownItems[0]);
+      toast.success(`Selected "${filteredDropdownItems[0].name}"! Enter quantity to print.`);
+      return;
+    }
+
+    // 4. Case-insensitive substring match
+    const partialMatch = selectableItems.find((it) => 
+      it.name.toLowerCase().includes(raw.toLowerCase()) || 
+      it.barcode.toLowerCase().includes(raw.toLowerCase())
+    );
+    if (partialMatch) {
+      handleOpenAddItemModal(partialMatch);
+      toast.success(`Selected "${partialMatch.name}"! Enter quantity to print.`);
+      return;
+    }
+
+    toast.error(`No item found matching "${raw}"`);
+  }, [selectableItems, filteredDropdownItems]);
+
+  // Global barcode scanner listener: allows scanning anywhere on the barcode page!
+  useEffect(() => {
+    let scanBuffer = '';
+    let lastKeyTime = 0;
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
+      if (isItemModalOpen) return; // let user freely type in modal
+
+      const now = Date.now();
+      if (now - lastKeyTime > 120) {
+        scanBuffer = '';
+      }
+      lastKeyTime = now;
+
+      if (e.key === 'Enter') {
+        const scannedCode = scanBuffer.trim();
+        scanBuffer = '';
+        if (scannedCode.length >= 3) {
+          e.preventDefault();
+          handleBarcodeScanOrSearch(scannedCode);
+        }
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        scanBuffer += e.key;
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown, true);
+  }, [isItemModalOpen, handleBarcodeScanOrSearch]);
 
   // Add item from dropdown into batch ledger
   const handleAddMenuItem = (item: any) => {
@@ -2225,11 +2321,17 @@ export default function BarcodeSettings() {
                   <input
                     type="text"
                     className="glass-input h-10 pl-9 pr-4 text-xs w-full focus:ring-1 focus:ring-blue-500/50"
-                    placeholder="Type a product name or scan barcode to add to print batch..."
+                    placeholder="Type a product name or scan barcode to add to print batch (Press Enter)..."
                     value={searchTerm}
                     onChange={(e) => {
                       setSearchTerm(e.target.value);
                       setShowDropdown(true);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleBarcodeScanOrSearch(searchTerm);
+                      }
                     }}
                     onFocus={() => setShowDropdown(true)}
                   />
@@ -2481,7 +2583,10 @@ export default function BarcodeSettings() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setPresetId(val);
-                      try { localStorage.setItem('barcode_preset_id', val); } catch {}
+                      try {
+                        localStorage.setItem('barcode_preset_id', val);
+                        localStorage.setItem('barcode_preset_id_v2', val);
+                      } catch {}
                     }}
                   >
                     {LABEL_PRESETS.map((preset) => (
@@ -2510,7 +2615,10 @@ export default function BarcodeSettings() {
                     type="button"
                     onClick={() => {
                       setIs2Up(false);
-                      try { localStorage.setItem('barcode_is_2up', 'false'); } catch {}
+                      try {
+                        localStorage.setItem('barcode_is_2up', 'false');
+                        localStorage.setItem('barcode_is_2up_v2', 'false');
+                      } catch {}
                     }}
                     className={`flex items-center justify-center gap-1.5 rounded-lg border text-xs font-black uppercase transition-all ${!is2Up ? 'border-blue-500/50 bg-blue-500/10 text-blue-400 shadow-sm' : 'border-border/50 text-text-muted hover:text-text-primary bg-bg-tertiary/40'}`}
                   >
@@ -2520,7 +2628,10 @@ export default function BarcodeSettings() {
                     type="button"
                     onClick={() => {
                       setIs2Up(true);
-                      try { localStorage.setItem('barcode_is_2up', 'true'); } catch {}
+                      try {
+                        localStorage.setItem('barcode_is_2up', 'true');
+                        localStorage.setItem('barcode_is_2up_v2', 'true');
+                      } catch {}
                     }}
                     className={`flex items-center justify-center gap-1.5 rounded-lg border text-xs font-black uppercase transition-all ${is2Up ? 'border-blue-500/50 bg-blue-500/10 text-blue-400 shadow-sm' : 'border-border/50 text-text-muted hover:text-text-primary bg-bg-tertiary/40'}`}
                   >
@@ -3429,12 +3540,21 @@ export default function BarcodeSettings() {
                   -
                 </button>
                 <input 
+                  ref={modalQtyInputRef}
                   type="number"
                   min="1"
                   max="999"
+                  autoFocus
                   value={modalQty}
                   onChange={(e) => setModalQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                  className="glass-input w-16 h-8 text-sm font-black text-center"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSaveModalItem();
+                    }
+                  }}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                  className="glass-input w-20 h-9 text-base font-black text-center focus:ring-2 focus:ring-blue-500"
                 />
                 <button 
                   type="button" 

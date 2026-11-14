@@ -436,22 +436,16 @@ export default function CustomerDisplay() {
             )}
           </div>
 
-          {/* Cart Items List with Images */}
+          {/* Cart Items List without Images */}
           <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
             {cart.length > 0 ? cart.map((item, i) => {
               const itemTotal = item.price * item.quantity;
-              const initial = String(item.name || 'I').charAt(0).toUpperCase();
               return (
                 <div key={i} className={cn("flex items-center justify-between border p-4 rounded-2xl transition-all shadow-sm", isLight ? "bg-slate-50 border-slate-200 hover:border-purple-300 text-slate-900" : "bg-[#151c2e]/90 border-slate-800/90 hover:border-purple-500/30 text-white")}>
-                  <div className="flex items-center gap-4">
-                    {/* Item Image */}
-                    {item.image ? (
-                      <img src={item.image} alt={item.name} className={cn("w-14 h-14 rounded-xl object-cover border shadow-md", isLight ? "border-slate-300" : "border-slate-700/60")} />
-                    ) : (
-                      <div className={cn("w-14 h-14 rounded-xl border flex items-center justify-center font-black text-xl shadow-md", isLight ? "bg-purple-100 text-purple-700 border-purple-300" : "bg-gradient-to-br from-slate-800 to-slate-900 border-slate-700/60 text-purple-400")}>
-                        {initial}
-                      </div>
-                    )}
+                  <div className="flex items-center gap-3">
+                    <span className={cn("w-7 h-7 rounded-lg flex items-center justify-center text-xs font-black shrink-0 border", isLight ? "bg-purple-100 text-purple-700 border-purple-200" : "bg-purple-500/10 text-purple-400 border-purple-500/20")}>
+                      {i + 1}
+                    </span>
                     <div>
                       <h3 className={cn("text-base font-extrabold tracking-wide", isLight ? "text-slate-900" : "text-white")}>{item.name}</h3>
                       <div className="flex items-center gap-2 mt-1">
@@ -547,20 +541,22 @@ export default function CustomerDisplay() {
                 <Badge variant="success" className="text-[10px] font-bold">Fresh Daily</Badge>
               </div>
 
-              <Card padding={false} className={cn("border h-[340px] overflow-hidden rounded-2xl relative group shadow-xl", isLight ? "bg-white border-slate-200" : "bg-[#121827] border-slate-800")}>
-                <div className="h-full relative flex flex-col justify-end p-6">
-                  <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent z-10" />
-                  <img 
-                    src="https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=600&q=80" 
-                    alt="Fresh Gourmet Kitchen"
-                    className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
-                  />
-                  <div className="relative z-20">
-                    <span className="px-2.5 py-1 bg-purple-600/90 text-white font-bold text-[10px] uppercase tracking-wider rounded-md mb-2 inline-block">
+              <Card padding={false} className={cn("border h-[340px] overflow-hidden rounded-2xl relative group shadow-xl", isLight ? "bg-gradient-to-br from-purple-100 via-white to-purple-50 border-purple-200" : "bg-gradient-to-br from-[#121827] via-[#1a2035] to-[#121827] border-purple-500/20")}>
+                <div className="h-full relative flex flex-col justify-between p-6">
+                  <div className="flex items-center justify-between">
+                    <span className="px-3 py-1 bg-purple-600 text-white font-black text-[10px] uppercase tracking-wider rounded-lg shadow-sm">
                       Artisanal Quality
                     </span>
-                    <h3 className="text-2xl font-black text-white mb-1">Chef's Gourmet Selection</h3>
-                    <p className="text-slate-300 text-xs leading-relaxed">Made with authentic recipes & premium fresh ingredients.</p>
+                    <Sparkles className="w-5 h-5 text-purple-400" />
+                  </div>
+                  <div className="space-y-3">
+                    <div className={cn("w-16 h-16 rounded-2xl flex items-center justify-center border shadow-md", isLight ? "bg-purple-100 text-purple-700 border-purple-200" : "bg-purple-500/10 text-purple-400 border-purple-500/20")}>
+                      <Utensils className="w-8 h-8" />
+                    </div>
+                    <div>
+                      <h3 className={cn("text-2xl font-black mb-1", isLight ? "text-slate-900" : "text-white")}>Chef's Gourmet Selection</h3>
+                      <p className={cn("text-xs leading-relaxed", isLight ? "text-slate-600" : "text-slate-400")}>Made with authentic recipes & premium fresh ingredients daily.</p>
+                    </div>
                   </div>
                 </div>
               </Card>
