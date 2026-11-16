@@ -5,19 +5,19 @@ const DEFAULT_API_KEY = process.env.ERP_API_KEY || '0c7c394c7d164588a2665c5daf05
 
 /**
  * 1. Push Restaurant KOT items + Amora Own-Barcode items into Bakery ERP
+ * 
+ * Strict Filtering Rules:
+ * - Kitchen Order Ticket (KOT) items (isKOTEnabled == true): ALWAYS INCLUDED (fresh bakery/kitchen production).
+ * - Non-KOT retail items: ONLY include shop's own 5-digit base barcodes (e.g. 00001, 00010, ^\d{1,6}$).
+ * - Commercial barcodes: EXCLUDE all 13-digit commercial EAN-13 / 890... retail goods.
+ * - Guard against corrupt URLs and numeric overflow (price < 999999).
  */
 export async function pushRestaurantItemsToErp(prisma, erpUrl = DEFAULT_ERP_URL, apiKey = DEFAULT_API_KEY) {
   try {
+    // Fetch all active menu items with category and inventory details
     const items = await prisma.menuItem.findMany({
       where: {
-        isDeleted: false,
-        OR: [
-          { category: { isKOTEnabled: true } },
-          { category: { name: { contains: 'AMORA' } } },
-          { category: { name: { contains: 'Bakery' } } },
-          { category: { name: { contains: 'Cake' } } },
-          { category: { name: { contains: 'Mixture' } } }
-        ]
+        isDeleted: false
       },
       include: {
         category: true,
@@ -26,17 +26,40 @@ export async function pushRestaurantItemsToErp(prisma, erpUrl = DEFAULT_ERP_URL,
     });
 
     if (!items || items.length === 0) {
-      console.info('[ErpAutoSync] No Amora/KOT items to push.');
+      console.info('[ErpAutoSync] No active menu items found in Restaurant POS.');
       return 0;
     }
 
     const payloadItems = items
-      .filter((m) => m.name && !m.name.startsWith('http:') && !m.name.startsWith('https:'))
+      .filter((m) => {
+        const name = (m.name || '').trim();
+        // Drop empty names or corrupt URL records
+        if (!name || name.startsWith('http:') || name.startsWith('https:')) {
+          return false;
+        }
+
+        const isKot = Boolean(m.category?.isKOTEnabled);
+        if (isKot) {
+          // KOT production items (puffs, momos, samosas, burgers, rolls) always accepted
+          return true;
+        }
+
+        const barcode = String(m.productQR || m.inventoryItem?.barcode || m.inventoryItem?.sku || '').trim();
+        
+        // Strict non-KOT rule:
+        // 1. Explicitly reject 13-digit commercial barcodes (e.g. 8903754000123)
+        if (barcode.length === 13 || barcode.startsWith('890')) {
+          return false;
+        }
+
+        // 2. Allow ONLY own 5-digit base barcodes (1-6 digits numeric like 00001, 00010, 001)
+        return /^\d{1,6}$/.test(barcode);
+      })
       .map((m) => {
-        const barcode = m.productQR || m.inventoryItem?.barcode || m.inventoryItem?.sku || '';
+        const barcode = String(m.productQR || m.inventoryItem?.barcode || m.inventoryItem?.sku || '').trim();
         const isKot = Boolean(m.category?.isKOTEnabled);
         
-        // Guard against barcode erroneously placed in price column (> 100,000)
+        // Guard against barcode placed in price column (> 100,000)
         let sellingPrice = Number(m.price || 0);
         if (sellingPrice > 999999 || isNaN(sellingPrice)) sellingPrice = 0;
         
@@ -47,9 +70,9 @@ export async function pushRestaurantItemsToErp(prisma, erpUrl = DEFAULT_ERP_URL,
 
         return {
           id: String(m.id),
-          name: m.name.substring(0, 140),
-          barcode: barcode ? String(barcode).substring(0, 60) : '',
-          sku: m.inventoryItem?.sku ? String(m.inventoryItem.sku).substring(0, 60) : (barcode ? String(barcode).substring(0, 60) : ''),
+          name: m.name.substring(0, 140).trim(),
+          barcode: barcode ? barcode.substring(0, 60) : '',
+          sku: m.inventoryItem?.sku ? String(m.inventoryItem.sku).substring(0, 60) : (barcode ? barcode.substring(0, 60) : ''),
           category_name: m.category?.name || 'General',
           is_kot_item: isKot,
           cost_price: costPrice,
@@ -64,21 +87,25 @@ export async function pushRestaurantItemsToErp(prisma, erpUrl = DEFAULT_ERP_URL,
     // Send in chunks of 100 to avoid payload size/timeout issues
     for (let i = 0; i < payloadItems.length; i += 100) {
       const chunk = payloadItems.slice(i, i + 100);
+      const isFirstChunk = (i === 0);
       const res = await axios.post(
         url,
-        { items: chunk },
+        {
+          items: chunk,
+          replace: isFirstChunk // replace on first chunk to prune unwanted 13-digit products
+        },
         {
           headers: {
             'Content-Type': 'application/json',
             'X-API-Key': apiKey
           },
-          timeout: 20000
+          timeout: 25000
         }
       );
       totalUpserted += res.data?.data?.upserted_count || chunk.length;
     }
 
-    console.info(`[ErpAutoSync] Successfully pushed ${totalUpserted} own-brand/KOT items to Bakery ERP.`);
+    console.info(`[ErpAutoSync] Successfully synced ${totalUpserted} items (${payloadItems.length} valid KOT & 5-digit own barcode products) to Bakery ERP.`);
     return totalUpserted;
   } catch (err) {
     console.error('[ErpAutoSync] Failed to push items to Bakery ERP:', err.message, err.response?.data || '');
