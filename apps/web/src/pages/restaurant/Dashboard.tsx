@@ -393,7 +393,7 @@ export default function RestaurantDashboard() {
               >
                 SubPOS
               </Button>
-            </div> */}ge
+            </div> */}
           </div>
         </div>
 

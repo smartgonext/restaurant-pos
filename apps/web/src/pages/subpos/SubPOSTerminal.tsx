@@ -3157,34 +3157,6 @@ export default function SubPOSTerminal() {
                       <><Printer className="w-5 h-5 group-hover:-translate-y-0.5 transition-transform" /> GENERATE TOKEN <span className="text-[10px] font-bold opacity-60 bg-black/20 px-1.5 py-0.5 rounded ml-1 normal-case">(F12)</span></>
                     )}
                   </button>
-
-                  {/* Reprint last token */}
-                  {lastToken && (
-                    <div className="pt-2">
-                      <button
-                        type="button"
-                        data-enter-ignore="true"
-                        tabIndex={-1}
-                        onClick={() => {
-                          if (lastToken) {
-                            printTokenSlip(
-                              lastToken,
-                              lastToken.items || lastToken.token?.items || [],
-                              lastToken.customerName,
-                              lastToken.customerPhone,
-                              terminal?.name || 'SMARTGONEXT Bakery',
-                              billSettings,
-                              { isReprint: true }
-                            );
-                            toast.success(`Reprinting Token #${lastToken.tokenNumber}`);
-                          }
-                        }}
-                        className="w-full py-2.5 border border-gray-800 text-gray-400 hover:text-white hover:border-gray-600 hover:bg-gray-800/50 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" /> Reprint Last Token (#{lastToken.tokenNumber})
-                      </button>
-                    </div>
-                  )}
                 </div>
               </>
             )}

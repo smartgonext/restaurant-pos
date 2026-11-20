@@ -505,7 +505,7 @@ export default function Settings() {
       notifySMS: prev.notifySMS ?? (typeof notifCfg.notifySMS === 'boolean' ? notifCfg.notifySMS : false),
       notificationEmail: prev.notificationEmail || notifCfg.notificationEmail || settings.restaurantEmail || authUser?.email || '',
       theme: prev.theme || {
-        mode: settings?.theme?.mode === 'light' ? 'light' : 'dark',
+        mode: settings?.theme?.mode === 'dark' ? 'dark' : 'light',
         brandColor: settings?.theme?.brandColor || '#2563eb',
         navVisibility: NAV_VISIBILITY_OPTIONS.reduce((acc: Record<string, boolean>, item) => {
           const saved = settings?.theme?.navVisibility?.[item.id];

@@ -10,7 +10,7 @@ interface ThemeStore {
 export const useThemeStore = create<ThemeStore>()(
   persist(
     (set, get) => ({
-      theme: 'dark',
+      theme: 'light',
       setTheme: (theme) => {
         set({ theme });
         if (theme === 'light') {
@@ -26,6 +26,6 @@ export const useThemeStore = create<ThemeStore>()(
         get().setTheme(newTheme);
       },
     }),
-    { name: 'theme-preference' }
+    { name: 'theme-preference-v2' }
   )
 );

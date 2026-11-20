@@ -1,11 +1,35 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en" class="light">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/amora-logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Amora Bakes & Cafe — Smart Touch POS Platform" />
     <title>Amora Bakes & Cafe POS</title>
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('theme-preference-v2') || localStorage.getItem('theme-preference');
+          var mode = 'light';
+          if (saved) {
+            var parsed = JSON.parse(saved);
+            if (parsed && parsed.state && parsed.state.theme) {
+              mode = parsed.state.theme;
+            }
+          }
+          if (mode === 'dark') {
+            document.documentElement.classList.add('dark');
+            document.documentElement.classList.remove('light');
+          } else {
+            document.documentElement.classList.add('light');
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {
+          document.documentElement.classList.add('light');
+          document.documentElement.classList.remove('dark');
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
